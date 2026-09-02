@@ -21,6 +21,18 @@ public interface IOperationalMetrics
 
     void RecordApproval(bool approved);
 
+    void RecordRetryAttempt();
+
+    void RecordRetrySuccess();
+
+    void RecordRetryExhausted();
+
+    void RecordRetryCancelled();
+
+    void RecordAttemptTimeout();
+
+    void RecordOperationTimeout();
+
     OperationalMetricsSnapshot GetSnapshot();
 }
 
@@ -47,7 +59,13 @@ public sealed record OperationalMetricsSnapshot(
     long? TotalAgentExecutionDurationMs,
     long? TotalBuildDurationMs,
     long? TotalTestDurationMs,
-    long? TotalRepairDurationMs);
+    long? TotalRepairDurationMs,
+    long RetryAttempts = 0,
+    long RetrySucceeded = 0,
+    long RetryExhausted = 0,
+    long RetryCancelled = 0,
+    long AttemptTimeouts = 0,
+    long OperationTimeouts = 0);
 
 public sealed class OperationalMetrics : IOperationalMetrics
 {
@@ -74,6 +92,13 @@ public sealed class OperationalMetrics : IOperationalMetrics
 
     private long _approvalApproved;
     private long _approvalRejected;
+
+    private long _retryAttempts;
+    private long _retrySucceeded;
+    private long _retryExhausted;
+    private long _retryCancelled;
+    private long _attemptTimeouts;
+    private long _operationTimeouts;
 
     public void RecordOperationStarted() => Interlocked.Increment(ref _operationsStarted);
 
@@ -153,6 +178,18 @@ public sealed class OperationalMetrics : IOperationalMetrics
         }
     }
 
+    public void RecordRetryAttempt() => Interlocked.Increment(ref _retryAttempts);
+
+    public void RecordRetrySuccess() => Interlocked.Increment(ref _retrySucceeded);
+
+    public void RecordRetryExhausted() => Interlocked.Increment(ref _retryExhausted);
+
+    public void RecordRetryCancelled() => Interlocked.Increment(ref _retryCancelled);
+
+    public void RecordAttemptTimeout() => Interlocked.Increment(ref _attemptTimeouts);
+
+    public void RecordOperationTimeout() => Interlocked.Increment(ref _operationTimeouts);
+
     public OperationalMetricsSnapshot GetSnapshot()
     {
         return new OperationalMetricsSnapshot(
@@ -178,7 +215,13 @@ public sealed class OperationalMetrics : IOperationalMetrics
             _agentDuration.Total,
             _buildDuration.Total,
             _testDuration.Total,
-            _repairDuration.Total);
+            _repairDuration.Total,
+            Interlocked.Read(ref _retryAttempts),
+            Interlocked.Read(ref _retrySucceeded),
+            Interlocked.Read(ref _retryExhausted),
+            Interlocked.Read(ref _retryCancelled),
+            Interlocked.Read(ref _attemptTimeouts),
+            Interlocked.Read(ref _operationTimeouts));
     }
 
     /// <summary>Count + running total, so average is derived rather than stored — no raw samples kept.</summary>

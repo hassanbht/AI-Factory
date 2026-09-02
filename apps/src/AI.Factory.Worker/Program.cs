@@ -6,6 +6,7 @@ using AI.Factory.Infrastructure.Agents;
 using AI.Factory.Infrastructure.Context;
 using AI.Factory.Infrastructure.Persistence;
 using AI.Factory.Infrastructure.Resilience;
+using AI.Factory.Application.Resilience;
 using AI.Factory.Infrastructure.Validation;
 using AI.Factory.Worker;
 using Microsoft.EntityFrameworkCore;
@@ -80,10 +81,30 @@ builder.Services.AddSingleton(hermesCircuitBreakerOptions);
 builder.Services.AddSingleton(sp => new CircuitBreaker(
     hermesCircuitBreakerOptions, sp.GetRequiredService<ILogger<CircuitBreaker>>(), "Hermes"));
 
-builder.Services.AddScoped<IAgentExecutor>(sp => new CircuitBreakerAgentExecutorDecorator(
-    sp.GetRequiredService<HermesAgentExecutor>(),
-    sp.GetRequiredService<CircuitBreaker>(),
-    sp.GetRequiredService<ILogger<CircuitBreakerAgentExecutorDecorator>>()));
+var resilienceOptions = new ResilienceOptions();
+builder.Configuration.GetSection(ResilienceOptions.SectionName).Bind(resilienceOptions);
+resilienceOptions.Validate();
+builder.Services.AddSingleton(resilienceOptions);
+builder.Services.AddSingleton<IBackoffCalculator, ExponentialBackoffCalculator>();
+builder.Services.AddSingleton<IDelayProvider, DefaultDelayProvider>();
+builder.Services.AddScoped<IResilienceExecutor, ResilienceExecutor>();
+
+// Decorates HermesAgentExecutor with circuit breaker and centralized resilience
+builder.Services.AddScoped<IAgentExecutor>(sp =>
+{
+    var hermes = sp.GetRequiredService<HermesAgentExecutor>();
+    var breaker = sp.GetRequiredService<CircuitBreaker>();
+    var breakerDecorator = new CircuitBreakerAgentExecutorDecorator(
+        hermes,
+        breaker,
+        sp.GetRequiredService<ILogger<CircuitBreakerAgentExecutorDecorator>>());
+
+    return new ResilienceAgentExecutorDecorator(
+        breakerDecorator,
+        sp.GetRequiredService<IResilienceExecutor>(),
+        sp.GetRequiredService<IFailureClassifier>(),
+        sp.GetRequiredService<ILogger<ResilienceAgentExecutorDecorator>>());
+});
 
 var modelRoutingOptions = new ModelRoutingOptions();
 builder.Configuration.GetSection("ModelRouting").Bind(modelRoutingOptions);

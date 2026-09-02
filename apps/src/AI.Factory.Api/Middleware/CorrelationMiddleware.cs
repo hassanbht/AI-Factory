@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using AI.Factory.Application.Abstractions;
 
 namespace AI.Factory.Api.Middleware;
@@ -6,13 +8,13 @@ namespace AI.Factory.Api.Middleware;
 /// One IOperationScope per HTTP request — reads X-Correlation-ID if the
 /// caller supplied one, otherwise generates one; every _auditLogger.LogAsync
 /// call made while handling this request inherits it via the ambient
-/// IOperationContext. Registered after GlobalExceptionMiddleware so an
-/// unhandled exception still closes the scope as FAILED before the response
-/// is written.
+/// IOperationContext. Registered before GlobalExceptionMiddleware so
+/// exception handling and ProblemDetails responses have full correlation context.
 /// </summary>
 public sealed class CorrelationMiddleware
 {
-    private const string HeaderName = "X-Correlation-ID";
+    public const string HeaderName = "X-Correlation-ID";
+    public const string ItemKey = "CorrelationId";
 
     private readonly RequestDelegate _next;
     private readonly IOperationScopeFactory _scopeFactory;
@@ -25,19 +27,46 @@ public sealed class CorrelationMiddleware
 
     public async Task InvokeAsync(HttpContext context)
     {
-        var correlationId = context.Request.Headers.TryGetValue(HeaderName, out var headerValue)
-            && Guid.TryParse(headerValue.ToString(), out var parsed)
-                ? parsed
-                : Guid.NewGuid();
+        var rawCorrelation = context.Request.Headers.TryGetValue(HeaderName, out var headerValue)
+            && !string.IsNullOrWhiteSpace(headerValue.ToString())
+                ? headerValue.ToString().Trim()
+                : null;
 
-        await using var scope = _scopeFactory.Begin(
-            $"HTTP {context.Request.Method} {context.Request.Path}", correlationId: correlationId);
+        Guid scopeGuid;
+        string correlationIdString;
+
+        if (rawCorrelation is not null)
+        {
+            correlationIdString = rawCorrelation;
+            if (!Guid.TryParse(rawCorrelation, out scopeGuid))
+            {
+                // Deterministically project the non-GUID correlation string into a valid Guid
+                // so the underlying IOperationScope / EF Core model can persist it without schema changes.
+                var hash = MD5.HashData(Encoding.UTF8.GetBytes(rawCorrelation));
+                scopeGuid = new Guid(hash);
+            }
+        }
+        else
+        {
+            scopeGuid = Guid.NewGuid();
+            correlationIdString = scopeGuid.ToString();
+        }
+
+        context.Items[ItemKey] = correlationIdString;
+        context.Response.Headers[HeaderName] = correlationIdString;
 
         context.Response.OnStarting(() =>
         {
-            context.Response.Headers[HeaderName] = correlationId.ToString();
+            if (!context.Response.Headers.ContainsKey(HeaderName))
+            {
+                context.Response.Headers[HeaderName] = correlationIdString;
+            }
+
             return Task.CompletedTask;
         });
+
+        await using var scope = _scopeFactory.Begin(
+            $"HTTP {context.Request.Method} {context.Request.Path}", correlationId: scopeGuid);
 
         try
         {

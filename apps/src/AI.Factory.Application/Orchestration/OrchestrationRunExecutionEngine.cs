@@ -47,8 +47,25 @@ public sealed class OrchestrationRunExecutionEngine
 
     public async Task ExecuteAsync(OrchestrationRun run, CancellationToken cancellationToken)
     {
-        var project = await _projectRepository.GetByIdAsync(run.ProjectId, cancellationToken);
-        var workItem = await _workItemRepository.GetByIdAsync(run.WorkItemId, cancellationToken);
+        if (cancellationToken.IsCancellationRequested)
+        {
+            await CancelAsync(run, cancellationToken);
+            return;
+        }
+
+        Project? project;
+        WorkItem? workItem;
+
+        try
+        {
+            project = await _projectRepository.GetByIdAsync(run.ProjectId, cancellationToken);
+            workItem = await _workItemRepository.GetByIdAsync(run.WorkItemId, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            await CancelAsync(run, cancellationToken);
+            return;
+        }
 
         if (project is null || workItem is null)
         {

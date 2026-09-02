@@ -1,4 +1,5 @@
 using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Exceptions;
 using AI.Factory.Application.Orchestration;
 using AI.Factory.Domain.Entities;
 using AI.Factory.Domain.Enums;
@@ -179,7 +180,7 @@ public sealed class TaskStateManager : ITaskStateManager
 
         if (item is null)
         {
-            throw new InvalidOperationException(
+            throw new NotFoundException(
                 $"WorkItem '{workItemId}' was not found.");
         }
 

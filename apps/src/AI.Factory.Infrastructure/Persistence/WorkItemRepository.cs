@@ -27,6 +27,13 @@ public sealed class WorkItemRepository : IWorkItemRepository
         Guid workItemId,
         CancellationToken cancellationToken = default)
     {
+        var existing = _db.ChangeTracker.Entries<WorkItem>().FirstOrDefault(e => e.Entity.Id == workItemId);
+        if (existing is not null)
+        {
+            await existing.ReloadAsync(cancellationToken);
+            return existing.Entity;
+        }
+
         return await _db.WorkItems
             .FirstOrDefaultAsync(x => x.Id == workItemId, cancellationToken);
     }

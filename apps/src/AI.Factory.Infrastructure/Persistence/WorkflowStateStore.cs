@@ -1,4 +1,5 @@
 using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Exceptions;
 using AI.Factory.Domain.Entities;
 using AI.Factory.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
@@ -23,7 +24,7 @@ public sealed class WorkflowStateStore : IWorkflowStateStore
 
         if (project is null)
         {
-            throw new InvalidOperationException(
+            throw new NotFoundException(
                 $"Project '{projectId}' was not found.");
         }
 
@@ -39,7 +40,7 @@ public sealed class WorkflowStateStore : IWorkflowStateStore
 
         if (project is null)
         {
-            throw new InvalidOperationException(
+            throw new NotFoundException(
                 $"Project '{transition.ProjectId}' was not found.");
         }
 

@@ -58,4 +58,40 @@ public sealed class FailureClassifierTests
 
         Assert.Equal(FailureCategory.Cancelled, result.Category);
     }
+
+    [Fact]
+    public void Classify_ValidationException_ReturnsValidationCategory()
+    {
+        var result = _classifier.Classify(new Exceptions.ValidationException("invalid"));
+
+        Assert.Equal(FailureCategory.Validation, result.Category);
+        Assert.False(result.IsTransient);
+    }
+
+    [Fact]
+    public void Classify_NotFoundException_ReturnsValidationCategory()
+    {
+        var result = _classifier.Classify(new Exceptions.NotFoundException("missing"));
+
+        Assert.Equal(FailureCategory.Validation, result.Category);
+        Assert.False(result.IsTransient);
+    }
+
+    [Fact]
+    public void Classify_ConflictException_ReturnsValidationCategory()
+    {
+        var result = _classifier.Classify(new Exceptions.ConflictException("conflict"));
+
+        Assert.Equal(FailureCategory.Validation, result.Category);
+        Assert.False(result.IsTransient);
+    }
+
+    [Fact]
+    public void Classify_SecurityViolationException_ReturnsInfrastructureCategory()
+    {
+        var result = _classifier.Classify(new Orchestration.SecurityViolationException("disallowed"));
+
+        Assert.Equal(FailureCategory.Infrastructure, result.Category);
+        Assert.False(result.IsTransient);
+    }
 }

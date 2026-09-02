@@ -1,29 +1,51 @@
 using System.Text.Json;
-using AI.Factory.Application.Exceptions;
+using AI.Factory.Application.Abstractions;
+using AI.Factory.Domain.Enums;
+using Microsoft.AspNetCore.Mvc;
 
 namespace AI.Factory.Api.Middleware;
 
 /// <summary>
 /// Single place exceptions become HTTP responses. Controllers/services never
-/// translate exceptions to status codes themselves — they throw the
-/// specific Application exception (or let an unexpected one propagate) and
-/// this middleware maps it, so client-facing error shape stays consistent
-/// and internal details (stack traces, SQL, file paths) never leak.
+/// translate exceptions to status codes themselves — they throw domain/application
+/// exceptions (or let unexpected exceptions propagate) and this middleware maps them
+/// into standard RFC-compatible ProblemDetails responses with correlation tracking,
+/// structured logging, and audit trail integration.
 /// </summary>
 public sealed class GlobalExceptionMiddleware
 {
-    private static readonly JsonSerializerOptions EnvelopeOptions = new()
+    private static readonly JsonSerializerOptions ProblemDetailsOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
     private readonly RequestDelegate _next;
     private readonly ILogger<GlobalExceptionMiddleware> _logger;
+    private readonly ApiExceptionMapper _mapper;
+    private readonly IOperationContextAccessor? _contextAccessor;
+    private readonly IAuditLogger? _auditLogger;
 
-    public GlobalExceptionMiddleware(RequestDelegate next, ILogger<GlobalExceptionMiddleware> logger)
+    public GlobalExceptionMiddleware(
+        RequestDelegate next,
+        ILogger<GlobalExceptionMiddleware> logger,
+        ApiExceptionMapper? mapper = null,
+        IOperationContextAccessor? contextAccessor = null)
+        : this(next, logger, mapper, contextAccessor, auditLogger: null)
+    {
+    }
+
+    internal GlobalExceptionMiddleware(
+        RequestDelegate next,
+        ILogger<GlobalExceptionMiddleware> logger,
+        ApiExceptionMapper? mapper,
+        IOperationContextAccessor? contextAccessor,
+        IAuditLogger? auditLogger)
     {
         _next = next;
         _logger = logger;
+        _mapper = mapper ?? new ApiExceptionMapper();
+        _contextAccessor = contextAccessor;
+        _auditLogger = auditLogger;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -40,42 +62,134 @@ public sealed class GlobalExceptionMiddleware
 
     private async Task HandleAsync(HttpContext context, Exception exception)
     {
-        var (status, code) = Classify(exception);
+        var correlationId = ResolveCorrelationId(context);
 
-        if (status == StatusCodes.Status500InternalServerError)
+        if (!context.Response.Headers.ContainsKey(CorrelationMiddleware.HeaderName))
         {
-            _logger.LogError(exception, "Unhandled exception on {Method} {Path}", context.Request.Method, context.Request.Path);
+            context.Response.Headers[CorrelationMiddleware.HeaderName] = correlationId;
+        }
+
+        var (mapping, problemDetails) = _mapper.CreateProblemDetails(exception, context, correlationId);
+        var ambient = _contextAccessor?.Current;
+
+        if (mapping.StatusCode >= 500)
+        {
+            _logger.LogError(
+                exception,
+                "HTTP request failed unexpectedly: Method={Method}, Path={Path}, StatusCode={StatusCode}, FailureCategory={FailureCategory}, CorrelationId={CorrelationId}, OperationId={OperationId}, ProjectId={ProjectId}, TaskId={TaskId}, RunId={RunId}",
+                context.Request.Method,
+                context.Request.Path,
+                mapping.StatusCode,
+                mapping.FailureCategory,
+                correlationId,
+                ambient?.OperationId,
+                ambient?.ProjectId,
+                ambient?.TaskId,
+                ambient?.RunId);
+        }
+        else if (mapping.FailureCategory == FailureCategory.Cancelled)
+        {
+            _logger.LogInformation(
+                "HTTP request was cancelled: Method={Method}, Path={Path}, StatusCode={StatusCode}, FailureCategory={FailureCategory}, CorrelationId={CorrelationId}",
+                context.Request.Method,
+                context.Request.Path,
+                mapping.StatusCode,
+                mapping.FailureCategory,
+                correlationId);
         }
         else
         {
-            _logger.LogWarning(exception, "Request failed on {Method} {Path}: {Code}", context.Request.Method, context.Request.Path, code);
+            _logger.LogWarning(
+                exception,
+                "HTTP request failed: Method={Method}, Path={Path}, StatusCode={StatusCode}, FailureCategory={FailureCategory}, CorrelationId={CorrelationId}, OperationId={OperationId}",
+                context.Request.Method,
+                context.Request.Path,
+                mapping.StatusCode,
+                mapping.FailureCategory,
+                correlationId,
+                ambient?.OperationId);
         }
 
-        var message = status == StatusCodes.Status500InternalServerError
-            ? "An unexpected error occurred."
-            : exception.Message;
-
-        context.Response.ContentType = "application/json";
-        context.Response.StatusCode = status;
-
-        var envelope = new ErrorEnvelope(context.TraceIdentifier, status, code, message);
-        await context.Response.WriteAsync(JsonSerializer.Serialize(envelope, EnvelopeOptions));
-    }
-
-    private static (int Status, string Code) Classify(Exception exception)
-    {
-        return exception switch
+        if (mapping.ShouldAudit)
         {
-            ValidationException => (StatusCodes.Status400BadRequest, "validation_error"),
-            NotFoundException => (StatusCodes.Status404NotFound, "not_found"),
-            ConflictException => (StatusCodes.Status409Conflict, "conflict"),
-            UnauthorizedAccessException => (StatusCodes.Status403Forbidden, "forbidden"),
-            ForbiddenException => (StatusCodes.Status403Forbidden, "forbidden"),
-            TimeoutException => (StatusCodes.Status408RequestTimeout, "timeout"),
-            OperationCanceledException => (StatusCodes.Status408RequestTimeout, "timeout"),
-            _ => (StatusCodes.Status500InternalServerError, "internal_error")
-        };
+            var auditLogger = _auditLogger ?? context.RequestServices?.GetService<IAuditLogger>();
+            if (auditLogger is not null)
+            {
+                await RecordAuditAsync(context, auditLogger, mapping, correlationId, ambient);
+            }
+        }
+
+        if (context.Response.HasStarted)
+        {
+            _logger.LogWarning("Response has already started, cannot write ProblemDetails response.");
+            return;
+        }
+
+        context.Response.ContentType = "application/problem+json";
+        context.Response.StatusCode = mapping.StatusCode;
+
+        await context.Response.WriteAsync(JsonSerializer.Serialize(problemDetails, ProblemDetailsOptions));
     }
 
-    private sealed record ErrorEnvelope(string TraceId, int Status, string Code, string Message);
+    private string ResolveCorrelationId(HttpContext context)
+    {
+        if (context.Items.TryGetValue(CorrelationMiddleware.ItemKey, out var itemVal) && itemVal is not null)
+        {
+            var str = itemVal.ToString();
+            if (!string.IsNullOrWhiteSpace(str))
+            {
+                return str;
+            }
+        }
+
+        if (context.Request.Headers.TryGetValue(CorrelationMiddleware.HeaderName, out var headerVal))
+        {
+            var str = headerVal.ToString().Trim();
+            if (!string.IsNullOrWhiteSpace(str))
+            {
+                return str;
+            }
+        }
+
+        var ambient = _contextAccessor?.Current;
+        if (ambient is not null && ambient.CorrelationId != Guid.Empty)
+        {
+            return ambient.CorrelationId.ToString();
+        }
+
+        return context.TraceIdentifier;
+    }
+
+    private async Task RecordAuditAsync(
+        HttpContext context,
+        IAuditLogger auditLogger,
+        ApiErrorMapping mapping,
+        string correlationId,
+        OperationContext? ambient)
+    {
+        try
+        {
+            var executionId = Guid.TryParse(correlationId, out var parsed)
+                ? parsed
+                : ambient?.CorrelationId ?? Guid.NewGuid();
+
+            await auditLogger.LogAsync(
+                executionId: executionId,
+                eventType: AuditEventType.WorkflowFailed,
+                severity: AuditSeverity.Error,
+                message: $"HTTP {context.Request.Method} {context.Request.Path} failed: {mapping.Title}",
+                projectId: ambient?.ProjectId,
+                workItemId: ambient?.TaskId,
+                correlationId: executionId,
+                operationId: ambient?.OperationId,
+                runId: ambient?.RunId,
+                outcome: "Failed",
+                actorType: "System",
+                cancellationToken: context.RequestAborted);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to persist audit log entry for unhandled API exception.");
+        }
+    }
 }

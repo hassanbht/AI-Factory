@@ -164,6 +164,7 @@ builder.Services.AddSingleton<IOperationContextAccessor>(sp => sp.GetRequiredSer
 builder.Services.AddSingleton<IOperationalMetrics, OperationalMetrics>();
 builder.Services.AddSingleton<IOperationScopeFactory, OperationScopeFactory>();
 builder.Services.AddSingleton<IFailureClassifier, FailureClassifier>();
+builder.Services.AddSingleton<ApiExceptionMapper>();
 builder.Services.AddScoped<IOperationalDiagnosticsService, OperationalDiagnosticsService>();
 
 var orchestrationOptions = new OrchestrationOptions();
@@ -207,8 +208,8 @@ var app = builder.Build();
 // every other middleware/endpoint
 // ------------------------------------------------------------
 
-app.UseMiddleware<GlobalExceptionMiddleware>();
 app.UseMiddleware<CorrelationMiddleware>();
+app.UseMiddleware<GlobalExceptionMiddleware>();
 
 // ------------------------------------------------------------
 // Startup recovery — resumability after a process restart

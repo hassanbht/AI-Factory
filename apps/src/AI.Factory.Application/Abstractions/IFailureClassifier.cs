@@ -29,6 +29,12 @@ public sealed class FailureClassifier : IFailureClassifier
             System.Net.Http.HttpRequestException => new FailureClassificationResult(FailureCategory.Provider, true, exception.Message),
             UnauthorizedAccessException => new FailureClassificationResult(FailureCategory.Infrastructure, false, exception.Message),
             ArgumentException => new FailureClassificationResult(FailureCategory.Validation, false, exception.Message),
+            Exceptions.ValidationException => new FailureClassificationResult(FailureCategory.Validation, false, exception.Message),
+            Exceptions.NotFoundException => new FailureClassificationResult(FailureCategory.Validation, false, exception.Message),
+            Exceptions.ConflictException => new FailureClassificationResult(FailureCategory.Validation, false, exception.Message),
+            Exceptions.ForbiddenException => new FailureClassificationResult(FailureCategory.Infrastructure, false, exception.Message),
+            Orchestration.SecurityViolationException => new FailureClassificationResult(FailureCategory.Infrastructure, false, exception.Message),
+            _ when exception.GetType().Name == "CircuitOpenException" => new FailureClassificationResult(FailureCategory.Provider, true, exception.Message),
             _ => new FailureClassificationResult(FailureCategory.Unknown, false, exception.Message)
         };
     }

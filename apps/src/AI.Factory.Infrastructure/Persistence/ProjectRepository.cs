@@ -13,11 +13,18 @@ public sealed class ProjectRepository : IProjectRepository
         _db = db;
     }
 
-    public Task<Project?> GetByIdAsync(
+    public async Task<Project?> GetByIdAsync(
         Guid id,
         CancellationToken cancellationToken = default)
     {
-        return _db.Projects
+        var existing = _db.ChangeTracker.Entries<Project>().FirstOrDefault(e => e.Entity.Id == id);
+        if (existing is not null)
+        {
+            await existing.ReloadAsync(cancellationToken);
+            return existing.Entity;
+        }
+
+        return await _db.Projects
             .FirstOrDefaultAsync(
                 x => x.Id == id,
                 cancellationToken);

@@ -59,19 +59,24 @@ public sealed class ApiIntegrationTests : IClassFixture<ApiTestFactory>
     }
 
     [Fact]
-    public async Task CreateProject_WithEmptyName_Returns400_WithErrorEnvelope()
+    public async Task CreateProject_WithEmptyName_Returns400_WithProblemDetails()
     {
         var response = await _client.PostAsJsonAsync("/api/projects", new { Name = "", Description = "x" });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
 
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("Validation failed", body.GetProperty("title").GetString());
         Assert.Equal("validation_error", body.GetProperty("code").GetString());
-        Assert.False(string.IsNullOrWhiteSpace(body.GetProperty("traceId").GetString()));
+        Assert.Equal(400, body.GetProperty("status").GetInt32());
+
+        var correlationId = body.GetProperty("correlationId").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(correlationId));
+        Assert.Equal(correlationId, response.Headers.GetValues("X-Correlation-ID").Single());
     }
 
     [Fact]
-    public async Task CreateProject_Twice_WithSameName_Returns409()
+    public async Task CreateProject_Twice_WithSameName_Returns409_WithProblemDetails()
     {
         var name = $"Duplicate Project {Guid.NewGuid():N}";
 
@@ -82,7 +87,12 @@ public sealed class ApiIntegrationTests : IClassFixture<ApiTestFactory>
         Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
 
         var body = await second.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("Operation conflict", body.GetProperty("title").GetString());
         Assert.Equal("conflict", body.GetProperty("code").GetString());
+        Assert.Equal(409, body.GetProperty("status").GetInt32());
+
+        var correlationId = body.GetProperty("correlationId").GetString();
+        Assert.Equal(correlationId, second.Headers.GetValues("X-Correlation-ID").Single());
     }
 
     [Fact]
@@ -298,8 +308,41 @@ public sealed class ApiIntegrationTests : IClassFixture<ApiTestFactory>
         Assert.Equal(10, body.GetProperty("pageSize").GetInt32());
     }
 
+    private async Task<Guid> SeedPendingApprovalAsync()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<FactoryDbContext>();
+
+        var projectId = Guid.NewGuid();
+        db.Projects.Add(new Project
+        {
+            Id = projectId,
+            Name = $"Approval Test {Guid.NewGuid():N}",
+            Slug = $"approval-test-{Guid.NewGuid():N}",
+            RootPath = string.Empty,
+            Status = ProjectStatus.HumanReview,
+            CreatedAtUtc = DateTime.UtcNow,
+            UpdatedAtUtc = DateTime.UtcNow
+        });
+
+        var approvalId = Guid.NewGuid();
+        db.ApprovalRequests.Add(new ApprovalRequest
+        {
+            Id = approvalId,
+            ProjectId = projectId,
+            Workflow = ProjectStatus.Implementation,
+            Reason = "Need human signoff",
+            RequestedBy = "System",
+            RequestedAtUtc = DateTime.UtcNow,
+            Decision = ApprovalDecision.PendingApproval
+        });
+
+        await db.SaveChangesAsync();
+        return approvalId;
+    }
+
     [Fact]
-    public async Task ApproveUnknownApproval_Returns404_WithErrorEnvelope()
+    public async Task ApproveUnknownApproval_Returns404_WithProblemDetails()
     {
         var response = await _client.PostAsJsonAsync(
             $"/api/approvals/{Guid.NewGuid()}/approve", new { Comment = (string?)null });
@@ -307,7 +350,105 @@ public sealed class ApiIntegrationTests : IClassFixture<ApiTestFactory>
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
 
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("Resource not found", body.GetProperty("title").GetString());
         Assert.Equal("not_found", body.GetProperty("code").GetString());
-        Assert.False(string.IsNullOrWhiteSpace(body.GetProperty("traceId").GetString()));
+        Assert.Equal(404, body.GetProperty("status").GetInt32());
+
+        var correlationId = body.GetProperty("correlationId").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(correlationId));
+        Assert.Equal(correlationId, response.Headers.GetValues("X-Correlation-ID").Single());
+    }
+
+    [Fact]
+    public async Task ApproveAlreadyDecidedApproval_Returns409_WithProblemDetails()
+    {
+        var approvalId = await SeedPendingApprovalAsync();
+
+        var firstResponse = await _client.PostAsJsonAsync(
+            $"/api/approvals/{approvalId}/approve", new { Comment = "First approval" });
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+
+        var secondResponse = await _client.PostAsJsonAsync(
+            $"/api/approvals/{approvalId}/approve", new { Comment = "Second approval attempt" });
+        Assert.Equal(HttpStatusCode.Conflict, secondResponse.StatusCode);
+
+        var body = await secondResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("Operation conflict", body.GetProperty("title").GetString());
+        Assert.Equal("conflict", body.GetProperty("code").GetString());
+        Assert.Equal(409, body.GetProperty("status").GetInt32());
+        Assert.Contains("already decided", body.GetProperty("detail").GetString());
+
+        var correlationId = body.GetProperty("correlationId").GetString();
+        Assert.Equal(correlationId, secondResponse.Headers.GetValues("X-Correlation-ID").Single());
+    }
+
+    [Fact]
+    public async Task RejectAlreadyDecidedApproval_Returns409_WithProblemDetails()
+    {
+        var approvalId = await SeedPendingApprovalAsync();
+
+        var firstResponse = await _client.PostAsJsonAsync(
+            $"/api/approvals/{approvalId}/approve", new { Comment = "Approved" });
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+
+        var secondResponse = await _client.PostAsJsonAsync(
+            $"/api/approvals/{approvalId}/reject", new { Comment = "Reject after approval" });
+        Assert.Equal(HttpStatusCode.Conflict, secondResponse.StatusCode);
+
+        var body = await secondResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("Operation conflict", body.GetProperty("title").GetString());
+        Assert.Equal("conflict", body.GetProperty("code").GetString());
+        Assert.Equal(409, body.GetProperty("status").GetInt32());
+    }
+
+    [Fact]
+    public async Task StartOrchestrationRun_WithUnknownProject_Returns404_WithProblemDetails()
+    {
+        var response = await _client.PostAsJsonAsync(
+            "/api/orchestration-runs",
+            new { ProjectId = Guid.NewGuid(), TaskId = Guid.NewGuid(), MaxAttempts = 3 });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("Resource not found", body.GetProperty("title").GetString());
+        Assert.Equal("not_found", body.GetProperty("code").GetString());
+        Assert.Equal(404, body.GetProperty("status").GetInt32());
+
+        var correlationId = body.GetProperty("correlationId").GetString();
+        Assert.Equal(correlationId, response.Headers.GetValues("X-Correlation-ID").Single());
+    }
+
+    [Fact]
+    public async Task ErrorResponse_PreservesCustomCorrelationHeader()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/projects")
+        {
+            Content = JsonContent.Create(new { Name = "", Description = "x" })
+        };
+        request.Headers.Add("X-Correlation-ID", "test-correlation-123");
+
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("test-correlation-123", response.Headers.GetValues("X-Correlation-ID").Single());
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("test-correlation-123", body.GetProperty("correlationId").GetString());
+    }
+
+    [Fact]
+    public async Task ErrorResponse_GeneratesMatchingCorrelationId_WhenNoneSupplied()
+    {
+        var response = await _client.PostAsJsonAsync("/api/projects", new { Name = "", Description = "x" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.True(response.Headers.TryGetValues("X-Correlation-ID", out var headerVals));
+
+        var headerCorrelation = headerVals!.Single();
+        Assert.True(Guid.TryParse(headerCorrelation, out _));
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(headerCorrelation, body.GetProperty("correlationId").GetString());
     }
 }

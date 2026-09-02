@@ -1,4 +1,5 @@
 using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Exceptions;
 using AI.Factory.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 
@@ -34,7 +35,7 @@ public sealed class AgentRunRepository : IAgentRunRepository
 
         if (run is null)
         {
-            throw new InvalidOperationException($"AgentRun '{agentRunId}' was not found.");
+            throw new NotFoundException($"AgentRun '{agentRunId}' was not found.");
         }
 
         run.Success = success;

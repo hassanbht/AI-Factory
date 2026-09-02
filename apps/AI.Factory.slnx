@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AI.Factory.Api/AI.Factory.Api.csproj" />
+    <Project Path="src/AI.Factory.Application/AI.Factory.Application.csproj" />
+    <Project Path="src/AI.Factory.Domain/AI.Factory.Domain.csproj" />
+    <Project Path="src/AI.Factory.Infrastructure/AI.Factory.Infrastructure.csproj" />
+    <Project Path="src/AI.Factory.Worker/AI.Factory.Worker.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AI.Factory.Application.Tests/AI.Factory.Application.Tests.csproj" />
+    <Project Path="tests/AI.Factory.Api.Tests/AI.Factory.Api.Tests.csproj" />
+    <Project Path="tests/AI.Factory.Worker.Tests/AI.Factory.Worker.Tests.csproj" />
+  </Folder>
+</Solution>

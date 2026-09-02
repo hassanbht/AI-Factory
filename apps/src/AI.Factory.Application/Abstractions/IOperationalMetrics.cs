@@ -33,6 +33,22 @@ public interface IOperationalMetrics
 
     void RecordOperationTimeout();
 
+    void RecordCircuitOpened();
+
+    void RecordCircuitClosed();
+
+    void RecordCircuitHalfOpen();
+
+    void RecordCircuitRejected();
+
+    void RecordBulkheadEntered();
+
+    void RecordBulkheadQueued();
+
+    void RecordBulkheadRejected();
+
+    void RecordBulkheadCompleted();
+
     OperationalMetricsSnapshot GetSnapshot();
 }
 
@@ -65,7 +81,15 @@ public sealed record OperationalMetricsSnapshot(
     long RetryExhausted = 0,
     long RetryCancelled = 0,
     long AttemptTimeouts = 0,
-    long OperationTimeouts = 0);
+    long OperationTimeouts = 0,
+    long CircuitOpened = 0,
+    long CircuitClosed = 0,
+    long CircuitHalfOpen = 0,
+    long CircuitRejected = 0,
+    long BulkheadEntered = 0,
+    long BulkheadQueued = 0,
+    long BulkheadRejected = 0,
+    long BulkheadCompleted = 0);
 
 public sealed class OperationalMetrics : IOperationalMetrics
 {
@@ -99,6 +123,16 @@ public sealed class OperationalMetrics : IOperationalMetrics
     private long _retryCancelled;
     private long _attemptTimeouts;
     private long _operationTimeouts;
+
+    private long _circuitOpened;
+    private long _circuitClosed;
+    private long _circuitHalfOpen;
+    private long _circuitRejected;
+
+    private long _bulkheadEntered;
+    private long _bulkheadQueued;
+    private long _bulkheadRejected;
+    private long _bulkheadCompleted;
 
     public void RecordOperationStarted() => Interlocked.Increment(ref _operationsStarted);
 
@@ -190,6 +224,22 @@ public sealed class OperationalMetrics : IOperationalMetrics
 
     public void RecordOperationTimeout() => Interlocked.Increment(ref _operationTimeouts);
 
+    public void RecordCircuitOpened() => Interlocked.Increment(ref _circuitOpened);
+
+    public void RecordCircuitClosed() => Interlocked.Increment(ref _circuitClosed);
+
+    public void RecordCircuitHalfOpen() => Interlocked.Increment(ref _circuitHalfOpen);
+
+    public void RecordCircuitRejected() => Interlocked.Increment(ref _circuitRejected);
+
+    public void RecordBulkheadEntered() => Interlocked.Increment(ref _bulkheadEntered);
+
+    public void RecordBulkheadQueued() => Interlocked.Increment(ref _bulkheadQueued);
+
+    public void RecordBulkheadRejected() => Interlocked.Increment(ref _bulkheadRejected);
+
+    public void RecordBulkheadCompleted() => Interlocked.Increment(ref _bulkheadCompleted);
+
     public OperationalMetricsSnapshot GetSnapshot()
     {
         return new OperationalMetricsSnapshot(
@@ -221,7 +271,15 @@ public sealed class OperationalMetrics : IOperationalMetrics
             Interlocked.Read(ref _retryExhausted),
             Interlocked.Read(ref _retryCancelled),
             Interlocked.Read(ref _attemptTimeouts),
-            Interlocked.Read(ref _operationTimeouts));
+            Interlocked.Read(ref _operationTimeouts),
+            Interlocked.Read(ref _circuitOpened),
+            Interlocked.Read(ref _circuitClosed),
+            Interlocked.Read(ref _circuitHalfOpen),
+            Interlocked.Read(ref _circuitRejected),
+            Interlocked.Read(ref _bulkheadEntered),
+            Interlocked.Read(ref _bulkheadQueued),
+            Interlocked.Read(ref _bulkheadRejected),
+            Interlocked.Read(ref _bulkheadCompleted));
     }
 
     /// <summary>Count + running total, so average is derived rather than stored — no raw samples kept.</summary>

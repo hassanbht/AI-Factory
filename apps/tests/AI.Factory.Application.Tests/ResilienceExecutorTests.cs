@@ -311,7 +311,7 @@ public sealed class ResilienceExecutorTests
                 if (callCount == 1)
                 {
                     // Hang until attempt timeout triggers
-                    await Task.Delay(200, ct);
+                    await Task.Delay(2000, ct);
                 }
                 return "recovered";
             },

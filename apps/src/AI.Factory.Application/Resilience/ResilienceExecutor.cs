@@ -25,6 +25,8 @@ public sealed class ResilienceExecutor : IResilienceExecutor
     private readonly ILogger<ResilienceExecutor> _logger;
     private readonly IBackoffCalculator _backoffCalculator;
     private readonly IDelayProvider _delayProvider;
+    private readonly ICircuitBreakerRegistry _circuitBreakerRegistry;
+    private readonly IBulkheadRegistry _bulkheadRegistry;
 
     public ResilienceExecutor(
         ResilienceOptions options,
@@ -35,7 +37,9 @@ public sealed class ResilienceExecutor : IResilienceExecutor
         IOperationalMetrics metrics,
         ILogger<ResilienceExecutor> logger,
         IBackoffCalculator? backoffCalculator = null,
-        IDelayProvider? delayProvider = null)
+        IDelayProvider? delayProvider = null,
+        ICircuitBreakerRegistry? circuitBreakerRegistry = null,
+        IBulkheadRegistry? bulkheadRegistry = null)
     {
         _options = options ?? new ResilienceOptions();
         _failureClassifier = failureClassifier;
@@ -46,6 +50,8 @@ public sealed class ResilienceExecutor : IResilienceExecutor
         _logger = logger;
         _backoffCalculator = backoffCalculator ?? new ExponentialBackoffCalculator();
         _delayProvider = delayProvider ?? DefaultDelayProvider.Instance;
+        _circuitBreakerRegistry = circuitBreakerRegistry ?? new CircuitBreakerRegistry(null, metrics);
+        _bulkheadRegistry = bulkheadRegistry ?? new BulkheadRegistry(null, metrics);
     }
 
     public Task<T> ExecuteAsync<T>(
@@ -101,11 +107,82 @@ public sealed class ResilienceExecutor : IResilienceExecutor
             return await operation(cancellationToken);
         }
 
+        var dependencyName = !string.IsNullOrWhiteSpace(profile.Name) ? profile.Name : operationName;
+        var circuit = _circuitBreakerRegistry.GetOrCreate(dependencyName, profile.CircuitBreaker);
+        var bulkhead = _bulkheadRegistry.GetOrCreate(dependencyName, profile.Bulkhead);
+
+        // 1. Pipeline Step 1: Circuit breaker fast check (fail fast without queuing or consuming permits)
+        if (profile.CircuitBreaker is not null && profile.CircuitBreaker.Enabled && !circuit.CanExecuteFast())
+        {
+            _metrics.RecordCircuitRejected();
+            var snapshot = circuit.GetSnapshot();
+            var ambientContext = _contextAccessor.Current;
+            var parentCorrelationId = ambientContext?.CorrelationId ?? Guid.NewGuid();
+
+            await RecordAuditAsync(
+                parentCorrelationId,
+                ambientContext,
+                AuditEventType.CircuitRejected,
+                AuditSeverity.Warning,
+                $"Operation '{operationName}' rejected by open circuit breaker for '{dependencyName}'.",
+                outcome: "Rejected",
+                cancellationToken: CancellationToken.None);
+
+            throw new CircuitOpenException(dependencyName, snapshot.State, snapshot.NextProbeAtUtc);
+        }
+
+        // 2. Pipeline Step 2: Bulkhead isolation (acquire concurrency permit or queue up to MaxQueueLength)
+        using var bulkheadPermit = await bulkhead.AcquireAsync(cancellationToken);
+
+        // 3. Pipeline Step 3: Circuit breaker trial admission (Half-Open Gate)
+        if (profile.CircuitBreaker is not null && profile.CircuitBreaker.Enabled && !circuit.TryEnter())
+        {
+            _metrics.RecordCircuitRejected();
+            var snapshot = circuit.GetSnapshot();
+            var ambientContext = _contextAccessor.Current;
+            var parentCorrelationId = ambientContext?.CorrelationId ?? Guid.NewGuid();
+
+            await RecordAuditAsync(
+                parentCorrelationId,
+                ambientContext,
+                AuditEventType.CircuitRejected,
+                AuditSeverity.Warning,
+                $"Operation '{operationName}' rejected by circuit breaker trial limit for '{dependencyName}'.",
+                outcome: "Rejected",
+                cancellationToken: CancellationToken.None);
+
+            throw new CircuitOpenException(dependencyName, snapshot.State, snapshot.NextProbeAtUtc);
+        }
+
+        // 4. Pipeline Step 4: Retry / Timeout Attempt Loop (observing final logical result for Circuit Breaker)
+        try
+        {
+            var result = await ExecuteCoreAsync(operationName, operation, profile, cancellationToken);
+            circuit.RecordSuccess();
+            return result;
+        }
+        catch (Exception ex)
+        {
+            if (ShouldTripCircuit(ex, profile))
+            {
+                circuit.RecordFailure();
+            }
+
+            throw;
+        }
+    }
+
+    private async Task<T> ExecuteCoreAsync<T>(
+        string operationName,
+        Func<CancellationToken, Task<T>> operation,
+        ResilienceProfile profile,
+        CancellationToken cancellationToken)
+    {
         var maxAttempts = 1 + Math.Max(0, profile.MaxRetryAttempts);
         var ambientContext = _contextAccessor.Current;
         var parentCorrelationId = ambientContext?.CorrelationId ?? Guid.NewGuid();
 
-        // 1. Configure overall operation timeout if specified
+        // Configure overall operation timeout if specified
         using var overallCts = profile.OperationTimeout.HasValue
             ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
             : null;
@@ -400,6 +477,35 @@ public sealed class ResilienceExecutor : IResilienceExecutor
         }
 
         return !DefaultNonRetryableCategories.Contains(classification.Category);
+    }
+
+    private bool ShouldTripCircuit(Exception ex, ResilienceProfile profile)
+    {
+        if (ex is OperationCanceledException || ex is CircuitOpenException || ex is BulkheadRejectedException)
+        {
+            return false;
+        }
+
+        if (ex is RetryExhaustedException retryExhausted)
+        {
+            return retryExhausted.FailureCategory switch
+            {
+                FailureCategory.Provider or FailureCategory.Infrastructure or FailureCategory.Timeout => true,
+                _ => false
+            };
+        }
+
+        if (ex is OperationTimeoutException or AttemptTimeoutException)
+        {
+            return true;
+        }
+
+        var classification = _failureClassifier.Classify(ex);
+        return classification.Category switch
+        {
+            FailureCategory.Provider or FailureCategory.Infrastructure or FailureCategory.Timeout => true,
+            _ => false
+        };
     }
 
     private async Task RecordAuditAsync(

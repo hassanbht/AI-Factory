@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AI.Factory.Api.Middleware;
 using AI.Factory.Application.Exceptions;
+using AI.Factory.Application.Resilience;
 using AI.Factory.Infrastructure.Resilience;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;

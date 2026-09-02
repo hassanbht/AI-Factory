@@ -1,6 +1,7 @@
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Exceptions;
 using AI.Factory.Application.Orchestration;
+using AI.Factory.Application.Resilience;
 using AI.Factory.Domain.Enums;
 using AI.Factory.Infrastructure.Resilience;
 using Microsoft.AspNetCore.Mvc;
@@ -91,6 +92,14 @@ public sealed class ApiExceptionMapper
                 "The service or an external dependency is temporarily unavailable.",
                 "service_unavailable",
                 FailureCategory.Provider,
+                ShouldAudit: true),
+
+            BulkheadRejectedException => new ApiErrorMapping(
+                StatusCodes.Status429TooManyRequests,
+                "Too many requests",
+                "The requested operation could not be processed due to concurrency limits.",
+                "too_many_requests",
+                FailureCategory.Infrastructure,
                 ShouldAudit: true),
 
             _ when classification.IsTransient && (classification.Category == FailureCategory.Provider || classification.Category == FailureCategory.Infrastructure) => new ApiErrorMapping(

@@ -1,4 +1,5 @@
 using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Resilience;
 using AI.Factory.Infrastructure.Resilience;
 using Microsoft.Extensions.Logging;
 

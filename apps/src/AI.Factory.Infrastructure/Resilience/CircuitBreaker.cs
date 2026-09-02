@@ -1,31 +1,14 @@
+using AI.Factory.Application.Resilience;
 using Microsoft.Extensions.Logging;
 
 namespace AI.Factory.Infrastructure.Resilience;
 
-public enum CircuitState
-{
-    Closed,
-    Open,
-    HalfOpen
-}
-
-/// <summary>Thrown instead of calling the wrapped provider while its circuit is Open — the "fail fast" signal.</summary>
-public sealed class CircuitOpenException : Exception
-{
-    public CircuitOpenException(string providerName)
-        : base($"Provider '{providerName}' is currently unavailable (circuit open).")
-    {
-    }
-}
-
 /// <summary>
 /// One circuit per external provider — construct a separate instance (and
 /// register it as a singleton, since state must persist across calls) for
-/// each provider that needs independent health tracking. Not thread-safe
-/// beyond a simple lock, which is sufficient for this pipeline's
-/// concurrency=1 execution model (see WorkItemTaskScheduler).
+/// each provider that needs independent health tracking.
 /// </summary>
-public sealed class CircuitBreaker
+public sealed class CircuitBreaker : ICircuitBreaker
 {
     private readonly CircuitBreakerOptions _options;
     private readonly ILogger<CircuitBreaker> _logger;
@@ -36,6 +19,10 @@ public sealed class CircuitBreaker
     private int _consecutiveFailures;
     private int _halfOpenTrialsIssued;
     private DateTime _openedAtUtc;
+    private long _totalSuccesses;
+    private long _totalFailures;
+
+    public string Name => _providerName;
 
     public CircuitBreaker(CircuitBreakerOptions options, ILogger<CircuitBreaker> logger, string providerName)
     {
@@ -47,6 +34,43 @@ public sealed class CircuitBreaker
     public CircuitState State
     {
         get { lock (_lock) return _state; }
+    }
+
+    public bool CanExecuteFast()
+    {
+        lock (_lock)
+        {
+            if (_state == CircuitState.Open)
+            {
+                return DateTime.UtcNow - _openedAtUtc >= _options.BreakDuration;
+            }
+
+            return true;
+        }
+    }
+
+    public void RecordSuccess() => OnSuccess();
+
+    public CircuitBreakerSnapshot GetSnapshot()
+    {
+        lock (_lock)
+        {
+            DateTime? nextProbe = null;
+            if (_state == CircuitState.Open)
+            {
+                nextProbe = _openedAtUtc + _options.BreakDuration;
+            }
+
+            return new CircuitBreakerSnapshot(
+                _providerName,
+                _state,
+                _consecutiveFailures,
+                _openedAtUtc == default ? null : _openedAtUtc,
+                nextProbe,
+                _halfOpenTrialsIssued,
+                _totalSuccesses,
+                _totalFailures);
+        }
     }
 
     /// <summary>
@@ -84,7 +108,7 @@ public sealed class CircuitBreaker
         }
     }
 
-    private bool TryEnter()
+    public bool TryEnter()
     {
         lock (_lock)
         {
@@ -117,6 +141,7 @@ public sealed class CircuitBreaker
     {
         lock (_lock)
         {
+            _totalSuccesses++;
             _consecutiveFailures = 0;
 
             if (_state == CircuitState.HalfOpen)
@@ -133,10 +158,11 @@ public sealed class CircuitBreaker
         return false;
     }
 
-    private void RecordFailure()
+    public void RecordFailure()
     {
         lock (_lock)
         {
+            _totalFailures++;
             if (_state == CircuitState.HalfOpen)
             {
                 // Still broken — re-open immediately rather than waiting out more trials.

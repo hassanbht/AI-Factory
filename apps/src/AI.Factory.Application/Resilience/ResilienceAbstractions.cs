@@ -61,6 +61,10 @@ public sealed class ResilienceProfile
 
     public HashSet<FailureCategory>? RetryableCategories { get; set; }
 
+    public CircuitBreakerProfileOptions? CircuitBreaker { get; set; }
+
+    public BulkheadProfileOptions? Bulkhead { get; set; }
+
     public ResilienceProfile Clone()
     {
         return new ResilienceProfile
@@ -75,7 +79,9 @@ public sealed class ResilienceProfile
             AttemptTimeout = AttemptTimeout,
             OperationTimeout = OperationTimeout,
             RetryTransientFailuresOnly = RetryTransientFailuresOnly,
-            RetryableCategories = RetryableCategories is null ? null : new HashSet<FailureCategory>(RetryableCategories)
+            RetryableCategories = RetryableCategories is null ? null : new HashSet<FailureCategory>(RetryableCategories),
+            CircuitBreaker = CircuitBreaker?.Clone(),
+            Bulkhead = Bulkhead?.Clone()
         };
     }
 }

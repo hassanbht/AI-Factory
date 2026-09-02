@@ -43,7 +43,20 @@ public sealed class ResilienceOptions
                 UseJitter = true,
                 AttemptTimeout = TimeSpan.FromMinutes(5),
                 OperationTimeout = TimeSpan.FromMinutes(15),
-                RetryTransientFailuresOnly = true
+                RetryTransientFailuresOnly = true,
+                CircuitBreaker = new CircuitBreakerProfileOptions
+                {
+                    Enabled = true,
+                    FailureThreshold = 5,
+                    BreakDuration = TimeSpan.FromSeconds(30),
+                    HalfOpenTrialCount = 1
+                },
+                Bulkhead = new BulkheadProfileOptions
+                {
+                    Enabled = true,
+                    MaxConcurrentExecutions = 2,
+                    MaxQueueLength = 5
+                }
             },
             ProviderCall => new ResilienceProfile
             {
@@ -56,7 +69,20 @@ public sealed class ResilienceOptions
                 UseJitter = true,
                 AttemptTimeout = TimeSpan.FromMinutes(1),
                 OperationTimeout = TimeSpan.FromMinutes(5),
-                RetryTransientFailuresOnly = true
+                RetryTransientFailuresOnly = true,
+                CircuitBreaker = new CircuitBreakerProfileOptions
+                {
+                    Enabled = true,
+                    FailureThreshold = 5,
+                    BreakDuration = TimeSpan.FromSeconds(30),
+                    HalfOpenTrialCount = 1
+                },
+                Bulkhead = new BulkheadProfileOptions
+                {
+                    Enabled = true,
+                    MaxConcurrentExecutions = 10,
+                    MaxQueueLength = 20
+                }
             },
             BuildExecution => new ResilienceProfile
             {
@@ -69,7 +95,14 @@ public sealed class ResilienceOptions
                 UseJitter = false,
                 AttemptTimeout = TimeSpan.FromMinutes(3),
                 OperationTimeout = TimeSpan.FromMinutes(5),
-                RetryTransientFailuresOnly = true
+                RetryTransientFailuresOnly = true,
+                CircuitBreaker = new CircuitBreakerProfileOptions { Enabled = false },
+                Bulkhead = new BulkheadProfileOptions
+                {
+                    Enabled = true,
+                    MaxConcurrentExecutions = 2,
+                    MaxQueueLength = 5
+                }
             },
             TestExecution => new ResilienceProfile
             {
@@ -82,7 +115,14 @@ public sealed class ResilienceOptions
                 UseJitter = false,
                 AttemptTimeout = TimeSpan.FromMinutes(5),
                 OperationTimeout = TimeSpan.FromMinutes(10),
-                RetryTransientFailuresOnly = true
+                RetryTransientFailuresOnly = true,
+                CircuitBreaker = new CircuitBreakerProfileOptions { Enabled = false },
+                Bulkhead = new BulkheadProfileOptions
+                {
+                    Enabled = true,
+                    MaxConcurrentExecutions = 2,
+                    MaxQueueLength = 5
+                }
             },
             RepairExecution => new ResilienceProfile
             {
@@ -95,7 +135,14 @@ public sealed class ResilienceOptions
                 UseJitter = true,
                 AttemptTimeout = TimeSpan.FromMinutes(5),
                 OperationTimeout = TimeSpan.FromMinutes(15),
-                RetryTransientFailuresOnly = true
+                RetryTransientFailuresOnly = true,
+                CircuitBreaker = new CircuitBreakerProfileOptions { Enabled = false },
+                Bulkhead = new BulkheadProfileOptions
+                {
+                    Enabled = true,
+                    MaxConcurrentExecutions = 1,
+                    MaxQueueLength = 2
+                }
             },
             BackgroundOperation => new ResilienceProfile
             {
@@ -108,7 +155,14 @@ public sealed class ResilienceOptions
                 UseJitter = true,
                 AttemptTimeout = TimeSpan.FromMinutes(2),
                 OperationTimeout = TimeSpan.FromMinutes(10),
-                RetryTransientFailuresOnly = true
+                RetryTransientFailuresOnly = true,
+                CircuitBreaker = new CircuitBreakerProfileOptions { Enabled = false },
+                Bulkhead = new BulkheadProfileOptions
+                {
+                    Enabled = true,
+                    MaxConcurrentExecutions = 5,
+                    MaxQueueLength = 10
+                }
             },
             _ => new ResilienceProfile
             {
@@ -174,6 +228,42 @@ public sealed class ResilienceOptions
             {
                 throw new InvalidOperationException(
                     $"Resilience profile '{key}' AttemptTimeout ({profile.AttemptTimeout}) cannot exceed OperationTimeout ({profile.OperationTimeout}).");
+            }
+
+            if (profile.CircuitBreaker is not null && profile.CircuitBreaker.Enabled)
+            {
+                if (profile.CircuitBreaker.FailureThreshold <= 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Resilience profile '{key}' has non-positive CircuitBreaker FailureThreshold: {profile.CircuitBreaker.FailureThreshold}.");
+                }
+
+                if (profile.CircuitBreaker.BreakDuration <= TimeSpan.Zero)
+                {
+                    throw new InvalidOperationException(
+                        $"Resilience profile '{key}' has non-positive CircuitBreaker BreakDuration: {profile.CircuitBreaker.BreakDuration}.");
+                }
+
+                if (profile.CircuitBreaker.HalfOpenTrialCount <= 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Resilience profile '{key}' has non-positive CircuitBreaker HalfOpenTrialCount: {profile.CircuitBreaker.HalfOpenTrialCount}.");
+                }
+            }
+
+            if (profile.Bulkhead is not null && profile.Bulkhead.Enabled)
+            {
+                if (profile.Bulkhead.MaxConcurrentExecutions <= 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Resilience profile '{key}' has non-positive Bulkhead MaxConcurrentExecutions: {profile.Bulkhead.MaxConcurrentExecutions}.");
+                }
+
+                if (profile.Bulkhead.MaxQueueLength < 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Resilience profile '{key}' has negative Bulkhead MaxQueueLength: {profile.Bulkhead.MaxQueueLength}.");
+                }
             }
         }
     }

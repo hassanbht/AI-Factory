@@ -18,5 +18,11 @@ public enum AuditEventType
     WorkflowFailed,
     ReviewResult,
     EvaluationResult,
-    LearningResult
+    LearningResult,
+    CircuitStateChanged,
+    CircuitRejected,
+    BulkheadEntered,
+    BulkheadQueued,
+    BulkheadRejected,
+    BulkheadCompleted
 }

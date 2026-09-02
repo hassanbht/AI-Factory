@@ -72,32 +72,22 @@ builder.Services.AddSingleton(commandPolicyOptions);
 builder.Services.AddSingleton<IProcessRunner, SystemProcessRunner>();
 builder.Services.AddScoped<HermesAgentExecutor>();
 
-var hermesCircuitBreakerOptions = new CircuitBreakerOptions();
-builder.Configuration.GetSection("CircuitBreaker:Hermes").Bind(hermesCircuitBreakerOptions);
-builder.Services.AddSingleton(hermesCircuitBreakerOptions);
-builder.Services.AddSingleton(sp => new CircuitBreaker(
-    hermesCircuitBreakerOptions, sp.GetRequiredService<ILogger<CircuitBreaker>>(), "Hermes"));
-
 var resilienceOptions = new ResilienceOptions();
 builder.Configuration.GetSection(ResilienceOptions.SectionName).Bind(resilienceOptions);
 resilienceOptions.Validate();
 builder.Services.AddSingleton(resilienceOptions);
 builder.Services.AddSingleton<IBackoffCalculator, ExponentialBackoffCalculator>();
 builder.Services.AddSingleton<IDelayProvider, DefaultDelayProvider>();
+builder.Services.AddSingleton<ICircuitBreakerRegistry, CircuitBreakerRegistry>();
+builder.Services.AddSingleton<IBulkheadRegistry, BulkheadRegistry>();
 builder.Services.AddScoped<IResilienceExecutor, ResilienceExecutor>();
 
-// Decorates HermesAgentExecutor with circuit breaker and centralized resilience
+// Decorates HermesAgentExecutor with centralized resilience (bulkhead, circuit breaker, retry, and timeout)
 builder.Services.AddScoped<IAgentExecutor>(sp =>
 {
     var hermes = sp.GetRequiredService<HermesAgentExecutor>();
-    var breaker = sp.GetRequiredService<CircuitBreaker>();
-    var breakerDecorator = new CircuitBreakerAgentExecutorDecorator(
-        hermes,
-        breaker,
-        sp.GetRequiredService<ILogger<CircuitBreakerAgentExecutorDecorator>>());
-
     return new ResilienceAgentExecutorDecorator(
-        breakerDecorator,
+        hermes,
         sp.GetRequiredService<IResilienceExecutor>(),
         sp.GetRequiredService<IFailureClassifier>(),
         sp.GetRequiredService<ILogger<ResilienceAgentExecutorDecorator>>());
@@ -212,7 +202,8 @@ builder.Services.AddScoped<IAutonomousCodingOrchestrator, AutonomousCodingOrches
 var healthChecksBuilder = builder.Services.AddHealthChecks()
     .AddCheck<DatabaseHealthCheck>("database", tags: new[] { "ready" })
     .AddCheck<ConfigurationHealthCheck>("configuration", tags: new[] { "ready" })
-    .AddCheck<CriticalServicesHealthCheck>("critical-services", tags: new[] { "ready" });
+    .AddCheck<CriticalServicesHealthCheck>("critical-services", tags: new[] { "ready" })
+    .AddCheck<CircuitBreakerHealthCheck>("circuit-breaker", tags: new[] { "ready" });
 
 if (builder.Configuration.GetValue<bool>("Health:CheckOpenViking"))
 {
@@ -374,6 +365,40 @@ app.MapGet("/api/audit-log", async (
 // ------------------------------------------------------------
 
 app.MapGet("/api/operations/metrics", (IOperationalMetrics metrics) => Results.Ok(metrics.GetSnapshot()));
+
+app.MapGet("/api/operations/resilience", (
+    ICircuitBreakerRegistry circuitBreakers,
+    IBulkheadRegistry bulkheads) =>
+{
+    var circuitSnapshots = circuitBreakers.GetAllSnapshots().ToDictionary(s => s.DependencyName, StringComparer.OrdinalIgnoreCase);
+    var bulkheadSnapshots = bulkheads.GetAllSnapshots().ToDictionary(s => s.DependencyName, StringComparer.OrdinalIgnoreCase);
+
+    var allNames = circuitSnapshots.Keys.Union(bulkheadSnapshots.Keys, StringComparer.OrdinalIgnoreCase).OrderBy(n => n).ToList();
+
+    var dependencies = allNames.Select(name =>
+    {
+        circuitSnapshots.TryGetValue(name, out var c);
+        bulkheadSnapshots.TryGetValue(name, out var b);
+
+        return new
+        {
+            name,
+            circuitState = c?.State.ToString() ?? "Closed",
+            consecutiveFailures = c?.ConsecutiveFailures ?? 0,
+            openedAtUtc = c?.OpenedAtUtc,
+            nextProbeAtUtc = c?.NextProbeAtUtc,
+            bulkhead = b is null ? null : new
+            {
+                activeExecutions = b.ActiveExecutions,
+                queuedExecutions = b.QueuedExecutions,
+                maxConcurrentExecutions = b.MaxConcurrentExecutions,
+                maxQueueLength = b.MaxQueueLength
+            }
+        };
+    });
+
+    return Results.Ok(new { dependencies });
+});
 
 app.MapGet("/api/operations/recent", async (
     int? count,

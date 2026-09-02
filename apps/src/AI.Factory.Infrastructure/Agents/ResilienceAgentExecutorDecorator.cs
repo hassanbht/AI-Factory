@@ -78,5 +78,15 @@ public sealed class ResilienceAgentExecutorDecorator : IAgentExecutor
             _logger.LogWarning("Agent execution timed out overall for agent {Agent}: {Message}", request.Agent, ex.Message);
             return new AgentExecutionResult(false, null, ex.Message, 0);
         }
+        catch (CircuitOpenException ex)
+        {
+            _logger.LogWarning("Agent execution short-circuited for agent {Agent}: {Message}", request.Agent, ex.Message);
+            return new AgentExecutionResult(false, null, ex.Message, 0);
+        }
+        catch (BulkheadRejectedException ex)
+        {
+            _logger.LogWarning("Agent execution bulkhead rejected for agent {Agent}: {Message}", request.Agent, ex.Message);
+            return new AgentExecutionResult(false, null, ex.Message, 0);
+        }
     }
 }

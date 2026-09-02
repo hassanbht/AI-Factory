@@ -75,32 +75,22 @@ builder.Services.AddSingleton(commandPolicyOptions);
 builder.Services.AddSingleton<IProcessRunner, SystemProcessRunner>();
 builder.Services.AddScoped<HermesAgentExecutor>();
 
-var hermesCircuitBreakerOptions = new CircuitBreakerOptions();
-builder.Configuration.GetSection("CircuitBreaker:Hermes").Bind(hermesCircuitBreakerOptions);
-builder.Services.AddSingleton(hermesCircuitBreakerOptions);
-builder.Services.AddSingleton(sp => new CircuitBreaker(
-    hermesCircuitBreakerOptions, sp.GetRequiredService<ILogger<CircuitBreaker>>(), "Hermes"));
-
 var resilienceOptions = new ResilienceOptions();
 builder.Configuration.GetSection(ResilienceOptions.SectionName).Bind(resilienceOptions);
 resilienceOptions.Validate();
 builder.Services.AddSingleton(resilienceOptions);
 builder.Services.AddSingleton<IBackoffCalculator, ExponentialBackoffCalculator>();
 builder.Services.AddSingleton<IDelayProvider, DefaultDelayProvider>();
+builder.Services.AddSingleton<ICircuitBreakerRegistry, CircuitBreakerRegistry>();
+builder.Services.AddSingleton<IBulkheadRegistry, BulkheadRegistry>();
 builder.Services.AddScoped<IResilienceExecutor, ResilienceExecutor>();
 
-// Decorates HermesAgentExecutor with circuit breaker and centralized resilience
+// Decorates HermesAgentExecutor with centralized resilience (bulkhead, circuit breaker, retry, and timeout)
 builder.Services.AddScoped<IAgentExecutor>(sp =>
 {
     var hermes = sp.GetRequiredService<HermesAgentExecutor>();
-    var breaker = sp.GetRequiredService<CircuitBreaker>();
-    var breakerDecorator = new CircuitBreakerAgentExecutorDecorator(
-        hermes,
-        breaker,
-        sp.GetRequiredService<ILogger<CircuitBreakerAgentExecutorDecorator>>());
-
     return new ResilienceAgentExecutorDecorator(
-        breakerDecorator,
+        hermes,
         sp.GetRequiredService<IResilienceExecutor>(),
         sp.GetRequiredService<IFailureClassifier>(),
         sp.GetRequiredService<ILogger<ResilienceAgentExecutorDecorator>>());

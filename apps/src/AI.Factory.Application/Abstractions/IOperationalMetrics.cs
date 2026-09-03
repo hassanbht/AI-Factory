@@ -49,6 +49,20 @@ public interface IOperationalMetrics
 
     void RecordBulkheadCompleted();
 
+    void RecordShutdownInitiated();
+
+    void RecordWorkerStopping();
+
+    void RecordWorkerStopped();
+
+    void RecordOperationsDrained(int count);
+
+    void RecordOperationsCancelled(int count);
+
+    void RecordShutdownTimedOut();
+
+    void RecordShutdownRequestRejected();
+
     OperationalMetricsSnapshot GetSnapshot();
 }
 
@@ -89,7 +103,14 @@ public sealed record OperationalMetricsSnapshot(
     long BulkheadEntered = 0,
     long BulkheadQueued = 0,
     long BulkheadRejected = 0,
-    long BulkheadCompleted = 0);
+    long BulkheadCompleted = 0,
+    long ShutdownInitiated = 0,
+    long WorkerStopping = 0,
+    long WorkerStopped = 0,
+    long OperationsDrained = 0,
+    long OperationsCancelled = 0,
+    long ShutdownTimedOut = 0,
+    long ShutdownRequestsRejected = 0);
 
 public sealed class OperationalMetrics : IOperationalMetrics
 {
@@ -133,6 +154,14 @@ public sealed class OperationalMetrics : IOperationalMetrics
     private long _bulkheadQueued;
     private long _bulkheadRejected;
     private long _bulkheadCompleted;
+
+    private long _shutdownInitiated;
+    private long _workerStopping;
+    private long _workerStopped;
+    private long _operationsDrained;
+    private long _operationsCancelled;
+    private long _shutdownTimedOut;
+    private long _shutdownRequestsRejected;
 
     public void RecordOperationStarted() => Interlocked.Increment(ref _operationsStarted);
 
@@ -240,6 +269,20 @@ public sealed class OperationalMetrics : IOperationalMetrics
 
     public void RecordBulkheadCompleted() => Interlocked.Increment(ref _bulkheadCompleted);
 
+    public void RecordShutdownInitiated() => Interlocked.Increment(ref _shutdownInitiated);
+
+    public void RecordWorkerStopping() => Interlocked.Increment(ref _workerStopping);
+
+    public void RecordWorkerStopped() => Interlocked.Increment(ref _workerStopped);
+
+    public void RecordOperationsDrained(int count) => Interlocked.Add(ref _operationsDrained, count);
+
+    public void RecordOperationsCancelled(int count) => Interlocked.Add(ref _operationsCancelled, count);
+
+    public void RecordShutdownTimedOut() => Interlocked.Increment(ref _shutdownTimedOut);
+
+    public void RecordShutdownRequestRejected() => Interlocked.Increment(ref _shutdownRequestsRejected);
+
     public OperationalMetricsSnapshot GetSnapshot()
     {
         return new OperationalMetricsSnapshot(
@@ -279,7 +322,14 @@ public sealed class OperationalMetrics : IOperationalMetrics
             Interlocked.Read(ref _bulkheadEntered),
             Interlocked.Read(ref _bulkheadQueued),
             Interlocked.Read(ref _bulkheadRejected),
-            Interlocked.Read(ref _bulkheadCompleted));
+            Interlocked.Read(ref _bulkheadCompleted),
+            Interlocked.Read(ref _shutdownInitiated),
+            Interlocked.Read(ref _workerStopping),
+            Interlocked.Read(ref _workerStopped),
+            Interlocked.Read(ref _operationsDrained),
+            Interlocked.Read(ref _operationsCancelled),
+            Interlocked.Read(ref _shutdownTimedOut),
+            Interlocked.Read(ref _shutdownRequestsRejected));
     }
 
     /// <summary>Count + running total, so average is derived rather than stored — no raw samples kept.</summary>

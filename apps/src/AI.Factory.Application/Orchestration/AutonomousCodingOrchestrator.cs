@@ -43,6 +43,7 @@ public sealed class AutonomousCodingOrchestrator : IAutonomousCodingOrchestrator
     private readonly IOrchestrationProgressReporter _progressReporter;
     private readonly IOrchestrationRunTraceService _traceService;
     private readonly IOperationScopeFactory _operationScopeFactory;
+    private readonly IApplicationShutdown? _shutdown;
     private readonly ILogger<AutonomousCodingOrchestrator> _logger;
 
     public AutonomousCodingOrchestrator(
@@ -72,7 +73,8 @@ public sealed class AutonomousCodingOrchestrator : IAutonomousCodingOrchestrator
         IOrchestrationProgressReporter? progressReporter,
         IOrchestrationRunTraceService? traceService,
         IOperationScopeFactory? operationScopeFactory,
-        ILogger<AutonomousCodingOrchestrator> logger)
+        ILogger<AutonomousCodingOrchestrator> logger,
+        IApplicationShutdown? shutdown = null)
     {
         _scheduler = scheduler;
         _taskStateManager = taskStateManager;
@@ -100,6 +102,7 @@ public sealed class AutonomousCodingOrchestrator : IAutonomousCodingOrchestrator
         _progressReporter = progressReporter ?? NullOrchestrationProgressReporter.Instance;
         _traceService = traceService ?? NullOrchestrationRunTraceService.Instance;
         _operationScopeFactory = operationScopeFactory ?? NullOperationScopeFactory.Instance;
+        _shutdown = shutdown;
         _logger = logger;
     }
 
@@ -107,6 +110,12 @@ public sealed class AutonomousCodingOrchestrator : IAutonomousCodingOrchestrator
         Guid projectId,
         CancellationToken cancellationToken = default)
     {
+        if (_shutdown?.IsStopping == true || cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogInformation("Shutdown or cancellation in progress; skipping ExecuteNextReadyTaskAsync.");
+            return null;
+        }
+
         var workItem = await _scheduler.GetNextReadyWorkItemAsync(projectId, cancellationToken);
 
         if (workItem is null)
@@ -129,6 +138,12 @@ public sealed class AutonomousCodingOrchestrator : IAutonomousCodingOrchestrator
         Guid workItemId,
         CancellationToken cancellationToken = default)
     {
+        if (_shutdown?.IsStopping == true || cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogInformation("Shutdown or cancellation in progress; rejecting ExecuteSpecificWorkItemAsync for {WorkItemId}.", workItemId);
+            throw new OperationCanceledException("Execution was cancelled due to application shutdown.");
+        }
+
         var workItem = await _workItemRepository.GetByIdAsync(workItemId, cancellationToken)
             ?? throw new NotFoundException($"WorkItem '{workItemId}' was not found.");
 
@@ -151,9 +166,14 @@ public sealed class AutonomousCodingOrchestrator : IAutonomousCodingOrchestrator
         await using var operationScope = _operationScopeFactory.Begin(
             "ExecuteWorkItem", correlationId: executionId, projectId: workItem.ProjectId, taskId: workItem.Id);
 
+        using var linkedCts = _shutdown is not null
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.StoppingToken)
+            : null;
+        var effectiveToken = linkedCts?.Token ?? cancellationToken;
+
         try
         {
-            var outcome = await ExecuteWorkItemCoreAsync(workItem, projectId, executionId, cancellationToken);
+            var outcome = await ExecuteWorkItemCoreAsync(workItem, projectId, executionId, effectiveToken);
 
             if (outcome is { Success: false })
             {
@@ -161,6 +181,30 @@ public sealed class AutonomousCodingOrchestrator : IAutonomousCodingOrchestrator
             }
 
             return outcome;
+        }
+        catch (OperationCanceledException)
+        {
+            operationScope.Fail("Execution was cancelled.");
+
+            try
+            {
+                var freshItem = await _workItemRepository.GetByIdAsync(workItem.Id, CancellationToken.None);
+                if (freshItem is not null && freshItem.Status == WorkItemStatus.Running.ToString())
+                {
+                    freshItem.Status = freshItem.AttemptCount > 1
+                        ? WorkItemStatus.Repairing.ToString()
+                        : WorkItemStatus.Ready.ToString();
+                    freshItem.CurrentError = "Execution interrupted by shutdown/cancellation; queued for resume.";
+                    freshItem.UpdatedAtUtc = DateTime.UtcNow;
+                    await _workItemRepository.UpdateAsync(freshItem, CancellationToken.None);
+                }
+            }
+            catch (Exception updateEx)
+            {
+                _logger.LogWarning(updateEx, "Failed to revert WorkItem {WorkItemId} state on cancellation.", workItem.Id);
+            }
+
+            throw;
         }
         catch (Exception ex)
         {

@@ -107,6 +107,9 @@ public sealed class WorkerCompositionRootTests : IDisposable
     [InlineData(typeof(IOperationalMetrics))]
     [InlineData(typeof(IFailureClassifier))]
     [InlineData(typeof(IOperationalDiagnosticsService))]
+    [InlineData(typeof(IApplicationShutdown))]
+    [InlineData(typeof(IBackgroundOperationTracker))]
+    [InlineData(typeof(ShutdownOptions))]
     public void RealWorkerServiceGraph_Resolves(Type serviceType)
     {
         using var scope = _host.Services.CreateScope();

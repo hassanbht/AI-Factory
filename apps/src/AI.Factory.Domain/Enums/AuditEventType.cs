@@ -24,5 +24,12 @@ public enum AuditEventType
     BulkheadEntered,
     BulkheadQueued,
     BulkheadRejected,
-    BulkheadCompleted
+    BulkheadCompleted,
+    ShutdownInitiated,
+    WorkerStopping,
+    WorkerStopped,
+    OperationsDrained,
+    OperationsCancelled,
+    ShutdownTimedOut,
+    ShutdownRequestRejected
 }

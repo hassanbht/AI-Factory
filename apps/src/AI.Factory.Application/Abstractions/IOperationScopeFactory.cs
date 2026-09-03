@@ -38,13 +38,19 @@ public sealed class OperationScopeFactory : IOperationScopeFactory
 {
     private readonly OperationContextAccessor _accessor;
     private readonly IOperationalMetrics _metrics;
+    private readonly IBackgroundOperationTracker? _tracker;
     private readonly ILogger<OperationScopeFactory> _logger;
 
-    public OperationScopeFactory(OperationContextAccessor accessor, IOperationalMetrics metrics, ILogger<OperationScopeFactory> logger)
+    public OperationScopeFactory(
+        OperationContextAccessor accessor,
+        IOperationalMetrics metrics,
+        ILogger<OperationScopeFactory> logger,
+        IBackgroundOperationTracker? tracker = null)
     {
         _accessor = accessor;
         _metrics = metrics;
         _logger = logger;
+        _tracker = tracker;
     }
 
     public IOperationScope Begin(
@@ -73,8 +79,9 @@ public sealed class OperationScopeFactory : IOperationScopeFactory
             context.OperationName, context.CorrelationId, context.OperationId, context.ParentOperationId, context.ProjectId, context.TaskId, context.RunId);
 
         _metrics.RecordOperationStarted();
+        var trackingHandle = _tracker?.Track(context);
 
-        return new OperationScope(this, context, parent);
+        return new OperationScope(this, context, parent, trackingHandle);
     }
 
     private void Restore(OperationContext? parent) => _accessor.Set(parent);
@@ -84,15 +91,21 @@ public sealed class OperationScopeFactory : IOperationScopeFactory
         private readonly OperationScopeFactory _owner;
         private readonly OperationContext? _parent;
         private readonly DateTime _startedAtUtc;
+        private readonly IDisposable? _trackingHandle;
         private string? _failureReason;
         private bool _disposed;
 
-        public OperationScope(OperationScopeFactory owner, OperationContext context, OperationContext? parent)
+        public OperationScope(
+            OperationScopeFactory owner,
+            OperationContext context,
+            OperationContext? parent,
+            IDisposable? trackingHandle)
         {
             _owner = owner;
             Context = context;
             _parent = parent;
             _startedAtUtc = context.StartedAtUtc;
+            _trackingHandle = trackingHandle;
         }
 
         public OperationContext Context { get; }
@@ -127,6 +140,7 @@ public sealed class OperationScopeFactory : IOperationScopeFactory
             }
 
             _owner._metrics.RecordOperationCompleted(succeeded);
+            _trackingHandle?.Dispose();
             _owner.Restore(_parent);
 
             return ValueTask.CompletedTask;

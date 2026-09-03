@@ -8,6 +8,7 @@ using AI.Factory.Infrastructure.Agents;
 using AI.Factory.Infrastructure.Context;
 using AI.Factory.Infrastructure.Persistence;
 using AI.Factory.Infrastructure.Resilience;
+using AI.Factory.Infrastructure.Shutdown;
 using AI.Factory.Api.HealthChecks;
 using AI.Factory.Api.Middleware;
 using AI.Factory.Application.Resilience;
@@ -170,10 +171,17 @@ builder.Services.AddScoped<IAuditLogger, AuditLogger>();
 builder.Services.AddSingleton<OperationContextAccessor>();
 builder.Services.AddSingleton<IOperationContextAccessor>(sp => sp.GetRequiredService<OperationContextAccessor>());
 builder.Services.AddSingleton<IOperationalMetrics, OperationalMetrics>();
+builder.Services.AddSingleton<IBackgroundOperationTracker, BackgroundOperationTracker>();
+builder.Services.AddSingleton<IApplicationShutdown, ApplicationShutdownCoordinator>();
 builder.Services.AddSingleton<IOperationScopeFactory, OperationScopeFactory>();
 builder.Services.AddSingleton<IFailureClassifier, FailureClassifier>();
 builder.Services.AddSingleton<ApiExceptionMapper>();
 builder.Services.AddScoped<IOperationalDiagnosticsService, OperationalDiagnosticsService>();
+
+var shutdownOptions = new ShutdownOptions();
+builder.Configuration.GetSection(ShutdownOptions.SectionName).Bind(shutdownOptions);
+shutdownOptions.Validate();
+builder.Services.AddSingleton(shutdownOptions);
 
 var orchestrationOptions = new OrchestrationOptions();
 builder.Configuration.GetSection("Orchestration").Bind(orchestrationOptions);
@@ -203,7 +211,8 @@ var healthChecksBuilder = builder.Services.AddHealthChecks()
     .AddCheck<DatabaseHealthCheck>("database", tags: new[] { "ready" })
     .AddCheck<ConfigurationHealthCheck>("configuration", tags: new[] { "ready" })
     .AddCheck<CriticalServicesHealthCheck>("critical-services", tags: new[] { "ready" })
-    .AddCheck<CircuitBreakerHealthCheck>("circuit-breaker", tags: new[] { "ready" });
+    .AddCheck<CircuitBreakerHealthCheck>("circuit-breaker", tags: new[] { "ready" })
+    .AddCheck<ShutdownHealthCheck>("shutdown", tags: new[] { "ready" });
 
 if (builder.Configuration.GetValue<bool>("Health:CheckOpenViking"))
 {
@@ -213,12 +222,12 @@ if (builder.Configuration.GetValue<bool>("Health:CheckOpenViking"))
 var app = builder.Build();
 
 // ------------------------------------------------------------
-// Global exception handling — first in the pipeline so it wraps
-// every other middleware/endpoint
+// Global exception handling & shutdown middleware
 // ------------------------------------------------------------
 
 app.UseMiddleware<CorrelationMiddleware>();
 app.UseMiddleware<GlobalExceptionMiddleware>();
+app.UseMiddleware<ShutdownMiddleware>();
 
 // ------------------------------------------------------------
 // Startup recovery — resumability after a process restart
@@ -520,6 +529,30 @@ app.MapPost("/api/orchestration-runs/{id:guid}/cancel", async (
 {
     await service.RequestCancellationAsync(id, cancellationToken);
     return Results.Accepted();
+});
+
+app.MapGet("/api/operations/active", (
+    IApplicationShutdown shutdown,
+    IBackgroundOperationTracker tracker) =>
+{
+    var activeOps = tracker.GetActiveOperations().Select(op => new
+    {
+        op.OperationId,
+        op.CorrelationId,
+        op.OperationName,
+        op.ProjectId,
+        op.TaskId,
+        op.RunId,
+        op.StartedAtUtc,
+        DurationMs = (long)(DateTime.UtcNow - op.StartedAtUtc).TotalMilliseconds
+    });
+
+    return Results.Ok(new
+    {
+        isStopping = shutdown.IsStopping,
+        activeCount = tracker.ActiveCount,
+        operations = activeOps
+    });
 });
 
 app.Run();

@@ -7,6 +7,7 @@ using AI.Factory.Infrastructure.Context;
 using AI.Factory.Infrastructure.Persistence;
 using AI.Factory.Infrastructure.Resilience;
 using AI.Factory.Application.Resilience;
+using AI.Factory.Infrastructure.Shutdown;
 using AI.Factory.Infrastructure.Validation;
 using AI.Factory.Worker;
 using Microsoft.EntityFrameworkCore;
@@ -167,9 +168,16 @@ builder.Services.AddScoped<IAuditLogger, AuditLogger>();
 builder.Services.AddSingleton<OperationContextAccessor>();
 builder.Services.AddSingleton<IOperationContextAccessor>(sp => sp.GetRequiredService<OperationContextAccessor>());
 builder.Services.AddSingleton<IOperationalMetrics, OperationalMetrics>();
+builder.Services.AddSingleton<IBackgroundOperationTracker, BackgroundOperationTracker>();
+builder.Services.AddSingleton<IApplicationShutdown, ApplicationShutdownCoordinator>();
 builder.Services.AddSingleton<IOperationScopeFactory, OperationScopeFactory>();
 builder.Services.AddSingleton<IFailureClassifier, FailureClassifier>();
 builder.Services.AddScoped<IOperationalDiagnosticsService, OperationalDiagnosticsService>();
+
+var shutdownOptions = new ShutdownOptions();
+builder.Configuration.GetSection(ShutdownOptions.SectionName).Bind(shutdownOptions);
+shutdownOptions.Validate();
+builder.Services.AddSingleton(shutdownOptions);
 
 var orchestrationOptions = new OrchestrationOptions();
 builder.Configuration.GetSection("Orchestration").Bind(orchestrationOptions);

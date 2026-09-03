@@ -211,4 +211,17 @@ public sealed class OrchestrationRunRepository : IOrchestrationRunRepository
 
         return stale.Count;
     }
+
+    public async Task ReleaseLeaseAsync(Guid runId, CancellationToken cancellationToken = default)
+    {
+        await _db.OrchestrationRuns
+            .Where(x => x.Id == runId && (x.Status == OrchestrationRunStatus.Claimed || x.Status == OrchestrationRunStatus.Running))
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(x => x.Status, OrchestrationRunStatus.Pending)
+                    .SetProperty(x => x.WorkerHeartbeatAtUtc, (DateTime?)null)
+                    .SetProperty(x => x.LeaseExpiresAtUtc, (DateTime?)null)
+                    .SetProperty(x => x.ErrorMessage, "Execution interrupted by shutdown; queued for resume."),
+                cancellationToken);
+    }
 }

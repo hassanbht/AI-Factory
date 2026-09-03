@@ -17,20 +17,28 @@ public sealed class WorkflowRecoveryHostedService : BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly RecoveryOptions _recoveryOptions;
+    private readonly IApplicationShutdown? _shutdown;
     private readonly ILogger<WorkflowRecoveryHostedService> _logger;
 
     public WorkflowRecoveryHostedService(
         IServiceScopeFactory scopeFactory,
         RecoveryOptions recoveryOptions,
-        ILogger<WorkflowRecoveryHostedService> logger)
+        ILogger<WorkflowRecoveryHostedService> logger,
+        IApplicationShutdown? shutdown = null)
     {
         _scopeFactory = scopeFactory;
         _recoveryOptions = recoveryOptions;
         _logger = logger;
+        _shutdown = shutdown;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        if (_shutdown?.IsStopping == true || stoppingToken.IsCancellationRequested)
+        {
+            return;
+        }
+
         await RunStartupRecoveryAsync(stoppingToken);
 
         using var timer = new PeriodicTimer(_recoveryOptions.PeriodicSweepInterval);
@@ -39,6 +47,11 @@ public sealed class WorkflowRecoveryHostedService : BackgroundService
         {
             while (await timer.WaitForNextTickAsync(stoppingToken))
             {
+                if (_shutdown?.IsStopping == true || stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+
                 await RunStaleSweepAsync(stoppingToken);
             }
         }

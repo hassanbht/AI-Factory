@@ -49,4 +49,10 @@ public interface IOrchestrationRunRepository
     /// RecoverOrphanedTasksAsync already use elsewhere in this codebase.
     /// </summary>
     Task<int> RecoverStaleLeasesAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Releases a claimed/running run's lease and reverts its status to Pending upon graceful shutdown,
+    /// allowing immediate resumption upon restart without waiting for lease expiration.
+    /// </summary>
+    Task ReleaseLeaseAsync(Guid runId, CancellationToken cancellationToken = default);
 }

@@ -252,11 +252,13 @@ public sealed class OrchestrationRunExecutionEngine
     {
         run.Status = OrchestrationRunStatus.Cancelled;
         run.FailureCategory = OrchestrationFailureCategory.Cancelled;
+        run.ErrorMessage = "Execution was cancelled.";
         run.CompletedAtUtc = DateTime.UtcNow;
 
         // Persisting the cancellation itself must not honor the very token
         // that was just cancelled.
         await _runRepository.UpdateAsync(run, CancellationToken.None);
+        await ReportAsync(run, OrchestrationProgressStage.Failed, "Execution was cancelled.", CancellationToken.None);
     }
 
     private async Task ReportAsync(

@@ -108,6 +108,9 @@ public sealed class OrchestrationInstrumentationTests : IDisposable
 
         public Task<int> RecoverStaleLeasesAsync(CancellationToken cancellationToken = default)
             => _inner.RecoverStaleLeasesAsync(cancellationToken);
+
+        public Task ReleaseLeaseAsync(Guid runId, CancellationToken cancellationToken = default)
+            => _inner.ReleaseLeaseAsync(runId, cancellationToken);
     }
 
     private readonly SqliteConnection _connection;

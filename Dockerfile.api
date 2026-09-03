@@ -1,0 +1,63 @@
+# ------------------------------------------------------------
+# AI.Factory.Api — Production Multi-Stage Dockerfile
+# ------------------------------------------------------------
+
+# Stage 1: Runtime Base
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS base
+WORKDIR /app
+EXPOSE 8080
+ENV ASPNETCORE_URLS=http://+:8080 \
+    DOTNET_RUNNING_IN_CONTAINER=true \
+    ASPNETCORE_ENVIRONMENT=Production
+
+# Install curl for reliable container health checking
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+
+# Configure healthcheck using the liveness endpoint
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8080/health/live || exit 1
+
+# Stage 2: Build & Restore
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+
+# Layer caching: copy solution and project files first
+COPY apps/AI.Factory.slnx apps/
+COPY apps/src/AI.Factory.Domain/AI.Factory.Domain.csproj apps/src/AI.Factory.Domain/
+COPY apps/src/AI.Factory.Application/AI.Factory.Application.csproj apps/src/AI.Factory.Application/
+COPY apps/src/AI.Factory.Infrastructure/AI.Factory.Infrastructure.csproj apps/src/AI.Factory.Infrastructure/
+COPY apps/src/AI.Factory.Api/AI.Factory.Api.csproj apps/src/AI.Factory.Api/
+COPY apps/src/AI.Factory.Worker/AI.Factory.Worker.csproj apps/src/AI.Factory.Worker/
+COPY apps/tests/AI.Factory.Application.Tests/AI.Factory.Application.Tests.csproj apps/tests/AI.Factory.Application.Tests/
+COPY apps/tests/AI.Factory.Worker.Tests/AI.Factory.Worker.Tests.csproj apps/tests/AI.Factory.Worker.Tests/
+COPY apps/tests/AI.Factory.Api.Tests/AI.Factory.Api.Tests.csproj apps/tests/AI.Factory.Api.Tests/
+
+RUN dotnet restore apps/src/AI.Factory.Api/AI.Factory.Api.csproj
+
+# Copy remaining source code
+COPY apps/src/ apps/src/
+
+# Build in Release configuration
+WORKDIR /src/apps/src/AI.Factory.Api
+RUN dotnet build AI.Factory.Api.csproj -c Release --no-restore
+
+# Stage 3: Publish
+FROM build AS publish
+RUN dotnet publish AI.Factory.Api.csproj -c Release -o /app/publish --no-build /p:UseAppHost=false
+
+# Stage 4: Final Production Runtime Image
+FROM base AS final
+WORKDIR /app
+
+# Ensure persistent and temporary directory structures exist and are owned by non-root user
+RUN mkdir -p /var/lib/ai-factory/data /tmp/ai-factory && \
+    chown -R $APP_UID:$APP_UID /var/lib/ai-factory /tmp/ai-factory /app
+
+# Copy published artifacts from publish stage
+COPY --from=publish --chown=$APP_UID:$APP_UID /app/publish .
+
+# Run as dedicated non-root user (UID 1654)
+USER $APP_UID
+
+# Exec-form entrypoint ensures SIGTERM signals are received directly by the .NET process
+ENTRYPOINT ["dotnet", "AI.Factory.Api.dll"]

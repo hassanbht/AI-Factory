@@ -10,6 +10,7 @@ using AI.Factory.Infrastructure.Context;
 using AI.Factory.Infrastructure.Persistence;
 using AI.Factory.Infrastructure.Resilience;
 using AI.Factory.Application.Resilience;
+using AI.Factory.Infrastructure.Diagnostics;
 using AI.Factory.Infrastructure.Shutdown;
 using AI.Factory.Infrastructure.Validation;
 using AI.Factory.Worker;
@@ -64,6 +65,9 @@ public partial class Program
         builder.Services.AddSingleton<IDatabaseResiliencePolicy, DatabaseResiliencePolicy>();
         builder.Services.AddScoped<IDatabaseTransactionManager, DatabaseTransactionManager>();
         builder.Services.AddScoped<IDatabaseDiagnosticsService, DatabaseDiagnosticsService>();
+        builder.Services.AddSingleton<IDeploymentDiagnosticsService, DeploymentDiagnosticsService>();
+        builder.Services.AddSingleton<IWorkerHealthCoordinator, WorkerHealthCoordinator>();
+        builder.Services.AddHostedService<WorkerHealthLifecycleHostedService>();
 
         builder.Services.AddDbContext<FactoryDbContext>(options =>
         {
@@ -71,6 +75,7 @@ public partial class Program
             {
                 sqliteOptions.CommandTimeout((int)databaseResilienceOptions.CommandTimeout.TotalSeconds);
             });
+            options.ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning));
         });
 
         var executionLimits = new ExecutionLimitsOptions();

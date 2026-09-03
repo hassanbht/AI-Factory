@@ -19,6 +19,7 @@ using AI.Factory.Api.Middleware;
 using AI.Factory.Application.Resilience;
 using AI.Factory.Domain.Enums;
 using AI.Factory.Infrastructure.Validation;
+using AI.Factory.Infrastructure.Diagnostics;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
@@ -67,6 +68,7 @@ builder.Services.AddSingleton<IConfigurationDiagnosticsService, ConfigurationDia
 builder.Services.AddSingleton<IDatabaseResiliencePolicy, DatabaseResiliencePolicy>();
 builder.Services.AddScoped<IDatabaseTransactionManager, DatabaseTransactionManager>();
 builder.Services.AddScoped<IDatabaseDiagnosticsService, DatabaseDiagnosticsService>();
+builder.Services.AddSingleton<IDeploymentDiagnosticsService, DeploymentDiagnosticsService>();
 
 var executionLimits = new ExecutionLimitsOptions();
 builder.Configuration.GetSection("ExecutionLimits").Bind(executionLimits);
@@ -79,6 +81,7 @@ builder.Services.AddDbContext<FactoryDbContext>(options =>
     {
         sqliteOptions.CommandTimeout((int)databaseResilienceOptions.CommandTimeout.TotalSeconds);
     });
+    options.ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning));
 });
 
 builder.Services.AddScoped<IProjectRepository, ProjectRepository>();
@@ -429,6 +432,17 @@ if (builder.Configuration.GetValue<bool>("Health:CheckOpenViking"))
 }
 
 var app = builder.Build();
+
+if (args.Contains("--migrate-only"))
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<FactoryDbContext>();
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    logger.LogInformation("Dedicated migration runner started. Applying pending database migrations...");
+    await db.Database.MigrateAsync();
+    logger.LogInformation("Database migrations successfully applied. Exiting with code 0.");
+    return;
+}
 
 // ------------------------------------------------------------
 // Middleware Pipeline (Section 18 Ordering)
@@ -943,6 +957,11 @@ app.MapGet("/api/operations/database", async (
 {
     var snapshot = await diagnostics.GetSnapshotAsync(cancellationToken);
     return Results.Ok(snapshot);
+}).RequireRateLimiting("OperationalApi");
+
+app.MapGet("/api/operations/deployment", (IDeploymentDiagnosticsService diagnostics) =>
+{
+    return Results.Ok(diagnostics.GetSnapshot());
 }).RequireRateLimiting("OperationalApi");
 
 app.Run();

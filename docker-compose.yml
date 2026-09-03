@@ -1,0 +1,132 @@
+services:
+  # ------------------------------------------------------------
+  # Dedicated Migration Runner (Option A)
+  # Runs EF Core migrations to completion and exits cleanly.
+  # ------------------------------------------------------------
+  migrator:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: ai-factory-api:latest
+    command: ["--migrate-only"]
+    restart: "no"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - DOTNET_ENVIRONMENT=Production
+      - Database__Provider=Sqlite
+      - Database__ConnectionString=Data Source=/var/lib/ai-factory/data/factory.db;Cache=Shared
+      - ConnectionStrings__FactoryDatabase=Data Source=/var/lib/ai-factory/data/factory.db;Cache=Shared
+      - SecretManagement__Enabled=true
+      - SecretManagement__Provider=Environment
+      - SecretManagement__FailFastOnMissingSecret=false
+    volumes:
+      - ai_factory_data:/var/lib/ai-factory/data
+    networks:
+      - ai_factory_network
+
+  # ------------------------------------------------------------
+  # AI.Factory.Api — Production Stateless API Service
+  # ------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: ai-factory-api:latest
+    restart: unless-stopped
+    stop_grace_period: 30s
+    depends_on:
+      migrator:
+        condition: service_completed_successfully
+    ports:
+      - "${API_PORT:-8080}:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - DOTNET_ENVIRONMENT=Production
+      - Database__Provider=Sqlite
+      - Database__ConnectionString=Data Source=/var/lib/ai-factory/data/factory.db;Cache=Shared
+      - ConnectionStrings__FactoryDatabase=Data Source=/var/lib/ai-factory/data/factory.db;Cache=Shared
+      - SecretManagement__Enabled=true
+      - SecretManagement__Provider=Environment
+      - SecretManagement__FailFastOnMissingSecret=true
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPERATIONAL_ACCESS_KEY=${OPERATIONAL_ACCESS_KEY:-}
+      - Security__RequireAccessKey=${REQUIRE_OPERATIONAL_KEY:-false}
+    volumes:
+      - ai_factory_data:/var/lib/ai-factory/data
+      - tmpfs_api:/tmp
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 1024M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - ai_factory_network
+
+  # ------------------------------------------------------------
+  # AI.Factory.Worker — Production Background Processing Worker
+  # ------------------------------------------------------------
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: ai-factory-worker:latest
+    restart: unless-stopped
+    stop_grace_period: 45s
+    depends_on:
+      migrator:
+        condition: service_completed_successfully
+    environment:
+      - DOTNET_ENVIRONMENT=Production
+      - Database__Provider=Sqlite
+      - Database__ConnectionString=Data Source=/var/lib/ai-factory/data/factory.db;Cache=Shared
+      - ConnectionStrings__FactoryDatabase=Data Source=/var/lib/ai-factory/data/factory.db;Cache=Shared
+      - SecretManagement__Enabled=true
+      - SecretManagement__Provider=Environment
+      - SecretManagement__FailFastOnMissingSecret=true
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPERATIONAL_ACCESS_KEY=${OPERATIONAL_ACCESS_KEY:-}
+      - AI_FACTORY_HEALTH_DIR=/tmp/ai-factory-health
+      - Hermes__WorkspaceRoot=/var/lib/ai-factory/workspace
+      - Orchestration__WorkspaceRoot=/var/lib/ai-factory/workspace
+    volumes:
+      - ai_factory_data:/var/lib/ai-factory/data
+      - ai_factory_workspace:/var/lib/ai-factory/workspace
+      - tmpfs_worker:/tmp
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2048M
+        reservations:
+          cpus: "0.50"
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/ai-factory-health/worker.ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - ai_factory_network
+
+volumes:
+  ai_factory_data:
+    name: ai_factory_production_data
+  ai_factory_workspace:
+    name: ai_factory_production_workspace
+  tmpfs_api:
+  tmpfs_worker:
+
+networks:
+  ai_factory_network:
+    name: ai_factory_production_net
+    driver: bridge

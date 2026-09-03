@@ -120,6 +120,8 @@ public sealed class WorkerCompositionRootTests : IDisposable
     [InlineData(typeof(IDatabaseResiliencePolicy))]
     [InlineData(typeof(IDatabaseTransactionManager))]
     [InlineData(typeof(IDatabaseDiagnosticsService))]
+    [InlineData(typeof(IDeploymentDiagnosticsService))]
+    [InlineData(typeof(IWorkerHealthCoordinator))]
     public void RealWorkerServiceGraph_Resolves(Type serviceType)
     {
         using var scope = _host.Services.CreateScope();

@@ -1,10 +1,12 @@
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
 namespace AI.Factory.Infrastructure.Persistence.Migrations
 {
-    /// <inheritdoc />
+    [DbContext(typeof(FactoryDbContext))]
+    [Migration("20260903091500_AddOptimisticConcurrencyTokens")]
     public partial class AddOptimisticConcurrencyTokens : Migration
     {
         /// <inheritdoc />

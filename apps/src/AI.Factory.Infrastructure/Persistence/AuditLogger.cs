@@ -62,7 +62,7 @@ public sealed class AuditLogger : IAuditLogger
             TimestampUtc = DateTime.UtcNow,
             EventType = eventType,
             Severity = severity,
-            Message = message,
+            Message = AI.Factory.Application.Security.SensitiveDataSanitizer.Sanitize(message),
             MetadataJson = SerializeMetadata(metadata),
             CorrelationId = correlationId ?? ambient?.CorrelationId ?? executionId,
             OperationId = operationId ?? ambient?.OperationId,
@@ -116,6 +116,15 @@ public sealed class AuditLogger : IAuditLogger
             case AuditEventType.RepairAttempt:
                 _metrics.RecordRepairAttempt(success, durationMs);
                 break;
+            case AuditEventType.RateLimitRejected:
+                _metrics.RecordRateLimitRejected();
+                break;
+            case AuditEventType.SecurityRequestRejected:
+                _metrics.RecordSecurityRequestRejected();
+                break;
+            case AuditEventType.OperationalAccessDenied:
+                _metrics.RecordOperationalAccessDenied();
+                break;
         }
     }
 
@@ -126,11 +135,7 @@ public sealed class AuditLogger : IAuditLogger
             return null;
         }
 
-        var safe = metadata
-            .Where(kv => !SecretShapedKeyFragments.Any(
-                fragment => kv.Key.Contains(fragment, StringComparison.OrdinalIgnoreCase)))
-            .ToDictionary(kv => kv.Key, kv => kv.Value);
-
-        return safe.Count == 0 ? null : JsonSerializer.Serialize(safe);
+        var sanitized = AI.Factory.Application.Security.SensitiveDataSanitizer.SanitizeMetadata(metadata);
+        return sanitized.Count == 0 ? null : JsonSerializer.Serialize(sanitized);
     }
 }

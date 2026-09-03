@@ -63,6 +63,12 @@ public interface IOperationalMetrics
 
     void RecordShutdownRequestRejected();
 
+    void RecordRateLimitRejected();
+
+    void RecordSecurityRequestRejected();
+
+    void RecordOperationalAccessDenied();
+
     OperationalMetricsSnapshot GetSnapshot();
 }
 
@@ -110,7 +116,10 @@ public sealed record OperationalMetricsSnapshot(
     long OperationsDrained = 0,
     long OperationsCancelled = 0,
     long ShutdownTimedOut = 0,
-    long ShutdownRequestsRejected = 0);
+    long ShutdownRequestsRejected = 0,
+    long RateLimitRejected = 0,
+    long SecurityRequestRejected = 0,
+    long OperationalAccessDenied = 0);
 
 public sealed class OperationalMetrics : IOperationalMetrics
 {
@@ -162,6 +171,9 @@ public sealed class OperationalMetrics : IOperationalMetrics
     private long _operationsCancelled;
     private long _shutdownTimedOut;
     private long _shutdownRequestsRejected;
+    private long _rateLimitRejected;
+    private long _securityRequestRejected;
+    private long _operationalAccessDenied;
 
     public void RecordOperationStarted() => Interlocked.Increment(ref _operationsStarted);
 
@@ -283,6 +295,12 @@ public sealed class OperationalMetrics : IOperationalMetrics
 
     public void RecordShutdownRequestRejected() => Interlocked.Increment(ref _shutdownRequestsRejected);
 
+    public void RecordRateLimitRejected() => Interlocked.Increment(ref _rateLimitRejected);
+
+    public void RecordSecurityRequestRejected() => Interlocked.Increment(ref _securityRequestRejected);
+
+    public void RecordOperationalAccessDenied() => Interlocked.Increment(ref _operationalAccessDenied);
+
     public OperationalMetricsSnapshot GetSnapshot()
     {
         return new OperationalMetricsSnapshot(
@@ -329,7 +347,10 @@ public sealed class OperationalMetrics : IOperationalMetrics
             Interlocked.Read(ref _operationsDrained),
             Interlocked.Read(ref _operationsCancelled),
             Interlocked.Read(ref _shutdownTimedOut),
-            Interlocked.Read(ref _shutdownRequestsRejected));
+            Interlocked.Read(ref _shutdownRequestsRejected),
+            Interlocked.Read(ref _rateLimitRejected),
+            Interlocked.Read(ref _securityRequestRejected),
+            Interlocked.Read(ref _operationalAccessDenied));
     }
 
     /// <summary>Count + running total, so average is derived rather than stored — no raw samples kept.</summary>

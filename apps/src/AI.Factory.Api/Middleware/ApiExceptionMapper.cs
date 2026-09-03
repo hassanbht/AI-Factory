@@ -1,10 +1,13 @@
+using System.Data.Common;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Exceptions;
 using AI.Factory.Application.Orchestration;
 using AI.Factory.Application.Resilience;
+using AI.Factory.Application.Security;
 using AI.Factory.Domain.Enums;
 using AI.Factory.Infrastructure.Resilience;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace AI.Factory.Api.Middleware;
 
@@ -39,23 +42,31 @@ public sealed class ApiExceptionMapper
             NotFoundException or KeyNotFoundException => new ApiErrorMapping(
                 StatusCodes.Status404NotFound,
                 "Resource not found",
-                string.IsNullOrWhiteSpace(exception.Message) ? "The requested resource was not found." : exception.Message,
+                SensitiveDataSanitizer.Sanitize(string.IsNullOrWhiteSpace(exception.Message) ? "The requested resource was not found." : exception.Message),
                 "not_found",
                 FailureCategory.Validation,
                 ShouldAudit: false),
 
-            ValidationException or ArgumentException or InvalidTaskPlanException or CircularWorkItemDependencyException => new ApiErrorMapping(
+            ValidationException or ArgumentException or InvalidTaskPlanException or CircularWorkItemDependencyException or BadHttpRequestException or System.Text.Json.JsonException or FormatException => new ApiErrorMapping(
                 StatusCodes.Status400BadRequest,
                 "Validation failed",
-                string.IsNullOrWhiteSpace(exception.Message) ? "The request payload failed validation." : exception.Message,
+                SensitiveDataSanitizer.Sanitize(string.IsNullOrWhiteSpace(exception.Message) ? "The request payload failed validation." : exception.Message),
                 "validation_error",
+                FailureCategory.Validation,
+                ShouldAudit: false),
+
+            DbUpdateConcurrencyException => new ApiErrorMapping(
+                StatusCodes.Status409Conflict,
+                "Database concurrency conflict",
+                "A database concurrency conflict occurred.",
+                "concurrency_conflict",
                 FailureCategory.Validation,
                 ShouldAudit: false),
 
             ConflictException => new ApiErrorMapping(
                 StatusCodes.Status409Conflict,
                 "Operation conflict",
-                string.IsNullOrWhiteSpace(exception.Message) ? "The operation conflicts with the current state." : exception.Message,
+                SensitiveDataSanitizer.Sanitize(string.IsNullOrWhiteSpace(exception.Message) ? "The operation conflicts with the current state." : exception.Message),
                 "conflict",
                 exception.Message.Contains("approval", StringComparison.OrdinalIgnoreCase)
                     ? FailureCategory.Approval
@@ -65,7 +76,7 @@ public sealed class ApiExceptionMapper
             ForbiddenException or UnauthorizedAccessException or SecurityViolationException => new ApiErrorMapping(
                 StatusCodes.Status403Forbidden,
                 "Forbidden",
-                string.IsNullOrWhiteSpace(exception.Message) ? "Access is forbidden." : exception.Message,
+                SensitiveDataSanitizer.Sanitize(string.IsNullOrWhiteSpace(exception.Message) ? "Access is forbidden." : exception.Message),
                 "forbidden",
                 FailureCategory.Infrastructure,
                 ShouldAudit: false),
@@ -102,6 +113,14 @@ public sealed class ApiExceptionMapper
                 FailureCategory.Infrastructure,
                 ShouldAudit: true),
 
+            DbUpdateException or DbException => new ApiErrorMapping(
+                StatusCodes.Status500InternalServerError,
+                "Database error",
+                "A database error occurred.",
+                "database_error",
+                FailureCategory.Infrastructure,
+                ShouldAudit: true),
+
             _ when classification.IsTransient && (classification.Category == FailureCategory.Provider || classification.Category == FailureCategory.Infrastructure) => new ApiErrorMapping(
                 StatusCodes.Status503ServiceUnavailable,
                 "Service unavailable",
@@ -134,20 +153,21 @@ public sealed class ApiExceptionMapper
         string correlationId)
     {
         var mapping = Map(exception);
+        var sanitizedDetail = SensitiveDataSanitizer.Sanitize(mapping.Detail);
 
         var problemDetails = new ProblemDetails
         {
             Type = $"https://httpstatuses.com/{mapping.StatusCode}",
             Title = mapping.Title,
             Status = mapping.StatusCode,
-            Detail = mapping.Detail,
+            Detail = sanitizedDetail,
             Instance = context.Request.Path
         };
 
         problemDetails.Extensions["correlationId"] = correlationId;
         problemDetails.Extensions["code"] = mapping.Code;
         problemDetails.Extensions["traceId"] = correlationId;
-        problemDetails.Extensions["message"] = mapping.Detail;
+        problemDetails.Extensions["message"] = sanitizedDetail;
 
         return (mapping, problemDetails);
     }

@@ -1,9 +1,12 @@
 using System.Text.Json;
+using System.Threading.RateLimiting;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Approvals;
+using AI.Factory.Application.Exceptions;
 using AI.Factory.Application.Learning;
 using AI.Factory.Application.Orchestration;
 using AI.Factory.Application.Projects;
+using AI.Factory.Application.Security;
 using AI.Factory.Infrastructure.Agents;
 using AI.Factory.Infrastructure.Context;
 using AI.Factory.Infrastructure.Persistence;
@@ -12,8 +15,10 @@ using AI.Factory.Infrastructure.Shutdown;
 using AI.Factory.Api.HealthChecks;
 using AI.Factory.Api.Middleware;
 using AI.Factory.Application.Resilience;
+using AI.Factory.Domain.Enums;
 using AI.Factory.Infrastructure.Validation;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -23,6 +28,11 @@ var builder = WebApplication.CreateBuilder(args);
 // ------------------------------------------------------------
 
 builder.Services.AddOpenApi();
+
+var securityOptions = new SecurityOptions();
+builder.Configuration.GetSection(SecurityOptions.SectionName).Bind(securityOptions);
+securityOptions.Validate();
+builder.Services.AddSingleton(securityOptions);
 
 var executionLimits = new ExecutionLimitsOptions();
 builder.Configuration.GetSection("ExecutionLimits").Bind(executionLimits);
@@ -202,6 +212,172 @@ builder.Services.AddScoped<IOrchestrationService, OrchestrationService>();
 builder.Services.AddScoped<IAutonomousCodingOrchestrator, AutonomousCodingOrchestrator>();
 
 // ------------------------------------------------------------
+// Built-in Rate Limiting (Phase 17.4.5)
+// ------------------------------------------------------------
+
+builder.Services.AddRateLimiter(limiterOptions =>
+{
+    limiterOptions.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    limiterOptions.OnRejected = async (context, cancellationToken) =>
+    {
+        var correlationId = context.HttpContext.Items.TryGetValue(CorrelationMiddleware.ItemKey, out var itemVal) && itemVal is not null
+            ? itemVal.ToString()!
+            : context.HttpContext.TraceIdentifier;
+
+        if (!context.HttpContext.Response.Headers.ContainsKey(CorrelationMiddleware.HeaderName))
+        {
+            context.HttpContext.Response.Headers[CorrelationMiddleware.HeaderName] = correlationId;
+        }
+
+        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+        {
+            context.HttpContext.Response.Headers.RetryAfter = ((int)retryAfter.TotalSeconds).ToString();
+        }
+        else
+        {
+            context.HttpContext.Response.Headers.RetryAfter = "60";
+        }
+
+        var metrics = context.HttpContext.RequestServices.GetService<IOperationalMetrics>();
+        metrics?.RecordRateLimitRejected();
+
+        var auditLogger = context.HttpContext.RequestServices.GetService<IAuditLogger>();
+        if (auditLogger is not null)
+        {
+            var executionId = Guid.TryParse(correlationId, out var parsed) ? parsed : Guid.NewGuid();
+            try
+            {
+                await auditLogger.LogAsync(
+                    executionId: executionId,
+                    eventType: AuditEventType.RateLimitRejected,
+                    severity: AuditSeverity.Warning,
+                    message: $"Rate limit exceeded for {context.HttpContext.Request.Method} {context.HttpContext.Request.Path}",
+                    correlationId: executionId,
+                    outcome: "Rejected",
+                    actorType: "Anonymous",
+                    cancellationToken: cancellationToken);
+            }
+            catch
+            {
+                // Observability failure must not crash rate limit handling
+            }
+        }
+
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        context.HttpContext.Response.ContentType = "application/problem+json";
+
+        var problem = new Microsoft.AspNetCore.Mvc.ProblemDetails
+        {
+            Type = "https://httpstatuses.com/429",
+            Title = "Too many requests",
+            Status = StatusCodes.Status429TooManyRequests,
+            Detail = "Quota exceeded. Please retry after some time.",
+            Instance = context.HttpContext.Request.Path
+        };
+        problem.Extensions["correlationId"] = correlationId;
+        problem.Extensions["code"] = "too_many_requests";
+        problem.Extensions["traceId"] = correlationId;
+
+        await JsonSerializer.SerializeAsync(
+            context.HttpContext.Response.Body,
+            problem,
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase },
+            cancellationToken);
+    };
+
+    limiterOptions.AddPolicy<string>("GeneralApi", httpContext =>
+    {
+        var options = httpContext.RequestServices.GetRequiredService<SecurityOptions>();
+        if (!options.RateLimiting.Enabled)
+        {
+            return RateLimitPartition.GetNoLimiter("unlimited");
+        }
+
+        return RateLimitPartition.GetFixedWindowLimiter("GeneralApi", _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = options.RateLimiting.General.PermitLimit,
+            Window = TimeSpan.FromSeconds(options.RateLimiting.General.WindowSeconds),
+            QueueLimit = options.RateLimiting.General.QueueLimit
+        });
+    });
+
+    limiterOptions.AddPolicy<string>("OperationalApi", httpContext =>
+    {
+        var options = httpContext.RequestServices.GetRequiredService<SecurityOptions>();
+        if (!options.RateLimiting.Enabled)
+        {
+            return RateLimitPartition.GetNoLimiter("unlimited");
+        }
+
+        return RateLimitPartition.GetFixedWindowLimiter("OperationalApi", _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = options.RateLimiting.Operational.PermitLimit,
+            Window = TimeSpan.FromSeconds(options.RateLimiting.Operational.WindowSeconds),
+            QueueLimit = options.RateLimiting.Operational.QueueLimit
+        });
+    });
+
+    limiterOptions.AddPolicy<string>("ExpensiveOperation", httpContext =>
+    {
+        var options = httpContext.RequestServices.GetRequiredService<SecurityOptions>();
+        if (!options.RateLimiting.Enabled)
+        {
+            return RateLimitPartition.GetNoLimiter("unlimited");
+        }
+
+        return RateLimitPartition.GetFixedWindowLimiter("ExpensiveOperation", _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = options.RateLimiting.Expensive.PermitLimit,
+            Window = TimeSpan.FromSeconds(options.RateLimiting.Expensive.WindowSeconds),
+            QueueLimit = options.RateLimiting.Expensive.QueueLimit
+        });
+    });
+});
+
+// ------------------------------------------------------------
+// CORS (Phase 17.4.5)
+// ------------------------------------------------------------
+
+if (securityOptions.Cors.Enabled)
+{
+    builder.Services.AddCors(corsOptions =>
+    {
+        corsOptions.AddPolicy("ConfiguredCorsPolicy", policy =>
+        {
+            if (securityOptions.Cors.AllowedOrigins is { Length: > 0 })
+            {
+                policy.WithOrigins(securityOptions.Cors.AllowedOrigins)
+                      .AllowAnyMethod()
+                      .AllowAnyHeader();
+            }
+        });
+    });
+}
+
+// ------------------------------------------------------------
+// Forwarded Headers (Phase 17.4.5)
+// ------------------------------------------------------------
+
+if (securityOptions.ForwardedHeaders.Enabled)
+{
+    builder.Services.Configure<ForwardedHeadersOptions>(options =>
+    {
+        options.ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor |
+                                   Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto;
+    });
+}
+
+// ------------------------------------------------------------
+// Server Header & Request Limits
+// ------------------------------------------------------------
+
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.AddServerHeader = false;
+    options.Limits.MaxRequestBodySize = securityOptions.RequestLimits.MaxRequestBodySizeBytes;
+});
+
+// ------------------------------------------------------------
 // Health checks — kept isolated from business logic (Api/HealthChecks/
 // only, no calls into orchestration services). "ready" tag = readiness;
 // no tag at all = liveness runs zero checks (process responding is enough).
@@ -222,12 +398,39 @@ if (builder.Configuration.GetValue<bool>("Health:CheckOpenViking"))
 var app = builder.Build();
 
 // ------------------------------------------------------------
-// Global exception handling & shutdown middleware
+// Middleware Pipeline (Section 18 Ordering)
 // ------------------------------------------------------------
 
 app.UseMiddleware<CorrelationMiddleware>();
+app.UseMiddleware<SecurityHeadersMiddleware>();
 app.UseMiddleware<GlobalExceptionMiddleware>();
+
+if (securityOptions.ForwardedHeaders.Enabled)
+{
+    app.UseForwardedHeaders();
+}
+
+if (!app.Environment.IsDevelopment() && securityOptions.Https.EnableHstsInProduction)
+{
+    app.UseHsts();
+}
+
+if (securityOptions.Https.RedirectHttpToHttps)
+{
+    app.UseHttpsRedirection();
+}
+
+if (securityOptions.Cors.Enabled)
+{
+    app.UseCors("ConfiguredCorsPolicy");
+}
+
+app.UseMiddleware<RequestSizeLimitMiddleware>();
 app.UseMiddleware<ShutdownMiddleware>();
+
+app.UseRateLimiter();
+
+app.UseMiddleware<OperationalEndpointSecurityMiddleware>();
 
 // ------------------------------------------------------------
 // Startup recovery — resumability after a process restart
@@ -243,11 +446,11 @@ using (var startupScope = app.Services.CreateScope())
 // HTTP Pipeline
 // ------------------------------------------------------------
 
-if (app.Environment.IsDevelopment())
+var shouldExposeOpenApi = securityOptions.OpenApi.Enabled ?? app.Environment.IsDevelopment();
+if (shouldExposeOpenApi)
 {
     app.MapOpenApi();
 }
-
 
 // ------------------------------------------------------------
 // Health
@@ -281,9 +484,29 @@ app.MapPost("/api/projects", async (
     ProjectService service,
     CancellationToken cancellationToken) =>
 {
+    if (string.IsNullOrWhiteSpace(request.Name))
+    {
+        throw new ValidationException("Project name is required.");
+    }
+
+    if (request.Name.Length > 200)
+    {
+        throw new ValidationException("Project name cannot exceed 200 characters.");
+    }
+
+    if (request.Name.Contains("..") || request.Name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+    {
+        throw new ValidationException("Project name contains invalid characters.");
+    }
+
+    if (request.Description?.Length > 2000)
+    {
+        throw new ValidationException("Project description cannot exceed 2000 characters.");
+    }
+
     var project = await service.CreateAsync(
         request.Name,
-        request.Description,
+        request.Description ?? string.Empty,
         cancellationToken);
 
     return Results.Created(
@@ -295,21 +518,26 @@ app.MapPost("/api/projects", async (
             project.Slug,
             project.Status
         });
-});
+}).RequireRateLimiting("GeneralApi");
 
-app.MapGet("/api/projects/{id:guid}", async (
-    Guid id,
+app.MapGet("/api/projects/{id}", async (
+    string id,
     IProjectRepository repository,
     CancellationToken cancellationToken) =>
 {
+    if (!Guid.TryParse(id, out var parsedGuid) || parsedGuid == Guid.Empty)
+    {
+        throw new ValidationException("Invalid project identifier.");
+    }
+
     var project = await repository.GetByIdAsync(
-        id,
+        parsedGuid,
         cancellationToken);
 
     return project is null
         ? Results.NotFound()
         : Results.Ok(project);
-});
+}).RequireRateLimiting("GeneralApi");
 
 // ------------------------------------------------------------
 // Human Approval
@@ -321,59 +549,120 @@ app.MapGet("/api/approvals/pending", async (
 {
     var pending = await service.GetPendingAsync(cancellationToken);
     return Results.Ok(pending);
-});
+}).RequireRateLimiting("GeneralApi");
 
-app.MapPost("/api/approvals/{id:guid}/approve", async (
-    Guid id,
+app.MapPost("/api/approvals/{id}/approve", async (
+    string id,
     ApprovalDecisionRequest? request,
     ApprovalService service,
     CancellationToken cancellationToken) =>
 {
-    var approval = await service.ApproveAsync(id, request?.Comment, cancellationToken);
-    return Results.Ok(approval);
-});
+    if (!Guid.TryParse(id, out var parsedId) || parsedId == Guid.Empty)
+    {
+        throw new ValidationException("Invalid approval identifier.");
+    }
 
-app.MapPost("/api/approvals/{id:guid}/reject", async (
-    Guid id,
+    if (request?.Comment?.Length > 2000)
+    {
+        throw new ValidationException("Comment cannot exceed 2000 characters.");
+    }
+
+    var approval = await service.ApproveAsync(parsedId, request?.Comment, cancellationToken);
+    return Results.Ok(approval);
+}).RequireRateLimiting("GeneralApi");
+
+app.MapPost("/api/approvals/{id}/reject", async (
+    string id,
     ApprovalDecisionRequest? request,
     ApprovalService service,
     CancellationToken cancellationToken) =>
 {
-    var approval = await service.RejectAsync(id, request?.Comment, cancellationToken);
+    if (!Guid.TryParse(id, out var parsedId) || parsedId == Guid.Empty)
+    {
+        throw new ValidationException("Invalid approval identifier.");
+    }
+
+    if (request?.Comment?.Length > 2000)
+    {
+        throw new ValidationException("Comment cannot exceed 2000 characters.");
+    }
+
+    var approval = await service.RejectAsync(parsedId, request?.Comment, cancellationToken);
     return Results.Ok(approval);
-});
+}).RequireRateLimiting("GeneralApi");
 
 // ------------------------------------------------------------
 // Execution Audit Trail
 // ------------------------------------------------------------
 
 app.MapGet("/api/audit-log", async (
-    Guid? projectId,
-    Guid? executionId,
-    int page,
-    int pageSize,
+    string? projectId,
+    string? executionId,
+    string? severity,
+    int? page,
+    int? pageSize,
     IAuditLogRepository repository,
     CancellationToken cancellationToken) =>
 {
+    Guid? parsedProjectId = null;
+    if (!string.IsNullOrWhiteSpace(projectId))
+    {
+        if (!Guid.TryParse(projectId, out var pid) || pid == Guid.Empty)
+        {
+            throw new ValidationException("Invalid ProjectId identifier.");
+        }
+        parsedProjectId = pid;
+    }
+
+    Guid? parsedExecutionId = null;
+    if (!string.IsNullOrWhiteSpace(executionId))
+    {
+        if (!Guid.TryParse(executionId, out var eid) || eid == Guid.Empty)
+        {
+            throw new ValidationException("Invalid ExecutionId identifier.");
+        }
+        parsedExecutionId = eid;
+    }
+
+    if (!string.IsNullOrWhiteSpace(severity))
+    {
+        if (!Enum.TryParse<AuditSeverity>(severity, ignoreCase: true, out var parsedSeverity) || !Enum.IsDefined(typeof(AuditSeverity), parsedSeverity))
+        {
+            throw new ValidationException($"Invalid severity '{severity}'.");
+        }
+    }
+
+    if (page.HasValue && page.Value < 1)
+    {
+        throw new ValidationException("Page must be greater than or equal to 1.");
+    }
+
+    if (pageSize.HasValue && pageSize.Value < 1)
+    {
+        throw new ValidationException("PageSize must be greater than or equal to 1.");
+    }
+
+    if (pageSize.HasValue && pageSize.Value > 100)
+    {
+        throw new ValidationException("PageSize cannot exceed 100.");
+    }
+
     var query = new AuditLogQuery(
-        projectId,
-        executionId,
-        page <= 0 ? 1 : page,
-        pageSize <= 0 ? 50 : pageSize);
+        parsedProjectId,
+        parsedExecutionId,
+        page ?? 1,
+        pageSize ?? 50);
 
     var result = await repository.GetPagedAsync(query, cancellationToken);
     return Results.Ok(result);
-});
-
-// ------------------------------------------------------------
-// Orchestration Runs — real end-to-end pipeline execution
-// ------------------------------------------------------------
+}).RequireRateLimiting("OperationalApi");
 
 // ------------------------------------------------------------
 // Operational Diagnostics (Phase 17.3)
 // ------------------------------------------------------------
 
-app.MapGet("/api/operations/metrics", (IOperationalMetrics metrics) => Results.Ok(metrics.GetSnapshot()));
+app.MapGet("/api/operations/metrics", (IOperationalMetrics metrics) => Results.Ok(metrics.GetSnapshot()))
+    .RequireRateLimiting("OperationalApi");
 
 app.MapGet("/api/operations/resilience", (
     ICircuitBreakerRegistry circuitBreakers,
@@ -407,40 +696,75 @@ app.MapGet("/api/operations/resilience", (
     });
 
     return Results.Ok(new { dependencies });
-});
+}).RequireRateLimiting("OperationalApi");
 
 app.MapGet("/api/operations/recent", async (
     int? count,
     IOperationalDiagnosticsService diagnostics,
     CancellationToken cancellationToken) =>
 {
+    if (count.HasValue && count.Value <= 0)
+    {
+        throw new ValidationException("Count must be greater than zero.");
+    }
+
+    if (count.HasValue && count.Value > 1000)
+    {
+        throw new ValidationException("Count cannot exceed 1000.");
+    }
+
     var entries = await diagnostics.GetRecentOperationsAsync(count ?? 50, cancellationToken);
     return Results.Ok(entries);
-});
+}).RequireRateLimiting("OperationalApi");
 
-app.MapGet("/api/operations/{correlationId:guid}", async (
-    Guid correlationId,
+app.MapGet("/api/operations/{correlationId}", async (
+    string correlationId,
     IOperationalDiagnosticsService diagnostics,
     CancellationToken cancellationToken) =>
 {
-    var summary = await diagnostics.GetCorrelationSummaryAsync(correlationId, cancellationToken);
-    return summary is null ? Results.NotFound() : Results.Ok(summary);
-});
+    if (!Guid.TryParse(correlationId, out var parsedCorrelationId) || parsedCorrelationId == Guid.Empty)
+    {
+        throw new ValidationException("Invalid correlation identifier.");
+    }
 
-app.MapGet("/api/projects/{projectId:guid}/diagnostics", async (
-    Guid projectId,
+    var summary = await diagnostics.GetCorrelationSummaryAsync(parsedCorrelationId, cancellationToken);
+    return summary is null ? Results.NotFound() : Results.Ok(summary);
+}).RequireRateLimiting("OperationalApi");
+
+app.MapGet("/api/projects/{projectId}/diagnostics", async (
+    string projectId,
     IOperationalDiagnosticsService diagnostics,
     CancellationToken cancellationToken) =>
 {
-    var summary = await diagnostics.GetProjectSummaryAsync(projectId, cancellationToken);
+    if (!Guid.TryParse(projectId, out var parsedProjectId) || parsedProjectId == Guid.Empty)
+    {
+        throw new ValidationException("Invalid project identifier.");
+    }
+
+    var summary = await diagnostics.GetProjectSummaryAsync(parsedProjectId, cancellationToken);
     return summary is null ? Results.NotFound() : Results.Ok(summary);
-});
+}).RequireRateLimiting("OperationalApi");
 
 app.MapPost("/api/orchestration-runs", async (
     StartOrchestrationRunRequest request,
     IOrchestrationService service,
     CancellationToken cancellationToken) =>
 {
+    if (request.ProjectId == Guid.Empty)
+    {
+        throw new ValidationException("ProjectId must be a non-empty GUID.");
+    }
+
+    if (request.TaskId == Guid.Empty)
+    {
+        throw new ValidationException("TaskId must be a non-empty GUID.");
+    }
+
+    if (request.MaxAttempts.HasValue && (request.MaxAttempts.Value <= 0 || request.MaxAttempts.Value > 10))
+    {
+        throw new ValidationException("MaxAttempts must be between 1 and 10.");
+    }
+
     var result = await service.StartAsync(
         new StartOrchestrationCommand(request.ProjectId, request.TaskId, request.MaxAttempts),
         cancellationToken);
@@ -451,14 +775,19 @@ app.MapPost("/api/orchestration-runs", async (
         status = result.Status,
         statusUrl = result.StatusUrl
     });
-});
+}).RequireRateLimiting("ExpensiveOperation");
 
-app.MapGet("/api/orchestration-runs/{id:guid}", async (
-    Guid id,
+app.MapGet("/api/orchestration-runs/{id}", async (
+    string id,
     IOrchestrationService service,
     CancellationToken cancellationToken) =>
 {
-    var run = await service.GetAsync(id, cancellationToken);
+    if (!Guid.TryParse(id, out var parsedId) || parsedId == Guid.Empty)
+    {
+        throw new ValidationException("Invalid run identifier.");
+    }
+
+    var run = await service.GetAsync(parsedId, cancellationToken);
 
     if (run is null)
     {
@@ -496,40 +825,55 @@ app.MapGet("/api/orchestration-runs/{id:guid}", async (
                     : JsonSerializer.Deserialize<Dictionary<string, string>>(s.MetadataJson)
             })
     });
-});
+}).RequireRateLimiting("GeneralApi");
 
-app.MapGet("/api/orchestration-runs/{id:guid}/attempts", async (
-    Guid id,
+app.MapGet("/api/orchestration-runs/{id}/attempts", async (
+    string id,
     IOrchestrationService service,
     CancellationToken cancellationToken) =>
 {
-    var run = await service.GetAsync(id, cancellationToken);
+    if (!Guid.TryParse(id, out var parsedId) || parsedId == Guid.Empty)
+    {
+        throw new ValidationException("Invalid run identifier.");
+    }
+
+    var run = await service.GetAsync(parsedId, cancellationToken);
 
     return run is null
         ? Results.NotFound()
         : Results.Ok(run.Attempts.OrderBy(a => a.AttemptNumber));
-});
+}).RequireRateLimiting("GeneralApi");
 
-app.MapGet("/api/orchestration-runs/{id:guid}/logs", async (
-    Guid id,
+app.MapGet("/api/orchestration-runs/{id}/logs", async (
+    string id,
     IOrchestrationService service,
     CancellationToken cancellationToken) =>
 {
-    var run = await service.GetAsync(id, cancellationToken);
+    if (!Guid.TryParse(id, out var parsedId) || parsedId == Guid.Empty)
+    {
+        throw new ValidationException("Invalid run identifier.");
+    }
+
+    var run = await service.GetAsync(parsedId, cancellationToken);
 
     return run is null
         ? Results.NotFound()
         : Results.Ok(run.ProgressEvents.OrderBy(e => e.TimestampUtc));
-});
+}).RequireRateLimiting("GeneralApi");
 
-app.MapPost("/api/orchestration-runs/{id:guid}/cancel", async (
-    Guid id,
+app.MapPost("/api/orchestration-runs/{id}/cancel", async (
+    string id,
     IOrchestrationService service,
     CancellationToken cancellationToken) =>
 {
-    await service.RequestCancellationAsync(id, cancellationToken);
+    if (!Guid.TryParse(id, out var parsedId) || parsedId == Guid.Empty)
+    {
+        throw new ValidationException("Invalid run identifier.");
+    }
+
+    await service.RequestCancellationAsync(parsedId, cancellationToken);
     return Results.Accepted();
-});
+}).RequireRateLimiting("GeneralApi");
 
 app.MapGet("/api/operations/active", (
     IApplicationShutdown shutdown,
@@ -553,13 +897,13 @@ app.MapGet("/api/operations/active", (
         activeCount = tracker.ActiveCount,
         operations = activeOps
     });
-});
+}).RequireRateLimiting("OperationalApi");
 
 app.Run();
 
 public sealed record CreateProjectRequest(
     string Name,
-    string Description);
+    string? Description);
 
 public sealed record ApprovalDecisionRequest(
     string? Comment);

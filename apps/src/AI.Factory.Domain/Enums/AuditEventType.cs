@@ -31,5 +31,8 @@ public enum AuditEventType
     OperationsDrained,
     OperationsCancelled,
     ShutdownTimedOut,
-    ShutdownRequestRejected
+    ShutdownRequestRejected,
+    OperationalAccessDenied,
+    RateLimitRejected,
+    SecurityRequestRejected
 }

@@ -110,6 +110,12 @@ public sealed class WorkerCompositionRootTests : IDisposable
     [InlineData(typeof(IApplicationShutdown))]
     [InlineData(typeof(IBackgroundOperationTracker))]
     [InlineData(typeof(ShutdownOptions))]
+    [InlineData(typeof(ISecretProvider))]
+    [InlineData(typeof(IConfigurationDiagnosticsService))]
+    [InlineData(typeof(AI.Factory.Application.Configuration.DatabaseOptions))]
+    [InlineData(typeof(AI.Factory.Application.Configuration.SecretManagementOptions))]
+    [InlineData(typeof(AI.Factory.Application.Security.SecurityOptions))]
+    [InlineData(typeof(AI.Factory.Application.Configuration.AiProviderOptions))]
     public void RealWorkerServiceGraph_Resolves(Type serviceType)
     {
         using var scope = _host.Services.CreateScope();

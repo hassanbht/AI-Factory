@@ -49,19 +49,35 @@ public sealed class HealthChecksTests
     [Fact]
     public async Task ConfigurationHealthCheck_ReportsHealthy_ForValidOptions()
     {
-        var check = new ConfigurationHealthCheck(new ExecutionLimitsOptions());
+        var check = new ConfigurationHealthCheck(
+            new ExecutionLimitsOptions(),
+            new AI.Factory.Application.Configuration.DatabaseOptions { ConnectionString = "Data Source=test.db" },
+            new AI.Factory.Application.Configuration.SecretManagementOptions(),
+            new AI.Factory.Application.Security.SecurityOptions());
         var result = await check.CheckHealthAsync(Context);
 
         Assert.Equal(HealthStatus.Healthy, result.Status);
     }
 
     [Fact]
-    public async Task ConfigurationHealthCheck_ReportsUnhealthy_ForInvalidOptions()
+    public async Task ConfigurationHealthCheck_ReportsUnhealthy_ForInvalidExecutionLimits()
     {
         var check = new ConfigurationHealthCheck(new ExecutionLimitsOptions { MaxRepairAttempts = 0 });
         var result = await check.CheckHealthAsync(Context);
 
         Assert.Equal(HealthStatus.Unhealthy, result.Status);
+    }
+
+    [Fact]
+    public async Task ConfigurationHealthCheck_ReportsUnhealthy_WhenDatabaseConnectionStringEmpty()
+    {
+        var check = new ConfigurationHealthCheck(
+            new ExecutionLimitsOptions(),
+            new AI.Factory.Application.Configuration.DatabaseOptions { ConnectionString = "" });
+        var result = await check.CheckHealthAsync(Context);
+
+        Assert.Equal(HealthStatus.Unhealthy, result.Status);
+        Assert.Contains("Database:ConnectionString is required", result.Description);
     }
 
     [Fact]

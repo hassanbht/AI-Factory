@@ -1,8 +1,11 @@
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Approvals;
+using AI.Factory.Application.Configuration;
 using AI.Factory.Application.Learning;
 using AI.Factory.Application.Orchestration;
+using AI.Factory.Application.Security;
 using AI.Factory.Infrastructure.Agents;
+using AI.Factory.Infrastructure.Configuration;
 using AI.Factory.Infrastructure.Context;
 using AI.Factory.Infrastructure.Persistence;
 using AI.Factory.Infrastructure.Resilience;
@@ -25,19 +28,44 @@ public partial class Program
     // starts the hosted services). See AI.Factory.Worker.Tests.
     public static void ConfigureServices(HostApplicationBuilder builder)
     {
+        var securityOptions = new SecurityOptions();
+        builder.Configuration.GetSection(SecurityOptions.SectionName).Bind(securityOptions);
+        securityOptions.Validate();
+        builder.Services.AddSingleton(securityOptions);
+
+        var databaseOptions = new DatabaseOptions();
+        builder.Configuration.GetSection(DatabaseOptions.SectionName).Bind(databaseOptions);
+        if (string.IsNullOrWhiteSpace(databaseOptions.ConnectionString))
+        {
+            databaseOptions.ConnectionString =
+                builder.Configuration.GetConnectionString("FactoryDatabase")
+                ?? "Data Source=../../../data/factory.db";
+        }
+        databaseOptions.Validate();
+        builder.Services.AddSingleton(databaseOptions);
+
+        var secretOptions = new SecretManagementOptions();
+        builder.Configuration.GetSection(SecretManagementOptions.SectionName).Bind(secretOptions);
+        secretOptions.Validate();
+        builder.Services.AddSingleton(secretOptions);
+
+        var aiProviderOptions = new AiProviderOptions();
+        builder.Configuration.GetSection(AiProviderOptions.SectionName).Bind(aiProviderOptions);
+        aiProviderOptions.Validate();
+        builder.Services.AddSingleton(aiProviderOptions);
+
+        builder.Services.AddSingleton<ISecretProvider, EnvironmentSecretProvider>();
+        builder.Services.AddSingleton<IConfigurationDiagnosticsService, ConfigurationDiagnosticsService>();
+
         builder.Services.AddDbContext<FactoryDbContext>(options =>
-{
-    var connectionString =
-        builder.Configuration.GetConnectionString("FactoryDatabase")
-        ?? "Data Source=../../../data/factory.db";
+        {
+            options.UseSqlite(databaseOptions.ConnectionString);
+        });
 
-    options.UseSqlite(connectionString);
-});
-
-var executionLimits = new ExecutionLimitsOptions();
-builder.Configuration.GetSection("ExecutionLimits").Bind(executionLimits);
-executionLimits.Validate();
-builder.Services.AddSingleton(executionLimits);
+        var executionLimits = new ExecutionLimitsOptions();
+        builder.Configuration.GetSection("ExecutionLimits").Bind(executionLimits);
+        executionLimits.Validate();
+        builder.Services.AddSingleton(executionLimits);
 
 var recoveryOptions = new RecoveryOptions();
 builder.Configuration.GetSection("Recovery").Bind(recoveryOptions);

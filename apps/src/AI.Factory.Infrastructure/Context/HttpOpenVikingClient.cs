@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using AI.Factory.Application.Abstractions;
 using AI.Factory.Infrastructure.Resilience;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -9,15 +10,26 @@ public sealed class HttpOpenVikingClient : IOpenVikingClient
 {
     private readonly HttpClient _httpClient;
     private readonly OpenVikingOptions _options;
+    private readonly ISecretProvider? _secretProvider;
     private readonly RetryExecutor _retryExecutor;
 
-    public HttpOpenVikingClient(HttpClient httpClient, OpenVikingOptions options, RetryExecutor? retryExecutor = null)
+    public HttpOpenVikingClient(
+        HttpClient httpClient,
+        OpenVikingOptions options,
+        RetryExecutor? retryExecutor = null)
+        : this(httpClient, options, null, retryExecutor)
+    {
+    }
+
+    public HttpOpenVikingClient(
+        HttpClient httpClient,
+        OpenVikingOptions options,
+        ISecretProvider? secretProvider,
+        RetryExecutor? retryExecutor = null)
     {
         _httpClient = httpClient;
         _options = options;
-        // No retry unless explicitly configured — keeps every existing
-        // single-request-server test/caller unaffected; Program.cs always
-        // supplies the real multi-attempt policy in production.
+        _secretProvider = secretProvider;
         _retryExecutor = retryExecutor
             ?? new RetryExecutor(new RetryOptions { MaxAttempts = 1 }, NullLogger<RetryExecutor>.Instance);
     }
@@ -42,9 +54,15 @@ public sealed class HttpOpenVikingClient : IOpenVikingClient
             Content = JsonContent.Create(request)
         };
 
-        if (!string.IsNullOrWhiteSpace(_options.ApiKey))
+        string? apiKey = _options.ApiKey;
+        if (!string.IsNullOrWhiteSpace(_options.ApiKeySecretName) && _secretProvider is not null)
         {
-            httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.ApiKey);
+            apiKey = await _secretProvider.GetSecretAsync(_options.ApiKeySecretName, cancellationToken);
+        }
+
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         }
 
         using var response = await _httpClient.SendAsync(httpRequest, cancellationToken);

@@ -45,7 +45,7 @@ public sealed class OperationalEndpointSecurityMiddleware
             return;
         }
 
-        if (IsValidKeyProvided(context))
+        if (await IsValidKeyProvidedAsync(context))
         {
             await _next(context);
             return;
@@ -106,9 +106,21 @@ public sealed class OperationalEndpointSecurityMiddleware
         await JsonSerializer.SerializeAsync(context.Response.Body, problem, JsonOptions);
     }
 
-    private bool IsValidKeyProvided(HttpContext context)
+    private async Task<bool> IsValidKeyProvidedAsync(HttpContext context)
     {
         var configuredKey = _options.OperationalEndpoints.AccessKey;
+        if (string.IsNullOrWhiteSpace(configuredKey) &&
+            !string.IsNullOrWhiteSpace(_options.OperationalEndpoints.AccessKeySecretName))
+        {
+            var secretProvider = context.RequestServices?.GetService<ISecretProvider>();
+            if (secretProvider is not null)
+            {
+                configuredKey = await secretProvider.GetSecretAsync(
+                    _options.OperationalEndpoints.AccessKeySecretName,
+                    context.RequestAborted);
+            }
+        }
+
         if (string.IsNullOrWhiteSpace(configuredKey))
         {
             return false;

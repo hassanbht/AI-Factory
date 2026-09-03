@@ -24,13 +24,16 @@ public sealed class SecurityOptions
     {
         if (OperationalEndpoints.RequireAccessKey)
         {
-            if (string.IsNullOrWhiteSpace(OperationalEndpoints.AccessKey))
+            var hasDirectKey = !string.IsNullOrWhiteSpace(OperationalEndpoints.AccessKey);
+            var hasSecretRef = !string.IsNullOrWhiteSpace(OperationalEndpoints.AccessKeySecretName);
+
+            if (!hasDirectKey && !hasSecretRef)
             {
                 throw new InvalidOperationException(
-                    "Security:OperationalEndpoints:RequireAccessKey is enabled but AccessKey is not configured.");
+                    "Security:OperationalEndpoints:RequireAccessKey is enabled but neither AccessKey nor AccessKeySecretName is configured.");
             }
 
-            if (OperationalEndpoints.AccessKey.Trim().Length < 16)
+            if (hasDirectKey && OperationalEndpoints.AccessKey.Trim().Length < 16)
             {
                 throw new InvalidOperationException(
                     "Security:OperationalEndpoints:AccessKey must be at least 16 characters long.");
@@ -90,6 +93,8 @@ public sealed class OperationalEndpointsOptions
     public bool RequireAccessKey { get; set; } = false;
 
     public string AccessKey { get; set; } = string.Empty;
+
+    public string? AccessKeySecretName { get; set; }
 
     public string HeaderName { get; set; } = "X-Operations-Key";
 }

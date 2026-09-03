@@ -25,7 +25,7 @@ public sealed class SecurityConfigurationValidationTests
         };
 
         var ex = Assert.Throws<InvalidOperationException>(() => options.Validate());
-        Assert.Contains("AccessKey is not configured", ex.Message);
+        Assert.Contains("neither AccessKey nor AccessKeySecretName is configured", ex.Message);
     }
 
     [Fact]

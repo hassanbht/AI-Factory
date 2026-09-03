@@ -34,5 +34,8 @@ public enum AuditEventType
     ShutdownRequestRejected,
     OperationalAccessDenied,
     RateLimitRejected,
-    SecurityRequestRejected
+    SecurityRequestRejected,
+    ConfigurationValidationFailed,
+    SecretResolutionFailed,
+    RequiredSecretMissing
 }

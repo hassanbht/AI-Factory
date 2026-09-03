@@ -125,6 +125,15 @@ public sealed class AuditLogger : IAuditLogger
             case AuditEventType.OperationalAccessDenied:
                 _metrics.RecordOperationalAccessDenied();
                 break;
+            case AuditEventType.ConfigurationValidationFailed:
+                _metrics.RecordConfigurationValidationFailed();
+                break;
+            case AuditEventType.SecretResolutionFailed:
+                _metrics.RecordSecretResolutionFailed();
+                break;
+            case AuditEventType.RequiredSecretMissing:
+                _metrics.RecordRequiredSecretMissing();
+                break;
         }
     }
 

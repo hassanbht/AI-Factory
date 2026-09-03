@@ -9,5 +9,11 @@ public sealed class OpenVikingOptions
 
     public string? ApiKey { get; set; }
 
+    /// <summary>
+    /// Secret name for the API key, resolved via ISecretProvider.
+    /// Recommended over ApiKey.
+    /// </summary>
+    public string? ApiKeySecretName { get; set; }
+
     public int TimeoutSeconds { get; set; } = 10;
 }

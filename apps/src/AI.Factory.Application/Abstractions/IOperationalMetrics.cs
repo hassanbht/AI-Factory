@@ -69,6 +69,12 @@ public interface IOperationalMetrics
 
     void RecordOperationalAccessDenied();
 
+    void RecordConfigurationValidationFailed();
+
+    void RecordSecretResolutionFailed();
+
+    void RecordRequiredSecretMissing();
+
     OperationalMetricsSnapshot GetSnapshot();
 }
 
@@ -119,7 +125,10 @@ public sealed record OperationalMetricsSnapshot(
     long ShutdownRequestsRejected = 0,
     long RateLimitRejected = 0,
     long SecurityRequestRejected = 0,
-    long OperationalAccessDenied = 0);
+    long OperationalAccessDenied = 0,
+    long ConfigurationValidationFailed = 0,
+    long SecretResolutionFailed = 0,
+    long RequiredSecretMissing = 0);
 
 public sealed class OperationalMetrics : IOperationalMetrics
 {
@@ -174,6 +183,9 @@ public sealed class OperationalMetrics : IOperationalMetrics
     private long _rateLimitRejected;
     private long _securityRequestRejected;
     private long _operationalAccessDenied;
+    private long _configurationValidationFailed;
+    private long _secretResolutionFailed;
+    private long _requiredSecretMissing;
 
     public void RecordOperationStarted() => Interlocked.Increment(ref _operationsStarted);
 
@@ -300,6 +312,9 @@ public sealed class OperationalMetrics : IOperationalMetrics
     public void RecordSecurityRequestRejected() => Interlocked.Increment(ref _securityRequestRejected);
 
     public void RecordOperationalAccessDenied() => Interlocked.Increment(ref _operationalAccessDenied);
+    public void RecordConfigurationValidationFailed() => Interlocked.Increment(ref _configurationValidationFailed);
+    public void RecordSecretResolutionFailed() => Interlocked.Increment(ref _secretResolutionFailed);
+    public void RecordRequiredSecretMissing() => Interlocked.Increment(ref _requiredSecretMissing);
 
     public OperationalMetricsSnapshot GetSnapshot()
     {
@@ -350,7 +365,10 @@ public sealed class OperationalMetrics : IOperationalMetrics
             Interlocked.Read(ref _shutdownRequestsRejected),
             Interlocked.Read(ref _rateLimitRejected),
             Interlocked.Read(ref _securityRequestRejected),
-            Interlocked.Read(ref _operationalAccessDenied));
+            Interlocked.Read(ref _operationalAccessDenied),
+            Interlocked.Read(ref _configurationValidationFailed),
+            Interlocked.Read(ref _secretResolutionFailed),
+            Interlocked.Read(ref _requiredSecretMissing));
     }
 
     /// <summary>Count + running total, so average is derived rather than stored — no raw samples kept.</summary>

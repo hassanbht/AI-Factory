@@ -134,6 +134,18 @@ public sealed class AuditLogger : IAuditLogger
             case AuditEventType.RequiredSecretMissing:
                 _metrics.RecordRequiredSecretMissing();
                 break;
+            case AuditEventType.DatabaseRetry:
+                _metrics.RecordDatabaseRetry();
+                break;
+            case AuditEventType.DatabaseConcurrencyConflict:
+                _metrics.RecordDatabaseConcurrencyConflict();
+                break;
+            case AuditEventType.DatabaseTransactionFailed:
+                _metrics.RecordDatabaseTransactionFailure();
+                break;
+            case AuditEventType.DatabaseOperationFailed:
+                _metrics.RecordDatabaseOperation(false, durationMs);
+                break;
         }
     }
 

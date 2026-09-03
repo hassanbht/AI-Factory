@@ -16,6 +16,13 @@ public sealed class AuditLogRepository : IAuditLogRepository
 
     public async Task RecordAsync(AuditLogEntry entry, CancellationToken cancellationToken = default)
     {
+        // Idempotency check: if an entry with the same ID already exists (e.g. from an operation retry), do not duplicate
+        var exists = await _db.AuditLogEntries.AnyAsync(x => x.Id == entry.Id, cancellationToken);
+        if (exists)
+        {
+            return;
+        }
+
         await _db.AuditLogEntries.AddAsync(entry, cancellationToken);
         await _db.SaveChangesAsync(cancellationToken);
     }

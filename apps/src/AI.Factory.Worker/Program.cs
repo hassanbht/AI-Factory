@@ -44,6 +44,11 @@ public partial class Program
         databaseOptions.Validate();
         builder.Services.AddSingleton(databaseOptions);
 
+        var databaseResilienceOptions = new DatabaseResilienceOptions();
+        builder.Configuration.GetSection(DatabaseResilienceOptions.SectionName).Bind(databaseResilienceOptions);
+        databaseResilienceOptions.Validate();
+        builder.Services.AddSingleton(databaseResilienceOptions);
+
         var secretOptions = new SecretManagementOptions();
         builder.Configuration.GetSection(SecretManagementOptions.SectionName).Bind(secretOptions);
         secretOptions.Validate();
@@ -56,10 +61,16 @@ public partial class Program
 
         builder.Services.AddSingleton<ISecretProvider, EnvironmentSecretProvider>();
         builder.Services.AddSingleton<IConfigurationDiagnosticsService, ConfigurationDiagnosticsService>();
+        builder.Services.AddSingleton<IDatabaseResiliencePolicy, DatabaseResiliencePolicy>();
+        builder.Services.AddScoped<IDatabaseTransactionManager, DatabaseTransactionManager>();
+        builder.Services.AddScoped<IDatabaseDiagnosticsService, DatabaseDiagnosticsService>();
 
         builder.Services.AddDbContext<FactoryDbContext>(options =>
         {
-            options.UseSqlite(databaseOptions.ConnectionString);
+            options.UseSqlite(databaseOptions.ConnectionString, sqliteOptions =>
+            {
+                sqliteOptions.CommandTimeout((int)databaseResilienceOptions.CommandTimeout.TotalSeconds);
+            });
         });
 
         var executionLimits = new ExecutionLimitsOptions();

@@ -1,3 +1,4 @@
+using AI.Factory.Domain.Common;
 using AI.Factory.Domain.Enums;
 
 namespace AI.Factory.Domain.Entities;
@@ -9,7 +10,7 @@ namespace AI.Factory.Domain.Entities;
 /// future autonomous scheduling). RunId doubles as the correlation ID
 /// threaded through structured logs (see Program.cs endpoints).
 /// </summary>
-public sealed class OrchestrationRun
+public sealed class OrchestrationRun : IVersionedEntity
 {
     public Guid Id { get; set; } = Guid.NewGuid();
 
@@ -45,6 +46,8 @@ public sealed class OrchestrationRun
     public DateTime? WorkerHeartbeatAtUtc { get; set; }
 
     public DateTime? LeaseExpiresAtUtc { get; set; }
+
+    public long Version { get; set; } = 1;
 
     public ICollection<OrchestrationRunAttempt> Attempts { get; set; } = new List<OrchestrationRunAttempt>();
 

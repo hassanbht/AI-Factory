@@ -1,3 +1,5 @@
+using AI.Factory.Application.Exceptions;
+using AI.Factory.Domain.Common;
 using AI.Factory.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 
@@ -76,6 +78,9 @@ public sealed class FactoryDbContext : DbContext
             entity.Property(x => x.RootPath)
                 .HasMaxLength(1000)
                 .IsRequired();
+
+            entity.Property(x => x.Version)
+                .IsConcurrencyToken();
         });
 
         modelBuilder.Entity<Requirement>(entity =>
@@ -158,6 +163,9 @@ public sealed class FactoryDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(x => x.ParentWorkItemId)
                 .OnDelete(DeleteBehavior.Restrict);
+
+            entity.Property(x => x.Version)
+                .IsConcurrencyToken();
         });
 
         modelBuilder.Entity<WorkItemDependency>(entity =>
@@ -292,6 +300,9 @@ public sealed class FactoryDbContext : DbContext
             entity.HasIndex(x => x.ProjectId);
 
             entity.HasIndex(x => x.Decision);
+
+            entity.Property(x => x.Version)
+                .IsConcurrencyToken();
         });
 
         modelBuilder.Entity<Lesson>(entity =>
@@ -378,6 +389,9 @@ public sealed class FactoryDbContext : DbContext
             entity.HasIndex(x => x.ProjectId);
             entity.HasIndex(x => x.WorkItemId);
             entity.HasIndex(x => x.Status);
+
+            entity.Property(x => x.Version)
+                .IsConcurrencyToken();
         });
 
         modelBuilder.Entity<OrchestrationRunAttempt>(entity =>
@@ -431,5 +445,62 @@ public sealed class FactoryDbContext : DbContext
             entity.HasIndex(x => x.Status);
             entity.HasIndex(x => x.StartedAtUtc);
         });
+    }
+
+    public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    {
+        return SaveChangesAsync(acceptAllChangesOnSuccess: true, cancellationToken);
+    }
+
+    public override async Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+    {
+        IncrementVersions();
+
+        try
+        {
+            return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException ex)
+        {
+            var entityName = ex.Entries.FirstOrDefault()?.Entity.GetType().Name;
+            throw new ConcurrencyConflictException(
+                "The resource was changed by another operation. Please reload and retry.",
+                resourceType: entityName,
+                innerException: ex);
+        }
+    }
+
+    public override int SaveChanges()
+    {
+        return SaveChanges(acceptAllChangesOnSuccess: true);
+    }
+
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        IncrementVersions();
+
+        try
+        {
+            return base.SaveChanges(acceptAllChangesOnSuccess);
+        }
+        catch (DbUpdateConcurrencyException ex)
+        {
+            var entityName = ex.Entries.FirstOrDefault()?.Entity.GetType().Name;
+            throw new ConcurrencyConflictException(
+                "The resource was changed by another operation. Please reload and retry.",
+                resourceType: entityName,
+                innerException: ex);
+        }
+    }
+
+    private void IncrementVersions()
+    {
+        foreach (var entry in ChangeTracker.Entries())
+        {
+            if (entry.Entity is IVersionedEntity versioned && entry.State == EntityState.Modified)
+            {
+                versioned.Version++;
+            }
+        }
     }
 }

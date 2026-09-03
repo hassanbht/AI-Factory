@@ -1,8 +1,9 @@
+using AI.Factory.Domain.Common;
 using AI.Factory.Domain.Enums;
 
 namespace AI.Factory.Domain.Entities;
 
-public sealed class ApprovalRequest
+public sealed class ApprovalRequest : IVersionedEntity
 {
     public Guid Id { get; set; } = Guid.NewGuid();
 
@@ -24,4 +25,6 @@ public sealed class ApprovalRequest
     public DateTime? DecidedAtUtc { get; set; }
 
     public string? Comment { get; set; }
+
+    public long Version { get; set; } = 1;
 }

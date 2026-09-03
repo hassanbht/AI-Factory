@@ -55,10 +55,10 @@ public sealed class ApiExceptionMapper
                 FailureCategory.Validation,
                 ShouldAudit: false),
 
-            DbUpdateConcurrencyException => new ApiErrorMapping(
+            DbUpdateConcurrencyException or ConcurrencyConflictException => new ApiErrorMapping(
                 StatusCodes.Status409Conflict,
-                "Database concurrency conflict",
-                "A database concurrency conflict occurred.",
+                "Resource was modified",
+                "The resource was changed by another operation. Please reload and retry.",
                 "concurrency_conflict",
                 FailureCategory.Validation,
                 ShouldAudit: false),
@@ -110,6 +110,14 @@ public sealed class ApiExceptionMapper
                 "Too many requests",
                 "The requested operation could not be processed due to concurrency limits.",
                 "too_many_requests",
+                FailureCategory.Infrastructure,
+                ShouldAudit: true),
+
+            Microsoft.Data.Sqlite.SqliteException sqliteEx when sqliteEx.SqliteErrorCode == 5 || sqliteEx.SqliteErrorCode == 6 || sqliteEx.Message.Contains("busy", StringComparison.OrdinalIgnoreCase) || sqliteEx.Message.Contains("locked", StringComparison.OrdinalIgnoreCase) => new ApiErrorMapping(
+                StatusCodes.Status503ServiceUnavailable,
+                "Database unavailable",
+                "The database service is temporarily unavailable. Please retry later.",
+                "database_unavailable",
                 FailureCategory.Infrastructure,
                 ShouldAudit: true),
 

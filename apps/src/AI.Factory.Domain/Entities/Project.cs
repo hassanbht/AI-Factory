@@ -1,8 +1,9 @@
+using AI.Factory.Domain.Common;
 using AI.Factory.Domain.Enums;
 
 namespace AI.Factory.Domain.Entities;
 
-public sealed class Project
+public sealed class Project : IVersionedEntity
 {
     public Guid Id { get; set; } = Guid.NewGuid();
 
@@ -23,4 +24,6 @@ public sealed class Project
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+
+    public long Version { get; set; } = 1;
 }

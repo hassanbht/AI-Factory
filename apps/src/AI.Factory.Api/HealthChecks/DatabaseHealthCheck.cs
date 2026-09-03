@@ -1,3 +1,4 @@
+using AI.Factory.Application.Security;
 using AI.Factory.Infrastructure.Persistence;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
@@ -24,7 +25,8 @@ public sealed class DatabaseHealthCheck : IHealthCheck
         }
         catch (Exception ex)
         {
-            return HealthCheckResult.Unhealthy("SQLite database check threw.", ex);
+            var sanitizedMessage = SensitiveDataSanitizer.Sanitize(ex.Message);
+            return HealthCheckResult.Unhealthy($"SQLite database check failed: {sanitizedMessage}");
         }
     }
 }

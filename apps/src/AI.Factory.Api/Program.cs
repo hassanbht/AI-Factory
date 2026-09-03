@@ -47,6 +47,11 @@ if (string.IsNullOrWhiteSpace(databaseOptions.ConnectionString))
 databaseOptions.Validate();
 builder.Services.AddSingleton(databaseOptions);
 
+var databaseResilienceOptions = new DatabaseResilienceOptions();
+builder.Configuration.GetSection(DatabaseResilienceOptions.SectionName).Bind(databaseResilienceOptions);
+databaseResilienceOptions.Validate();
+builder.Services.AddSingleton(databaseResilienceOptions);
+
 var secretOptions = new SecretManagementOptions();
 builder.Configuration.GetSection(SecretManagementOptions.SectionName).Bind(secretOptions);
 secretOptions.Validate();
@@ -59,6 +64,9 @@ builder.Services.AddSingleton(aiProviderOptions);
 
 builder.Services.AddSingleton<ISecretProvider, EnvironmentSecretProvider>();
 builder.Services.AddSingleton<IConfigurationDiagnosticsService, ConfigurationDiagnosticsService>();
+builder.Services.AddSingleton<IDatabaseResiliencePolicy, DatabaseResiliencePolicy>();
+builder.Services.AddScoped<IDatabaseTransactionManager, DatabaseTransactionManager>();
+builder.Services.AddScoped<IDatabaseDiagnosticsService, DatabaseDiagnosticsService>();
 
 var executionLimits = new ExecutionLimitsOptions();
 builder.Configuration.GetSection("ExecutionLimits").Bind(executionLimits);
@@ -67,7 +75,10 @@ builder.Services.AddSingleton(executionLimits);
 
 builder.Services.AddDbContext<FactoryDbContext>(options =>
 {
-    options.UseSqlite(databaseOptions.ConnectionString);
+    options.UseSqlite(databaseOptions.ConnectionString, sqliteOptions =>
+    {
+        sqliteOptions.CommandTimeout((int)databaseResilienceOptions.CommandTimeout.TotalSeconds);
+    });
 });
 
 builder.Services.AddScoped<IProjectRepository, ProjectRepository>();
@@ -924,6 +935,14 @@ app.MapGet("/api/operations/active", (
 app.MapGet("/api/operations/configuration", (IConfigurationDiagnosticsService diagnostics) =>
 {
     return Results.Ok(diagnostics.GetSnapshot());
+}).RequireRateLimiting("OperationalApi");
+
+app.MapGet("/api/operations/database", async (
+    IDatabaseDiagnosticsService diagnostics,
+    CancellationToken cancellationToken) =>
+{
+    var snapshot = await diagnostics.GetSnapshotAsync(cancellationToken);
+    return Results.Ok(snapshot);
 }).RequireRateLimiting("OperationalApi");
 
 app.Run();

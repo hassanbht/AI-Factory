@@ -75,6 +75,20 @@ public interface IOperationalMetrics
 
     void RecordRequiredSecretMissing();
 
+    void RecordDatabaseOperation(bool success, long? durationMs = null);
+
+    void RecordDatabaseRetry();
+
+    void RecordDatabaseTransientFailure();
+
+    void RecordDatabaseConcurrencyConflict();
+
+    void RecordDatabaseBusyFailure();
+
+    void RecordDatabaseLockedFailure();
+
+    void RecordDatabaseTransactionFailure();
+
     OperationalMetricsSnapshot GetSnapshot();
 }
 
@@ -128,13 +142,33 @@ public sealed record OperationalMetricsSnapshot(
     long OperationalAccessDenied = 0,
     long ConfigurationValidationFailed = 0,
     long SecretResolutionFailed = 0,
-    long RequiredSecretMissing = 0);
+    long RequiredSecretMissing = 0,
+    long DatabaseOperations = 0,
+    long DatabaseFailures = 0,
+    long DatabaseRetries = 0,
+    long DatabaseTransientFailures = 0,
+    long DatabaseConcurrencyConflicts = 0,
+    long DatabaseBusyFailures = 0,
+    long DatabaseLockedFailures = 0,
+    long DatabaseTransactionFailures = 0,
+    double? AverageDatabaseOperationDurationMs = null,
+    long? TotalDatabaseOperationDurationMs = null);
 
 public sealed class OperationalMetrics : IOperationalMetrics
 {
     private long _operationsStarted;
     private long _operationsSucceeded;
     private long _operationsFailed;
+
+    private long _databaseOperations;
+    private long _databaseFailures;
+    private long _databaseRetries;
+    private long _databaseTransientFailures;
+    private long _databaseConcurrencyConflicts;
+    private long _databaseBusyFailures;
+    private long _databaseLockedFailures;
+    private long _databaseTransactionFailures;
+    private readonly DurationAccumulator _databaseDuration = new();
 
     private long _agentExecutions;
     private long _agentFailures;
@@ -316,6 +350,23 @@ public sealed class OperationalMetrics : IOperationalMetrics
     public void RecordSecretResolutionFailed() => Interlocked.Increment(ref _secretResolutionFailed);
     public void RecordRequiredSecretMissing() => Interlocked.Increment(ref _requiredSecretMissing);
 
+    public void RecordDatabaseOperation(bool success, long? durationMs = null)
+    {
+        Interlocked.Increment(ref _databaseOperations);
+        if (!success)
+        {
+            Interlocked.Increment(ref _databaseFailures);
+        }
+        _databaseDuration.Add(durationMs);
+    }
+
+    public void RecordDatabaseRetry() => Interlocked.Increment(ref _databaseRetries);
+    public void RecordDatabaseTransientFailure() => Interlocked.Increment(ref _databaseTransientFailures);
+    public void RecordDatabaseConcurrencyConflict() => Interlocked.Increment(ref _databaseConcurrencyConflicts);
+    public void RecordDatabaseBusyFailure() => Interlocked.Increment(ref _databaseBusyFailures);
+    public void RecordDatabaseLockedFailure() => Interlocked.Increment(ref _databaseLockedFailures);
+    public void RecordDatabaseTransactionFailure() => Interlocked.Increment(ref _databaseTransactionFailures);
+
     public OperationalMetricsSnapshot GetSnapshot()
     {
         return new OperationalMetricsSnapshot(
@@ -368,7 +419,17 @@ public sealed class OperationalMetrics : IOperationalMetrics
             Interlocked.Read(ref _operationalAccessDenied),
             Interlocked.Read(ref _configurationValidationFailed),
             Interlocked.Read(ref _secretResolutionFailed),
-            Interlocked.Read(ref _requiredSecretMissing));
+            Interlocked.Read(ref _requiredSecretMissing),
+            Interlocked.Read(ref _databaseOperations),
+            Interlocked.Read(ref _databaseFailures),
+            Interlocked.Read(ref _databaseRetries),
+            Interlocked.Read(ref _databaseTransientFailures),
+            Interlocked.Read(ref _databaseConcurrencyConflicts),
+            Interlocked.Read(ref _databaseBusyFailures),
+            Interlocked.Read(ref _databaseLockedFailures),
+            Interlocked.Read(ref _databaseTransactionFailures),
+            _databaseDuration.Average,
+            _databaseDuration.Total);
     }
 
     /// <summary>Count + running total, so average is derived rather than stored — no raw samples kept.</summary>

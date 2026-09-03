@@ -37,5 +37,9 @@ public enum AuditEventType
     SecurityRequestRejected,
     ConfigurationValidationFailed,
     SecretResolutionFailed,
-    RequiredSecretMissing
+    RequiredSecretMissing,
+    DatabaseRetry,
+    DatabaseConcurrencyConflict,
+    DatabaseTransactionFailed,
+    DatabaseOperationFailed
 }

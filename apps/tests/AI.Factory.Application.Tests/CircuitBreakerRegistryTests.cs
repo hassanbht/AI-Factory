@@ -84,14 +84,39 @@ public sealed class CircuitBreakerRegistryTests
     }
 
     [Fact]
-    public async Task BreakDurationElapses_TransitionsToHalfOpen_AllowsTrials()
+    public void Open_RemainsOpen_BeforeBreakDurationExpires()
     {
-        var registry = new CircuitBreakerRegistry(metrics: _metrics);
+        var time = new ManualTimeProvider();
+        var registry = new CircuitBreakerRegistry(metrics: _metrics, timeProvider: time);
+        var cb = registry.GetOrCreate("StillOpen", new CircuitBreakerProfileOptions
+        {
+            Enabled = true,
+            FailureThreshold = 1,
+            BreakDuration = TimeSpan.FromSeconds(30),
+            HalfOpenTrialCount = 1
+        });
+
+        cb.RecordFailure();
+        Assert.Equal(CircuitState.Open, cb.State);
+
+        // One tick short of the break duration — must not transition yet.
+        time.Advance(TimeSpan.FromSeconds(30) - TimeSpan.FromMilliseconds(1));
+
+        Assert.Equal(CircuitState.Open, cb.State);
+        Assert.False(cb.CanExecuteFast());
+        Assert.False(cb.TryEnter());
+    }
+
+    [Fact]
+    public void BreakDurationElapses_TransitionsToHalfOpen_AllowsTrials()
+    {
+        var time = new ManualTimeProvider();
+        var registry = new CircuitBreakerRegistry(metrics: _metrics, timeProvider: time);
         var cb = registry.GetOrCreate("QuickBreak", new CircuitBreakerProfileOptions
         {
             Enabled = true,
             FailureThreshold = 1,
-            BreakDuration = TimeSpan.FromMilliseconds(50),
+            BreakDuration = TimeSpan.FromSeconds(30),
             HalfOpenTrialCount = 1
         });
 
@@ -99,8 +124,8 @@ public sealed class CircuitBreakerRegistryTests
         Assert.Equal(CircuitState.Open, cb.State);
         Assert.False(cb.CanExecuteFast());
 
-        // Wait for break duration to elapse
-        await Task.Delay(100);
+        // Advance the deterministic clock past the break duration — no real waiting.
+        time.Advance(TimeSpan.FromSeconds(30));
 
         // State changes to HalfOpen upon probe evaluation
         Assert.True(cb.CanExecuteFast());
@@ -114,19 +139,20 @@ public sealed class CircuitBreakerRegistryTests
     }
 
     [Fact]
-    public async Task HalfOpen_SuccessClosesCircuit()
+    public void HalfOpen_SuccessClosesCircuit()
     {
-        var registry = new CircuitBreakerRegistry(metrics: _metrics);
+        var time = new ManualTimeProvider();
+        var registry = new CircuitBreakerRegistry(metrics: _metrics, timeProvider: time);
         var cb = registry.GetOrCreate("ProbeSuccess", new CircuitBreakerProfileOptions
         {
             Enabled = true,
             FailureThreshold = 1,
-            BreakDuration = TimeSpan.FromMilliseconds(50),
+            BreakDuration = TimeSpan.FromSeconds(30),
             HalfOpenTrialCount = 1
         });
 
         cb.RecordFailure();
-        await Task.Delay(100);
+        time.Advance(TimeSpan.FromSeconds(30));
 
         Assert.True(cb.TryEnter());
         cb.RecordSuccess();
@@ -137,14 +163,15 @@ public sealed class CircuitBreakerRegistryTests
     }
 
     [Fact]
-    public async Task HalfOpen_FailureReopensCircuitImmediately()
+    public void HalfOpen_FailureReopensCircuitImmediately()
     {
-        var registry = new CircuitBreakerRegistry(metrics: _metrics);
+        var time = new ManualTimeProvider();
+        var registry = new CircuitBreakerRegistry(metrics: _metrics, timeProvider: time);
         var cb = registry.GetOrCreate("ProbeFailure", new CircuitBreakerProfileOptions
         {
             Enabled = true,
             FailureThreshold = 5, // high threshold, but probe failure must reopen on 1 failure
-            BreakDuration = TimeSpan.FromMilliseconds(50),
+            BreakDuration = TimeSpan.FromSeconds(30),
             HalfOpenTrialCount = 1
         });
 
@@ -155,7 +182,7 @@ public sealed class CircuitBreakerRegistryTests
         }
         Assert.Equal(CircuitState.Open, cb.State);
 
-        await Task.Delay(100);
+        time.Advance(TimeSpan.FromSeconds(30));
         Assert.True(cb.TryEnter());
         Assert.Equal(CircuitState.HalfOpen, cb.State);
 
@@ -163,6 +190,66 @@ public sealed class CircuitBreakerRegistryTests
         cb.RecordFailure();
         Assert.Equal(CircuitState.Open, cb.State);
         Assert.False(cb.CanExecuteFast());
+    }
+
+    [Fact]
+    public void IndependentDependencies_MaintainIndependentState_OnSharedClock()
+    {
+        // The registry's clock is shared across breakers (one TimeProvider per registry), but each
+        // named breaker's failure/state tracking must remain fully independent of the others.
+        var time = new ManualTimeProvider();
+        var registry = new CircuitBreakerRegistry(metrics: _metrics, timeProvider: time);
+
+        var depA = registry.GetOrCreate("DepA", new CircuitBreakerProfileOptions { FailureThreshold = 1, BreakDuration = TimeSpan.FromSeconds(10) });
+        var depB = registry.GetOrCreate("DepB", new CircuitBreakerProfileOptions { FailureThreshold = 3, BreakDuration = TimeSpan.FromSeconds(10) });
+
+        depA.RecordFailure();
+        Assert.Equal(CircuitState.Open, depA.State);
+        Assert.Equal(CircuitState.Closed, depB.State);
+
+        depB.RecordFailure();
+        depB.RecordFailure();
+        Assert.Equal(CircuitState.Closed, depB.State);
+
+        time.Advance(TimeSpan.FromSeconds(10));
+
+        // DepA's break has elapsed and transitions independently of DepB, which never opened.
+        Assert.Equal(CircuitState.HalfOpen, depA.State);
+        Assert.Equal(CircuitState.Closed, depB.State);
+        Assert.Equal(2, depB.GetSnapshot().ConsecutiveFailures);
+    }
+
+    [Fact]
+    public void ConcurrentCallers_AtTransitionBoundary_RemainThreadSafe()
+    {
+        var time = new ManualTimeProvider();
+        var registry = new CircuitBreakerRegistry(metrics: _metrics, timeProvider: time);
+        var cb = registry.GetOrCreate("BoundaryDep", new CircuitBreakerProfileOptions
+        {
+            Enabled = true,
+            FailureThreshold = 1,
+            BreakDuration = TimeSpan.FromSeconds(10),
+            HalfOpenTrialCount = 3
+        });
+
+        cb.RecordFailure();
+        Assert.Equal(CircuitState.Open, cb.State);
+
+        // Advance exactly to the boundary, then hammer TryEnter concurrently — no real delay
+        // anywhere in this test, and the shared lock must keep half-open admission bounded.
+        time.Advance(TimeSpan.FromSeconds(10));
+
+        var admitted = 0;
+        Parallel.For(0, 50, _ =>
+        {
+            if (cb.TryEnter())
+            {
+                Interlocked.Increment(ref admitted);
+            }
+        });
+
+        Assert.Equal(3, admitted);
+        Assert.Equal(CircuitState.HalfOpen, cb.State);
     }
 
     [Fact]

@@ -53,6 +53,12 @@ builder.Configuration.GetSection(DatabaseResilienceOptions.SectionName).Bind(dat
 databaseResilienceOptions.Validate();
 builder.Services.AddSingleton(databaseResilienceOptions);
 
+var backupOptions = new BackupOptions();
+builder.Configuration.GetSection(BackupOptions.SectionName).Bind(backupOptions);
+backupOptions.Validate();
+builder.Services.AddSingleton(backupOptions);
+builder.Services.AddScoped<IDatabaseBackupService, DatabaseBackupService>();
+
 var secretOptions = new SecretManagementOptions();
 builder.Configuration.GetSection(SecretManagementOptions.SectionName).Bind(secretOptions);
 secretOptions.Validate();
@@ -125,6 +131,7 @@ resilienceOptions.Validate();
 builder.Services.AddSingleton(resilienceOptions);
 builder.Services.AddSingleton<IBackoffCalculator, ExponentialBackoffCalculator>();
 builder.Services.AddSingleton<IDelayProvider, DefaultDelayProvider>();
+builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<ICircuitBreakerRegistry, CircuitBreakerRegistry>();
 builder.Services.AddSingleton<IBulkheadRegistry, BulkheadRegistry>();
 builder.Services.AddScoped<IResilienceExecutor, ResilienceExecutor>();
@@ -441,6 +448,62 @@ if (args.Contains("--migrate-only"))
     logger.LogInformation("Dedicated migration runner started. Applying pending database migrations...");
     await db.Database.MigrateAsync();
     logger.LogInformation("Database migrations successfully applied. Exiting with code 0.");
+    return;
+}
+
+if (args.Contains("--backup-database"))
+{
+    using var scope = app.Services.CreateScope();
+    var backupService = scope.ServiceProvider.GetRequiredService<IDatabaseBackupService>();
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    logger.LogInformation("Dedicated backup runner started.");
+    try
+    {
+        var result = await backupService.CreateBackupAsync();
+        logger.LogInformation(
+            "Backup completed: {FileName} ({SizeBytes} bytes, validated={Validated}). Exiting with code 0.",
+            result.FileName, result.SizeBytes, result.ValidationPassed);
+        Environment.ExitCode = 0;
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Backup failed. Exiting with code 1.");
+        Environment.ExitCode = 1;
+    }
+
+    return;
+}
+
+var restoreArgIndex = Array.IndexOf(args, "--restore-database");
+if (restoreArgIndex >= 0)
+{
+    using var scope = app.Services.CreateScope();
+    var backupService = scope.ServiceProvider.GetRequiredService<IDatabaseBackupService>();
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+
+    if (restoreArgIndex + 1 >= args.Length)
+    {
+        logger.LogError("--restore-database requires a backup file path argument. Exiting with code 2.");
+        Environment.ExitCode = 2;
+        return;
+    }
+
+    var backupFilePath = args[restoreArgIndex + 1];
+    logger.LogWarning("Dedicated restore runner started for backup file {BackupFileName}. This will replace the active database.", Path.GetFileName(backupFilePath));
+    try
+    {
+        var result = await backupService.RestoreAsync(backupFilePath);
+        logger.LogInformation(
+            "Restore completed from {RestoredFromFileName} (pre-restore safety backup: {SafetyBackupFileName}). Exiting with code 0.",
+            result.RestoredFromFileName, result.PreRestoreSafetyBackupFileName ?? "none");
+        Environment.ExitCode = 0;
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Restore failed; the active database was not modified. Exiting with code 1.");
+        Environment.ExitCode = 1;
+    }
+
     return;
 }
 

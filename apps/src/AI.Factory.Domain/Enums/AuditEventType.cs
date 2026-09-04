@@ -41,5 +41,12 @@ public enum AuditEventType
     DatabaseRetry,
     DatabaseConcurrencyConflict,
     DatabaseTransactionFailed,
-    DatabaseOperationFailed
+    DatabaseOperationFailed,
+    WorkerDegraded,
+    WorkerRecovered,
+    WorkerFaulted,
+    DatabaseBackupSucceeded,
+    DatabaseBackupFailed,
+    DatabaseRestoreSucceeded,
+    DatabaseRestoreFailed
 }

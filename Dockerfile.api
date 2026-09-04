@@ -50,7 +50,7 @@ FROM base AS final
 WORKDIR /app
 
 # Ensure persistent and temporary directory structures exist and are owned by non-root user
-RUN mkdir -p /var/lib/ai-factory/data /tmp/ai-factory && \
+RUN mkdir -p /var/lib/ai-factory/data /var/lib/ai-factory/backups /tmp/ai-factory && \
     chown -R $APP_UID:$APP_UID /var/lib/ai-factory /tmp/ai-factory /app
 
 # Copy published artifacts from publish stage

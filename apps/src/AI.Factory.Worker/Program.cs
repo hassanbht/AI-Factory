@@ -66,6 +66,10 @@ public partial class Program
         builder.Services.AddScoped<IDatabaseTransactionManager, DatabaseTransactionManager>();
         builder.Services.AddScoped<IDatabaseDiagnosticsService, DatabaseDiagnosticsService>();
         builder.Services.AddSingleton<IDeploymentDiagnosticsService, DeploymentDiagnosticsService>();
+        var workerHealthOptions = new WorkerHealthOptions();
+        builder.Configuration.GetSection(WorkerHealthOptions.SectionName).Bind(workerHealthOptions);
+        workerHealthOptions.Validate();
+        builder.Services.AddSingleton(workerHealthOptions);
         builder.Services.AddSingleton<IWorkerHealthCoordinator, WorkerHealthCoordinator>();
         builder.Services.AddHostedService<WorkerHealthLifecycleHostedService>();
 
@@ -126,6 +130,7 @@ resilienceOptions.Validate();
 builder.Services.AddSingleton(resilienceOptions);
 builder.Services.AddSingleton<IBackoffCalculator, ExponentialBackoffCalculator>();
 builder.Services.AddSingleton<IDelayProvider, DefaultDelayProvider>();
+builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<ICircuitBreakerRegistry, CircuitBreakerRegistry>();
 builder.Services.AddSingleton<IBulkheadRegistry, BulkheadRegistry>();
 builder.Services.AddScoped<IResilienceExecutor, ResilienceExecutor>();

@@ -21,3 +21,16 @@ After implementation, run the required validation commands.
 If validation fails, diagnose and repair the issue before reporting completion.
 
 Never claim success without evidence.
+
+
+
+openrouter
+Your API Key
+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
+
+Agent Router
+sk-2sAmVTXWRBbAOfVPb33iYQcXcge7ZqNNRHLPIxW0YXQyiGDI
+
+
+OmniRoute API Key
+sk-f7b4138479aef150-4765d9-76d0fb96

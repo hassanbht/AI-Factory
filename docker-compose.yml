@@ -53,6 +53,7 @@ services:
       - Security__RequireAccessKey=${REQUIRE_OPERATIONAL_KEY:-false}
     volumes:
       - ai_factory_data:/var/lib/ai-factory/data
+      - ai_factory_backups:/var/lib/ai-factory/backups
       - tmpfs_api:/tmp
     deploy:
       resources:
@@ -110,7 +111,12 @@ services:
           cpus: "0.50"
           memory: 512M
     healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/ai-factory-health/worker.ready || exit 1"]
+      # Liveness, not readiness — see Dockerfile.worker's HEALTHCHECK comment (Phase 17.4.11 Finding 4).
+      # docker-compose's own `healthcheck.test` overrides the image's built-in HEALTHCHECK, so this
+      # must independently check worker.live: a Degraded worker (worker.ready absent, worker.live
+      # present) must stay "healthy" here too, or Docker still restarts an otherwise-healthy worker
+      # over a transient dependency outage.
+      test: ["CMD-SHELL", "test -f /tmp/ai-factory-health/worker.live || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -121,6 +127,8 @@ services:
 volumes:
   ai_factory_data:
     name: ai_factory_production_data
+  ai_factory_backups:
+    name: ai_factory_production_backups
   ai_factory_workspace:
     name: ai_factory_production_workspace
   tmpfs_api:

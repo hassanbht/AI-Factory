@@ -13,15 +13,18 @@ public sealed class CircuitBreakerRegistry : ICircuitBreakerRegistry
     private readonly IServiceScopeFactory? _scopeFactory;
     private readonly IOperationalMetrics? _metrics;
     private readonly ILoggerFactory? _loggerFactory;
+    private readonly TimeProvider _timeProvider;
 
     public CircuitBreakerRegistry(
         IServiceScopeFactory? scopeFactory = null,
         IOperationalMetrics? metrics = null,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        TimeProvider? timeProvider = null)
     {
         _scopeFactory = scopeFactory;
         _metrics = metrics;
         _loggerFactory = loggerFactory;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public ICircuitBreaker GetOrCreate(string name, CircuitBreakerProfileOptions? options = null)
@@ -32,7 +35,7 @@ public sealed class CircuitBreakerRegistry : ICircuitBreakerRegistry
         {
             var opts = options ?? new CircuitBreakerProfileOptions();
             var logger = _loggerFactory?.CreateLogger<CircuitBreakerImpl>() ?? NullLogger<CircuitBreakerImpl>.Instance;
-            return new CircuitBreakerImpl(n, opts, _scopeFactory, _metrics, logger);
+            return new CircuitBreakerImpl(n, opts, _scopeFactory, _metrics, logger, _timeProvider);
         });
     }
 
@@ -58,6 +61,7 @@ public sealed class CircuitBreakerRegistry : ICircuitBreakerRegistry
         private readonly IServiceScopeFactory? _scopeFactory;
         private readonly IOperationalMetrics? _metrics;
         private readonly ILogger _logger;
+        private readonly TimeProvider _timeProvider;
         private readonly object _lock = new();
 
         private CircuitState _state = CircuitState.Closed;
@@ -74,13 +78,15 @@ public sealed class CircuitBreakerRegistry : ICircuitBreakerRegistry
             CircuitBreakerProfileOptions options,
             IServiceScopeFactory? scopeFactory,
             IOperationalMetrics? metrics,
-            ILogger logger)
+            ILogger logger,
+            TimeProvider? timeProvider = null)
         {
             Name = name;
             _options = options;
             _scopeFactory = scopeFactory;
             _metrics = metrics;
             _logger = logger;
+            _timeProvider = timeProvider ?? TimeProvider.System;
         }
 
         public CircuitState State
@@ -228,7 +234,7 @@ public sealed class CircuitBreakerRegistry : ICircuitBreakerRegistry
         {
             if (_state == CircuitState.Open && _openedAtUtc.HasValue)
             {
-                if (DateTime.UtcNow - _openedAtUtc.Value >= _options.BreakDuration)
+                if (_timeProvider.GetUtcNow().UtcDateTime - _openedAtUtc.Value >= _options.BreakDuration)
                 {
                     _logger.LogInformation("Break duration elapsed for {Dependency}. Entering HalfOpen state.", Name);
                     TransitionToUnderLock(CircuitState.HalfOpen);
@@ -248,7 +254,7 @@ public sealed class CircuitBreakerRegistry : ICircuitBreakerRegistry
 
             if (newState == CircuitState.Open)
             {
-                _openedAtUtc = DateTime.UtcNow;
+                _openedAtUtc = _timeProvider.GetUtcNow().UtcDateTime;
                 _halfOpenTrialsIssued = 0;
                 _metrics?.RecordCircuitOpened();
             }

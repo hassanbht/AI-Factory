@@ -121,6 +121,22 @@ public sealed class ApiExceptionMapper
                 FailureCategory.Infrastructure,
                 ShouldAudit: true),
 
+            DbUpdateException dbEx when IsUniqueConstraintViolation(dbEx) => new ApiErrorMapping(
+                StatusCodes.Status409Conflict,
+                "Resource already exists",
+                "A resource with the specified unique field already exists.",
+                "conflict",
+                FailureCategory.Validation,
+                ShouldAudit: false),
+
+            Microsoft.Data.Sqlite.SqliteException sqliteEx when IsUniqueConstraintViolation(sqliteEx) => new ApiErrorMapping(
+                StatusCodes.Status409Conflict,
+                "Resource already exists",
+                "A resource with the specified unique field already exists.",
+                "conflict",
+                FailureCategory.Validation,
+                ShouldAudit: false),
+
             DbUpdateException or DbException => new ApiErrorMapping(
                 StatusCodes.Status500InternalServerError,
                 "Database error",
@@ -178,5 +194,31 @@ public sealed class ApiExceptionMapper
         problemDetails.Extensions["message"] = sanitizedDetail;
 
         return (mapping, problemDetails);
+    }
+
+    public static bool IsUniqueConstraintViolation(Exception? ex)
+    {
+        if (ex is null)
+        {
+            return false;
+        }
+
+        if (ex is Microsoft.Data.Sqlite.SqliteException sqliteEx)
+        {
+            if (sqliteEx.SqliteErrorCode == 19 &&
+                (sqliteEx.SqliteExtendedErrorCode == 2067 || // SQLITE_CONSTRAINT_UNIQUE
+                 sqliteEx.SqliteExtendedErrorCode == 1555 || // SQLITE_CONSTRAINT_PRIMARYKEY
+                 sqliteEx.Message.Contains("UNIQUE constraint failed", StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+        }
+
+        if (ex.InnerException is not null && IsUniqueConstraintViolation(ex.InnerException))
+        {
+            return true;
+        }
+
+        return false;
     }
 }

@@ -1,0 +1,1354 @@
+با توجه به اینکه **Phase 17.4.10 آخرین فاز برنامه‌ریزی‌شده برای Production Readiness بوده است**، مرحله بعدی منطقی دیگر نباید صرفاً یک Runbook یا تست تکراری باشد. همچنین از گزارش قبلی مشخص است که چند مورد واقعی هنوز باید بهبود پیدا کنند؛ مهم‌ترین آن‌ها:
+
+* Worker degradation در تست‌های فشار کشف شده بود و باید observability آن کامل شود.
+* `DbUpdateException` مربوط به duplicate slug باید به `409 Conflict` تبدیل شود.
+* Runbook فعلی به Backup/Restore اشاره می‌کند، اما از گزارش مشخص نیست که یک **Disaster Recovery و Backup system واقعی** به‌صورت کامل پیاده‌سازی شده باشد.
+* Production Readiness بدون SLO، Alerting و Recovery validation هنوز کامل نیست.
+
+بنابراین پیشنهاد من برای مرحله بعدی این است:
+
+# Phase 17.5.1 — Production Observability, Alerting, Backup & Disaster Recovery
+
+این مرحله، پروژه را از **Production Ready Codebase** به **Production Operable System** نزدیک می‌کند.
+
+پرامپت دقیق زیر را می‌توانی مستقیماً به AI Coding Agent بدهی:
+
+---
+
+# Phase 17.5.1 — Production Observability, Alerting, Backup & Disaster Recovery
+
+## Mission
+
+The AI Factory platform has completed Phase 17.4 Production Readiness, including:
+
+* Global exception handling and RFC ProblemDetails.
+* Correlation IDs.
+* Retry, timeout, circuit breaker and bulkhead resilience.
+* Graceful shutdown and cancellation propagation.
+* Security hardening.
+* Configuration and secret management.
+* Database resilience and optimistic concurrency.
+* Production Docker deployment readiness.
+* Load, stress and failure testing.
+* Production operational runbook.
+
+The next objective is to move from a **production-ready application** to a **production-operable platform**.
+
+Implement Phase 17.5.1 with focus on:
+
+1. Production observability.
+2. Metrics and service-level indicators.
+3. Health degradation visibility.
+4. Alert-ready operational state.
+5. Automated SQLite backup.
+6. Backup verification.
+7. Restore workflows.
+8. Disaster recovery diagnostics.
+9. Recovery testing.
+10. Fixing the production gaps discovered during Phase 17.4.9.
+
+Do not rewrite previously completed resilience, security, database, deployment, or runbook functionality unless required for integration.
+
+Preserve Clean Architecture.
+
+---
+
+# 1. Mandatory Production Gaps to Fix First
+
+Before adding new features, address the real gaps discovered during Phase 17.4.9.
+
+## 1.1 Worker Degradation Observability
+
+Phase 17.4.9 discovered:
+
+> OrchestrationRunWorker's poll loop does not update IWorkerHealthCoordinator or operational metrics correctly when transient dependency failures occur.
+
+Implement complete worker lifecycle reporting.
+
+Required lifecycle states:
+
+```text
+Starting
+Ready
+Degraded
+Stopping
+Faulted
+```
+
+Requirements:
+
+* Consecutive transient poll failures must transition:
+
+```text
+Ready -> Degraded
+```
+
+* Successful recovery must transition:
+
+```text
+Degraded -> Ready
+```
+
+* Fatal unrecoverable failure must transition:
+
+```text
+Any -> Faulted
+```
+
+* Shutdown must transition:
+
+```text
+Starting/Ready/Degraded -> Stopping
+```
+
+When degraded:
+
+* `worker.live` must remain present.
+* `worker.ready` must be removed.
+* `worker.degraded` must exist.
+* Operational metrics must record degradation.
+* Structured logs must include:
+
+  * worker state
+  * failure category
+  * consecutive failure count
+  * correlation/operation information where available
+
+Recovery must automatically restore:
+
+```text
+worker.ready
+```
+
+and remove:
+
+```text
+worker.degraded
+```
+
+Do not require a worker restart for normal transient recovery.
+
+---
+
+## 1.2 Duplicate Resource Conflict Mapping
+
+Phase 17.4.9 discovered that duplicate project slug creation correctly fails at the database level but may surface as:
+
+```text
+HTTP 500
+```
+
+This must be corrected.
+
+Introduce a safe database constraint violation translation mechanism.
+
+Requirements:
+
+```text
+Unique constraint violation
+        ↓
+Domain/Application conflict abstraction
+        ↓
+ConflictException
+        ↓
+HTTP 409 Conflict
+```
+
+Do not expose:
+
+* SQL statements.
+* database names.
+* index names.
+* connection strings.
+* provider-specific raw exception messages.
+
+The API response must remain RFC ProblemDetails compliant.
+
+Example:
+
+```json
+{
+  "type": "https://httpstatuses.com/409",
+  "title": "Operation conflict",
+  "status": 409,
+  "detail": "A resource with the same unique value already exists.",
+  "code": "conflict",
+  "correlationId": "..."
+}
+```
+
+The implementation should support SQLite and be extensible for PostgreSQL.
+
+Do not hard-code project-specific logic inside `ApiExceptionMapper`.
+
+The provider-specific database exception translation belongs in Infrastructure.
+
+---
+
+# 2. Observability Architecture
+
+Introduce a production-ready observability abstraction without tightly coupling Application or Domain layers to a specific vendor.
+
+Recommended architecture:
+
+```text
+Domain
+  ↓
+Application
+  IOperationalMetrics
+  IObservabilityService
+  IServiceLevelObjectiveService
+  ↓
+Infrastructure
+  Metrics adapters
+  Activity instrumentation
+  Snapshot aggregation
+  ↓
+API / Worker
+  HTTP metrics
+  Worker metrics
+  Dependency metrics
+  Diagnostics endpoints
+```
+
+Do not introduce OpenTelemetry dependencies into Domain entities.
+
+Observability providers must remain replaceable.
+
+---
+
+# 3. Operational Metrics Expansion
+
+Extend operational metrics to include production-relevant counters and gauges.
+
+## 3.1 HTTP Metrics
+
+Track:
+
+```text
+HttpRequestsTotal
+HttpRequestsFailed
+HttpRequestsRateLimited
+HttpRequestsInFlight
+HttpRequestDuration
+```
+
+Break down where possible by:
+
+```text
+HTTP method
+route
+status class
+```
+
+Avoid high-cardinality labels.
+
+Do not use:
+
+* correlation ID
+* project ID
+* user-generated names
+* request path with GUIDs
+
+as metric dimensions.
+
+---
+
+## 3.2 Worker Metrics
+
+Track:
+
+```text
+WorkerState
+WorkerDegradedTransitions
+WorkerRecoveryTransitions
+WorkerFaultTransitions
+WorkerPollFailures
+WorkerConsecutiveFailures
+WorkerActiveExecutions
+WorkerPendingClaims
+```
+
+The metrics must distinguish:
+
+```text
+Ready
+Degraded
+Faulted
+```
+
+without requiring container log parsing.
+
+---
+
+## 3.3 Dependency Resilience Metrics
+
+Expand existing resilience metrics where necessary.
+
+Track:
+
+```text
+CircuitState
+CircuitOpenDuration
+CircuitRejectedTotal
+CircuitHalfOpenTrials
+BulkheadActiveExecutions
+BulkheadQueuedExecutions
+BulkheadRejectedTotal
+RetryAttemptsTotal
+RetryExhaustedTotal
+TimeoutTotal
+DependencyFailuresTotal
+```
+
+Dependency names must remain low-cardinality.
+
+Examples:
+
+```text
+AgentExecution
+ProviderCall
+BuildExecution
+TestExecution
+RepairExecution
+BackgroundOperation
+Database
+```
+
+---
+
+## 3.4 Database Metrics
+
+Track:
+
+```text
+DatabaseOperationsTotal
+DatabaseFailuresTotal
+DatabaseRetriesTotal
+DatabaseConcurrencyConflictsTotal
+DatabaseConstraintConflictsTotal
+DatabaseTransactionsTotal
+DatabaseTransactionFailuresTotal
+DatabaseHealthState
+```
+
+Do not expose SQL or sensitive connection information.
+
+---
+
+# 4. Service Level Indicators
+
+Introduce internal SLI calculations.
+
+Create abstractions similar to:
+
+```text
+IServiceLevelIndicatorService
+ServiceLevelIndicatorSnapshot
+ServiceLevelIndicatorDefinition
+```
+
+The system must calculate at least:
+
+## 4.1 API Availability
+
+```text
+Successful requests / total requests
+```
+
+Exclude client-side invalid requests from infrastructure availability calculations where appropriate.
+
+Recommended:
+
+```text
+5xx failures count against availability.
+429 may be reported separately.
+4xx generally do not count as service availability failures.
+```
+
+---
+
+## 4.2 API Latency
+
+Calculate:
+
+```text
+P50
+P95
+P99
+```
+
+for relevant request windows.
+
+Avoid unbounded in-memory metric storage.
+
+Use bounded rolling windows.
+
+Configuration example:
+
+```json
+"Observability": {
+  "MetricsWindow": {
+    "Enabled": true,
+    "MaxSamples": 10000
+  }
+}
+```
+
+Validate configuration.
+
+---
+
+## 4.3 Worker Reliability
+
+Calculate:
+
+```text
+WorkerAvailability
+WorkerDegradedDuration
+WorkerRecoveryCount
+WorkerFaultCount
+```
+
+---
+
+## 4.4 Dependency Availability
+
+Calculate:
+
+```text
+DependencySuccessRate
+DependencyFailureRate
+CircuitOpenDuration
+```
+
+---
+
+# 5. Service Level Objectives
+
+Introduce configurable internal SLO definitions.
+
+Example configuration:
+
+```json
+"ServiceLevelObjectives": {
+  "Enabled": true,
+  "ApiAvailabilityTarget": 99.9,
+  "ApiP95LatencyMs": 2000,
+  "WorkerAvailabilityTarget": 99.5,
+  "ProviderAvailabilityTarget": 99.0
+}
+```
+
+Requirements:
+
+* Validate ranges at startup.
+* Do not fail startup merely because an SLO is temporarily violated.
+* Startup validation only validates configuration.
+* Runtime SLO violations must be visible through diagnostics.
+
+Create:
+
+```text
+ServiceLevelObjectiveStatus
+
+Healthy
+Warning
+Breached
+InsufficientData
+```
+
+Example:
+
+```text
+Current API availability: 99.95%
+Target: 99.90%
+Status: Healthy
+```
+
+---
+
+# 6. Operational Status Aggregation
+
+Introduce a high-level platform operational state.
+
+Example:
+
+```text
+PlatformOperationalState
+
+Healthy
+Degraded
+Unhealthy
+```
+
+Implement:
+
+```text
+IPlatformOperationalStatusService
+PlatformOperationalSnapshot
+```
+
+Aggregation should consider:
+
+```text
+API readiness
+Database health
+Worker state
+Circuit breaker state
+SLO state
+Recent critical failures
+```
+
+Suggested rules:
+
+```text
+Healthy:
+- Database healthy
+- Worker ready
+- No critical circuit open
+- No critical SLO breach
+
+Degraded:
+- Worker degraded
+- Non-critical dependency circuit open
+- Warning SLO state
+- Elevated failures
+
+Unhealthy:
+- Database unavailable
+- Worker faulted
+- Critical dependency unavailable
+- Readiness failure
+```
+
+Keep this policy configurable and testable.
+
+---
+
+# 7. Operational Diagnostics Endpoint
+
+Add:
+
+```http
+GET /api/operations/status
+```
+
+This endpoint must be protected using the existing operational security middleware and rate limiting.
+
+Response should contain:
+
+```json
+{
+  "state": "Degraded",
+  "checkedAtUtc": "...",
+  "api": {},
+  "worker": {},
+  "database": {},
+  "dependencies": [],
+  "serviceLevelObjectives": [],
+  "recentFailures": {}
+}
+```
+
+Never expose:
+
+* secrets
+* API keys
+* connection strings
+* raw exception messages
+* stack traces
+* SQL
+* file system paths
+
+The response must integrate with existing diagnostics:
+
+```text
+/operations/metrics
+/operations/database
+/operations/configuration
+/operations/deployment
+/operations/resilience
+```
+
+Do not duplicate those complete payloads.
+
+Provide an aggregated operational summary.
+
+---
+
+# 8. Automated SQLite Backup Architecture
+
+Implement production-safe SQLite backup support.
+
+Create abstractions:
+
+```text
+IBackupService
+IBackupRepository
+IBackupDiagnosticsService
+```
+
+Recommended models:
+
+```text
+BackupOptions
+BackupSnapshot
+BackupResult
+BackupStatus
+```
+
+Possible statuses:
+
+```text
+Succeeded
+Failed
+Verified
+Invalid
+Restored
+```
+
+Configuration:
+
+```json
+"Backup": {
+  "Enabled": true,
+  "Provider": "FileSystem",
+  "ScheduleMinutes": 60,
+  "RetentionCount": 24,
+  "VerificationEnabled": true,
+  "Directory": "/var/lib/ai-factory/backups"
+}
+```
+
+Validate:
+
+* positive schedule.
+* safe retention count.
+* valid writable directory.
+* backup directory must not overwrite the live database file.
+* production configuration must not store backups in ephemeral container filesystem.
+
+---
+
+# 9. SQLite Backup Correctness
+
+Do not implement backups by blindly copying a SQLite file while the database is active.
+
+Use a SQLite-consistent backup strategy.
+
+The backup must represent a transactionally consistent database state.
+
+The implementation should safely handle:
+
+```text
+WAL mode
+active readers
+active writers
+busy conditions
+temporary retryable failures
+```
+
+Reuse existing:
+
+```text
+IDatabaseResiliencePolicy
+```
+
+where appropriate.
+
+Backup failures must not crash:
+
+```text
+API
+Worker
+```
+
+A failed scheduled backup should:
+
+```text
+record metrics
+write structured logs
+record audit event
+update diagnostics
+```
+
+---
+
+# 10. Backup Verification
+
+A successful file creation is not enough.
+
+Every backup should optionally be verified.
+
+Verification should include:
+
+1. File exists.
+2. File size > 0.
+3. SQLite database can be opened.
+4. Integrity check succeeds.
+5. Backup metadata matches expected database identity/version where possible.
+
+Do not perform expensive verification synchronously in HTTP request paths.
+
+Scheduled backups should run as background operations.
+
+---
+
+# 11. Backup Retention
+
+Implement retention cleanup.
+
+Requirements:
+
+* Keep newest `RetentionCount` valid backups.
+* Never delete the currently executing backup.
+* Do not delete backups marked invalid until diagnostics have recorded them according to retention policy.
+* Cleanup failures must not delete unrelated files.
+* Backup directory operations must defend against path traversal.
+
+Use deterministic file naming.
+
+Example:
+
+```text
+ai-factory-2026-09-03T22-15-00Z.db
+```
+
+---
+
+# 12. Backup Audit Events & Metrics
+
+Add appropriate audit events.
+
+Suggested:
+
+```text
+BackupStarted
+BackupSucceeded
+BackupFailed
+BackupVerified
+BackupInvalid
+BackupRestored
+BackupRetentionCleanup
+```
+
+Metrics:
+
+```text
+BackupsTotal
+BackupFailuresTotal
+BackupVerificationFailuresTotal
+BackupDuration
+LastSuccessfulBackupUtc
+LastBackupStatus
+BackupStorageBytes
+```
+
+---
+
+# 13. Backup Diagnostics
+
+Add:
+
+```http
+GET /api/operations/backups
+```
+
+Protected by existing operational endpoint security.
+
+Return safe metadata:
+
+```text
+last backup time
+last successful backup time
+last backup status
+backup count
+verified backup count
+total backup size
+retention configuration
+last failure category
+```
+
+Do not expose:
+
+```text
+secrets
+connection strings
+raw exception text
+```
+
+File paths should be omitted or sanitized unless explicitly safe.
+
+---
+
+# 14. Restore and Disaster Recovery
+
+Do not automatically restore production databases.
+
+Implement a controlled restore workflow.
+
+Recommended approach:
+
+```text
+CLI mode
+```
+
+Example:
+
+```bash
+dotnet AI.Factory.Api.dll --restore-backup <backup-id>
+```
+
+or a dedicated recovery executable if architecturally cleaner.
+
+Requirements:
+
+1. Restore must require explicit confirmation.
+2. Restore must never silently overwrite a database.
+3. The target database must be stopped/offline.
+4. Backup must be verified before restore.
+5. Existing database must be preserved as a pre-restore safety copy where possible.
+6. Restore success must be verified using SQLite integrity validation.
+7. Restore operations must generate audit and diagnostic information.
+
+For non-interactive container environments, confirmation should require an explicit environment variable or command flag.
+
+Example concept:
+
+```text
+--restore-confirm
+```
+
+Do not expose restore functionality through a public HTTP endpoint.
+
+---
+
+# 15. Disaster Recovery Readiness Check
+
+Create:
+
+```text
+IDisasterRecoveryReadinessService
+DisasterRecoverySnapshot
+```
+
+Evaluate:
+
+```text
+IsBackupEnabled
+LastSuccessfulBackupAge
+BackupVerificationStatus
+RetentionHealth
+RestoreCapabilityAvailable
+DatabaseRecoveryReadiness
+```
+
+Add:
+
+```http
+GET /api/operations/disaster-recovery
+```
+
+The endpoint must not perform a restore.
+
+It reports readiness only.
+
+Example:
+
+```json
+{
+  "state": "Healthy",
+  "backupEnabled": true,
+  "lastSuccessfulBackupUtc": "...",
+  "lastSuccessfulBackupAgeMinutes": 42,
+  "latestBackupVerified": true,
+  "validBackupCount": 12,
+  "restoreProcedureAvailable": true
+}
+```
+
+Possible states:
+
+```text
+Healthy
+Warning
+Critical
+Unknown
+```
+
+---
+
+# 16. Background Backup Worker
+
+Implement scheduled backups as a dedicated hosted service.
+
+Requirements:
+
+```text
+BackgroundService / IHostedService
+```
+
+Must support:
+
+```text
+CancellationToken
+graceful shutdown
+bounded execution
+failure isolation
+structured logging
+existing resilience patterns
+```
+
+Do not allow overlapping backups.
+
+If one backup is still running when the next schedule arrives:
+
+```text
+skip or defer according to explicit configuration
+```
+
+Record the event.
+
+The backup worker must not block orchestration processing.
+
+Use a dedicated resilience profile if needed:
+
+```text
+BackupExecution
+```
+
+Suggested:
+
+```text
+Circuit breaker: disabled
+Bulkhead concurrency: 1
+Bounded timeout
+Retry transient database/file failures
+```
+
+---
+
+# 17. Production Alerts Abstraction
+
+Do not integrate directly with Slack, Teams, PagerDuty, or email unless an existing abstraction already exists.
+
+Instead create provider-neutral alerting abstractions.
+
+Example:
+
+```text
+IOperationalAlertPublisher
+OperationalAlert
+OperationalAlertSeverity
+```
+
+Severity:
+
+```text
+Info
+Warning
+Critical
+```
+
+Alert candidates:
+
+```text
+WorkerDegraded
+WorkerFaulted
+DatabaseUnavailable
+BackupFailed
+BackupVerificationFailed
+NoRecentSuccessfulBackup
+CriticalCircuitOpen
+SLOBreached
+MigrationFailure
+```
+
+Provide at minimum:
+
+```text
+NoOpOperationalAlertPublisher
+InMemoryOperationalAlertPublisher
+```
+
+for production-neutral composition and testing.
+
+The architecture must allow future implementations such as:
+
+```text
+Webhook
+Email
+Slack
+Teams
+PagerDuty
+```
+
+without changing Application logic.
+
+---
+
+# 18. Health Check Integration
+
+Do not overload liveness checks.
+
+Maintain:
+
+```text
+/health/live
+```
+
+for process liveness.
+
+Readiness:
+
+```text
+/health/ready
+```
+
+should continue representing whether the service can accept traffic.
+
+Add disaster recovery information carefully.
+
+Do not mark the API immediately unready because:
+
+```text
+a scheduled backup temporarily failed once
+```
+
+However, prolonged absence of valid backups should be visible as:
+
+```text
+Degraded
+```
+
+in operational status and readiness metadata where supported.
+
+Avoid turning non-critical operational degradation into process death.
+
+---
+
+# 19. Clean Architecture Rules
+
+Maintain dependency direction:
+
+```text
+Domain
+    ↓
+Application
+    ↓
+Infrastructure
+    ↓
+API / Worker
+```
+
+Rules:
+
+* No Infrastructure dependency in Domain.
+* No HTTP types in Application.
+* No EF Core types leaking into Application contracts.
+* No SQLite-specific exception logic inside API middleware.
+* No secrets in diagnostics.
+* No database implementation details in Domain.
+* Reuse existing resilience abstractions.
+* Reuse existing `ISecretProvider`.
+* Reuse existing operational metrics.
+* Reuse existing `SensitiveDataSanitizer`.
+
+---
+
+# 20. Configuration
+
+Add strongly typed validated options.
+
+Suggested:
+
+```text
+ObservabilityOptions
+ServiceLevelObjectiveOptions
+BackupOptions
+DisasterRecoveryOptions
+OperationalAlertingOptions
+```
+
+Requirements:
+
+```text
+Validate() methods
+fail-fast invalid configuration
+API and Worker composition root parity where relevant
+production-safe defaults
+test configuration
+```
+
+Never require secrets in `appsettings.json`.
+
+---
+
+# 21. Testing Requirements
+
+Add comprehensive automated tests.
+
+## 21.1 Worker Degradation
+
+Test:
+
+* Ready -> Degraded.
+* Degraded -> Ready.
+* Degraded health files.
+* metrics updated.
+* no restart required.
+* repeated transient failures.
+* cancellation during degraded state.
+
+---
+
+## 21.2 Constraint Conflict Translation
+
+Test:
+
+* duplicate slug.
+* unique constraint.
+* safe conflict translation.
+* HTTP 409.
+* no SQL leakage.
+* no provider-specific message leakage.
+
+---
+
+## 21.3 Metrics
+
+Test:
+
+* HTTP metrics.
+* worker metrics.
+* database metrics.
+* dependency metrics.
+* bounded metric storage.
+* concurrent metric recording.
+
+---
+
+## 21.4 SLO
+
+Test:
+
+* Healthy.
+* Warning.
+* Breached.
+* InsufficientData.
+* invalid configuration.
+* rolling window expiration.
+
+---
+
+## 21.5 Backup
+
+Test:
+
+* successful backup.
+* retryable backup failure.
+* backup verification.
+* invalid backup detection.
+* retention cleanup.
+* no overlapping backups.
+* cancellation.
+* graceful shutdown.
+* path traversal defense.
+* safe failure isolation.
+
+---
+
+## 21.6 Restore
+
+Test:
+
+* restore requires explicit confirmation.
+* invalid backup rejected.
+* verified backup restored successfully.
+* existing database protected.
+* restore integrity verification.
+* audit events recorded.
+
+Do not perform destructive restore against developer data.
+
+Use temporary isolated databases.
+
+---
+
+## 21.7 Disaster Recovery
+
+Test:
+
+```text
+Healthy
+Warning
+Critical
+Unknown
+```
+
+scenarios.
+
+Test:
+
+```text
+No backup
+Old backup
+Invalid backup
+Verified recent backup
+Retention exhausted
+```
+
+---
+
+## 21.8 Regression
+
+Run:
+
+```powershell
+dotnet build apps/AI.Factory.slnx
+```
+
+Then:
+
+```powershell
+dotnet test apps/AI.Factory.slnx --blame-hang-timeout 90s
+```
+
+All existing tests must remain passing.
+
+---
+
+# 22. Documentation
+
+Create:
+
+```text
+.ai/context/phase-17.5.1-production-observability-backup-disaster-recovery.md
+```
+
+Document:
+
+1. Observability architecture.
+2. Metrics model.
+3. SLI calculation.
+4. SLO evaluation.
+5. Worker degradation behavior.
+6. Platform operational states.
+7. Backup architecture.
+8. Backup verification.
+9. Retention policy.
+10. Restore procedure.
+11. Disaster recovery readiness.
+12. Alert abstraction.
+13. Operational diagnostics.
+14. Production configuration examples.
+15. Known limitations.
+16. Future PostgreSQL considerations.
+
+---
+
+# 23. Required Final Walkthrough
+
+At completion provide a detailed walkthrough containing:
+
+## Architecture
+
+Explain:
+
+```text
+Request
+   ↓
+Correlation
+   ↓
+Metrics
+   ↓
+Operational Status
+   ↓
+SLO Evaluation
+```
+
+and:
+
+```text
+SQLite
+   ↓
+Consistent Backup
+   ↓
+Verification
+   ↓
+Retention
+   ↓
+Disaster Recovery Readiness
+```
+
+## Files Created
+
+List every created file.
+
+## Files Modified
+
+List every modified file.
+
+## Worker Fixes
+
+Explicitly explain how the Phase 17.4.9 worker degradation finding was fixed.
+
+## Conflict Fix
+
+Explicitly explain how duplicate database constraints now produce HTTP 409 instead of HTTP 500.
+
+## Verification
+
+Provide:
+
+```text
+Build result
+Test result
+Total passing tests
+Docker validation
+Backup verification scenario
+Restore verification scenario
+```
+
+## Known Limitations
+
+Do not hide limitations.
+
+Explicitly list any:
+
+* unsupported backup provider.
+* SQLite-specific constraints.
+* manual recovery steps.
+* alert providers not yet implemented.
+* observability limitations.
+* future PostgreSQL migration considerations.
+
+---
+
+# Definition of Done
+
+Phase 17.5.1 is complete only when:
+
+* Phase 17.4.9 production findings are fixed.
+* Worker degradation is observable.
+* Unique constraint conflicts return safe HTTP 409.
+* Platform operational state exists.
+* SLI/SLO evaluation exists.
+* Metrics remain bounded and concurrency-safe.
+* SQLite backups are transactionally consistent.
+* Backups are verified.
+* Retention works safely.
+* Restore requires explicit confirmation.
+* Disaster recovery readiness is diagnosable.
+* Backup failures do not crash API or Worker.
+* No secret leaks exist.
+* All diagnostics remain protected.
+* Clean Architecture is preserved.
+* Build succeeds.
+* All existing tests pass.
+* New tests pass.
+* Documentation is complete.
+* Known limitations are explicitly documented.
+
+**Do not claim completion until the entire solution builds successfully and the full automated test suite passes.**

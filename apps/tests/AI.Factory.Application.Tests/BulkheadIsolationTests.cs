@@ -161,7 +161,14 @@ public sealed class BulkheadIsolationTests
             await bulkhead.AcquireAsync(cts.Token);
         });
 
-        await Task.Delay(20);
+        // Poll instead of a fixed delay — under thread-pool contention (e.g. concurrent
+        // stress-test runs) a fixed 20ms wasn't always enough for queuedTask to start.
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (bulkhead.GetSnapshot().QueuedExecutions < 1 && sw.ElapsedMilliseconds < 2000)
+        {
+            await Task.Delay(10);
+        }
+
         Assert.Equal(1, bulkhead.GetSnapshot().QueuedExecutions);
 
         cts.Cancel();

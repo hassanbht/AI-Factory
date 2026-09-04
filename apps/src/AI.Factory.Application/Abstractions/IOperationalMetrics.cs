@@ -55,6 +55,12 @@ public interface IOperationalMetrics
 
     void RecordWorkerStopped();
 
+    void RecordWorkerPollFailure();
+
+    void RecordWorkerDegraded();
+
+    void RecordWorkerRecovered();
+
     void RecordOperationsDrained(int count);
 
     void RecordOperationsCancelled(int count);
@@ -88,6 +94,16 @@ public interface IOperationalMetrics
     void RecordDatabaseLockedFailure();
 
     void RecordDatabaseTransactionFailure();
+
+    void RecordBackupSucceeded();
+
+    void RecordBackupFailed();
+
+    void RecordBackupValidated();
+
+    void RecordRestoreSucceeded();
+
+    void RecordRestoreFailed();
 
     OperationalMetricsSnapshot GetSnapshot();
 }
@@ -133,6 +149,9 @@ public sealed record OperationalMetricsSnapshot(
     long ShutdownInitiated = 0,
     long WorkerStopping = 0,
     long WorkerStopped = 0,
+    long WorkerPollFailures = 0,
+    long WorkerDegraded = 0,
+    long WorkerRecovered = 0,
     long OperationsDrained = 0,
     long OperationsCancelled = 0,
     long ShutdownTimedOut = 0,
@@ -152,7 +171,12 @@ public sealed record OperationalMetricsSnapshot(
     long DatabaseLockedFailures = 0,
     long DatabaseTransactionFailures = 0,
     double? AverageDatabaseOperationDurationMs = null,
-    long? TotalDatabaseOperationDurationMs = null);
+    long? TotalDatabaseOperationDurationMs = null,
+    long BackupSucceeded = 0,
+    long BackupFailed = 0,
+    long BackupValidated = 0,
+    long RestoreSucceeded = 0,
+    long RestoreFailed = 0);
 
 public sealed class OperationalMetrics : IOperationalMetrics
 {
@@ -210,6 +234,9 @@ public sealed class OperationalMetrics : IOperationalMetrics
     private long _shutdownInitiated;
     private long _workerStopping;
     private long _workerStopped;
+    private long _workerPollFailures;
+    private long _workerDegraded;
+    private long _workerRecovered;
     private long _operationsDrained;
     private long _operationsCancelled;
     private long _shutdownTimedOut;
@@ -220,6 +247,12 @@ public sealed class OperationalMetrics : IOperationalMetrics
     private long _configurationValidationFailed;
     private long _secretResolutionFailed;
     private long _requiredSecretMissing;
+
+    private long _backupSucceeded;
+    private long _backupFailed;
+    private long _backupValidated;
+    private long _restoreSucceeded;
+    private long _restoreFailed;
 
     public void RecordOperationStarted() => Interlocked.Increment(ref _operationsStarted);
 
@@ -333,6 +366,12 @@ public sealed class OperationalMetrics : IOperationalMetrics
 
     public void RecordWorkerStopped() => Interlocked.Increment(ref _workerStopped);
 
+    public void RecordWorkerPollFailure() => Interlocked.Increment(ref _workerPollFailures);
+
+    public void RecordWorkerDegraded() => Interlocked.Increment(ref _workerDegraded);
+
+    public void RecordWorkerRecovered() => Interlocked.Increment(ref _workerRecovered);
+
     public void RecordOperationsDrained(int count) => Interlocked.Add(ref _operationsDrained, count);
 
     public void RecordOperationsCancelled(int count) => Interlocked.Add(ref _operationsCancelled, count);
@@ -366,6 +405,12 @@ public sealed class OperationalMetrics : IOperationalMetrics
     public void RecordDatabaseBusyFailure() => Interlocked.Increment(ref _databaseBusyFailures);
     public void RecordDatabaseLockedFailure() => Interlocked.Increment(ref _databaseLockedFailures);
     public void RecordDatabaseTransactionFailure() => Interlocked.Increment(ref _databaseTransactionFailures);
+
+    public void RecordBackupSucceeded() => Interlocked.Increment(ref _backupSucceeded);
+    public void RecordBackupFailed() => Interlocked.Increment(ref _backupFailed);
+    public void RecordBackupValidated() => Interlocked.Increment(ref _backupValidated);
+    public void RecordRestoreSucceeded() => Interlocked.Increment(ref _restoreSucceeded);
+    public void RecordRestoreFailed() => Interlocked.Increment(ref _restoreFailed);
 
     public OperationalMetricsSnapshot GetSnapshot()
     {
@@ -410,6 +455,9 @@ public sealed class OperationalMetrics : IOperationalMetrics
             Interlocked.Read(ref _shutdownInitiated),
             Interlocked.Read(ref _workerStopping),
             Interlocked.Read(ref _workerStopped),
+            Interlocked.Read(ref _workerPollFailures),
+            Interlocked.Read(ref _workerDegraded),
+            Interlocked.Read(ref _workerRecovered),
             Interlocked.Read(ref _operationsDrained),
             Interlocked.Read(ref _operationsCancelled),
             Interlocked.Read(ref _shutdownTimedOut),
@@ -429,7 +477,12 @@ public sealed class OperationalMetrics : IOperationalMetrics
             Interlocked.Read(ref _databaseLockedFailures),
             Interlocked.Read(ref _databaseTransactionFailures),
             _databaseDuration.Average,
-            _databaseDuration.Total);
+            _databaseDuration.Total,
+            Interlocked.Read(ref _backupSucceeded),
+            Interlocked.Read(ref _backupFailed),
+            Interlocked.Read(ref _backupValidated),
+            Interlocked.Read(ref _restoreSucceeded),
+            Interlocked.Read(ref _restoreFailed));
     }
 
     /// <summary>Count + running total, so average is derived rather than stored — no raw samples kept.</summary>

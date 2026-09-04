@@ -9,9 +9,13 @@ ENV DOTNET_RUNNING_IN_CONTAINER=true \
     DOTNET_ENVIRONMENT=Production \
     AI_FACTORY_HEALTH_DIR=/tmp/ai-factory-health
 
-# Healthcheck testing the presence of worker readiness signal
+# Healthcheck represents LIVENESS ("is the process alive?"), not readiness — a
+# worker.degraded (transient dependency failure) worker is still alive and must
+# not be restarted by the container orchestrator, so this intentionally checks
+# worker.live only. Deployment orchestrators that need readiness semantics
+# (e.g. to route work / gate rollout) should poll worker.ready separately.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD test -f /tmp/ai-factory-health/worker.ready || exit 1
+    CMD test -f /tmp/ai-factory-health/worker.live || exit 1
 
 # Stage 2: Build & Restore
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build

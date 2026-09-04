@@ -165,4 +165,69 @@ public sealed class ApiExceptionMapperTests
         Assert.Equal("correlation-xyz-789", problemDetails.Extensions["correlationId"]);
         Assert.Equal("validation_error", problemDetails.Extensions["code"]);
     }
+
+    [Fact]
+    public void DbUpdateException_WithUniqueConstraint_MapsTo409Conflict()
+    {
+        var sqliteEx = new Microsoft.Data.Sqlite.SqliteException("SQLite Error 19: 'UNIQUE constraint failed: Projects.Slug'.", 19, 2067);
+        var dbEx = new Microsoft.EntityFrameworkCore.DbUpdateException("An error occurred while saving the entity changes.", sqliteEx);
+
+        var mapping = _mapper.Map(dbEx);
+
+        Assert.Equal(StatusCodes.Status409Conflict, mapping.StatusCode);
+        Assert.Equal("Resource already exists", mapping.Title);
+        Assert.Equal("conflict", mapping.Code);
+        Assert.Equal("A resource with the specified unique field already exists.", mapping.Detail);
+        Assert.Equal(FailureCategory.Validation, mapping.FailureCategory);
+        Assert.False(mapping.ShouldAudit);
+    }
+
+    [Fact]
+    public void SqliteException_WithUniqueConstraint_DirectlyMapsTo409Conflict()
+    {
+        var sqliteEx = new Microsoft.Data.Sqlite.SqliteException("UNIQUE constraint failed: WorkItems.Key", 19, 2067);
+
+        var mapping = _mapper.Map(sqliteEx);
+
+        Assert.Equal(StatusCodes.Status409Conflict, mapping.StatusCode);
+        Assert.Equal("Resource already exists", mapping.Title);
+        Assert.Equal("conflict", mapping.Code);
+    }
+
+    [Fact]
+    public void DbUpdateException_WithoutUniqueConstraint_MapsTo500_SafeDatabaseError()
+    {
+        var innerEx = new Microsoft.Data.Sqlite.SqliteException("Disk I/O error on host 192.168.1.50", 10);
+        var dbEx = new Microsoft.EntityFrameworkCore.DbUpdateException("An error occurred while saving.", innerEx);
+
+        var mapping = _mapper.Map(dbEx);
+
+        Assert.Equal(StatusCodes.Status500InternalServerError, mapping.StatusCode);
+        Assert.Equal("Database error", mapping.Title);
+        Assert.Equal("A database error occurred.", mapping.Detail);
+        Assert.Equal("database_error", mapping.Code);
+        Assert.DoesNotContain("192.168.1.50", mapping.Detail);
+        Assert.True(mapping.ShouldAudit);
+    }
+
+    [Fact]
+    public void UniqueConstraintViolation_ProblemDetails_PreservesCorrelationId_AndHidesRawSql()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Path = "/api/projects";
+
+        var sqliteEx = new Microsoft.Data.Sqlite.SqliteException("SQLite Error 19: 'UNIQUE constraint failed: Projects.Slug' INSERT INTO Projects (Slug) VALUES ('test-slug');", 19, 2067);
+        var dbEx = new Microsoft.EntityFrameworkCore.DbUpdateException("EF Core save error", sqliteEx);
+
+        var (mapping, problemDetails) = _mapper.CreateProblemDetails(dbEx, context, "correlation-db-unique-123");
+
+        Assert.Equal(StatusCodes.Status409Conflict, problemDetails.Status);
+        Assert.Equal("Resource already exists", problemDetails.Title);
+        Assert.Equal("A resource with the specified unique field already exists.", problemDetails.Detail);
+        Assert.Equal("/api/projects", problemDetails.Instance);
+        Assert.Equal("correlation-db-unique-123", problemDetails.Extensions["correlationId"]);
+        Assert.Equal("conflict", problemDetails.Extensions["code"]);
+        Assert.DoesNotContain("INSERT INTO", problemDetails.Detail);
+        Assert.DoesNotContain("Projects.Slug", problemDetails.Detail);
+    }
 }

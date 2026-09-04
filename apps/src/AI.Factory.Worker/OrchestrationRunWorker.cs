@@ -24,6 +24,7 @@ public sealed class OrchestrationRunWorker : BackgroundService
     private readonly IAuditLogger _auditLogger;
     private readonly IOperationalMetrics _metrics;
     private readonly ILogger<OrchestrationRunWorker> _logger;
+    private readonly IWorkerHealthCoordinator? _coordinator;
 
     public OrchestrationRunWorker(
         IServiceScopeFactory scopeFactory,
@@ -33,7 +34,8 @@ public sealed class OrchestrationRunWorker : BackgroundService
         IBackgroundOperationTracker tracker,
         IAuditLogger auditLogger,
         IOperationalMetrics metrics,
-        ILogger<OrchestrationRunWorker> logger)
+        ILogger<OrchestrationRunWorker> logger,
+        IWorkerHealthCoordinator? coordinator = null)
     {
         _scopeFactory = scopeFactory;
         _options = options;
@@ -43,6 +45,7 @@ public sealed class OrchestrationRunWorker : BackgroundService
         _auditLogger = auditLogger;
         _metrics = metrics;
         _logger = logger;
+        _coordinator = coordinator;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -59,6 +62,11 @@ public sealed class OrchestrationRunWorker : BackgroundService
             try
             {
                 await PollOnceAsync(stoppingToken);
+                if (_coordinator?.GetSnapshot().State == WorkerLifecycleState.Degraded)
+                {
+                    _metrics.RecordWorkerRecovered();
+                }
+                _coordinator?.ReportPollSuccess();
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested || _shutdown.IsStopping)
             {
@@ -69,6 +77,13 @@ public sealed class OrchestrationRunWorker : BackgroundService
                 // A single poll failing must never take the whole loop down
                 // — the next tick tries again.
                 _logger.LogError(ex, "Orchestration run poll failed.");
+                _metrics.RecordWorkerPollFailure();
+                var wasDegraded = _coordinator?.GetSnapshot().State == WorkerLifecycleState.Degraded;
+                _coordinator?.ReportPollFailure(ex);
+                if (!wasDegraded && _coordinator?.GetSnapshot().State == WorkerLifecycleState.Degraded)
+                {
+                    _metrics.RecordWorkerDegraded();
+                }
             }
         }
         while (await timer.WaitForNextTickAsync(stoppingToken));

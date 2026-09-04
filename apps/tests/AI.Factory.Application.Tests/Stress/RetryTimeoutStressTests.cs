@@ -162,15 +162,29 @@ public sealed class RetryTimeoutStressTests
         Assert.True(snapshot.AttemptTimeouts >= operationCount);
     }
 
+    private sealed class SignalDelayProvider : IDelayProvider
+    {
+        private readonly TaskCompletionSource _delayEnteredTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task DelayEntered => _delayEnteredTcs.Task;
+
+        public async Task DelayAsync(TimeSpan delay, CancellationToken cancellationToken)
+        {
+            _delayEnteredTcs.TrySetResult();
+            await Task.Delay(-1, cancellationToken);
+        }
+    }
+
     [Fact]
     public async Task Cancellation_DuringBackoffDelay_StopsBeforeSecondAttempt()
     {
         var metrics = new OperationalMetrics();
-        var executor = CreateExecutor(metrics, DefaultDelayProvider.Instance);
+        var delayProvider = new SignalDelayProvider();
+        var executor = CreateExecutor(metrics, delayProvider);
         var profile = new ResilienceProfile
         {
             MaxRetryAttempts = 3,
-            InitialDelay = TimeSpan.FromMilliseconds(200)
+            InitialDelay = TimeSpan.FromSeconds(10)
         };
 
         using var cts = new CancellationTokenSource();
@@ -186,8 +200,8 @@ public sealed class RetryTimeoutStressTests
             profile,
             cts.Token);
 
-        // Cancel while the operation is sleeping in backoff (before the 200ms delay elapses).
-        await Task.Delay(TimeSpan.FromMilliseconds(50));
+        // Deterministically wait until the executor enters the backoff delay
+        await delayProvider.DelayEntered;
         cts.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operationTask);

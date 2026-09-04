@@ -22,12 +22,15 @@ public sealed class RateLimitBurstStressFactory : WebApplicationFactory<Program>
     public const int PermitLimit = 5;
     public const int WindowSeconds = 2;
 
-    private readonly SqliteConnection _connection = new("Data Source=:memory:");
+    private readonly string _dbPath;
+    private readonly string _connectionString;
 
     public RateLimitBurstStressFactory()
     {
-        _connection.Open();
-        var options = new DbContextOptionsBuilder<FactoryDbContext>().UseSqlite(_connection).Options;
+        _dbPath = Path.Combine(Path.GetTempPath(), $"ai-factory-ratelimit-{Guid.NewGuid():N}.db");
+        _connectionString = $"Data Source={_dbPath};Pooling=False";
+
+        var options = new DbContextOptionsBuilder<FactoryDbContext>().UseSqlite(_connectionString).Options;
         using var db = new FactoryDbContext(options);
         db.Database.EnsureCreated();
     }
@@ -41,7 +44,7 @@ public sealed class RateLimitBurstStressFactory : WebApplicationFactory<Program>
             {
                 services.Remove(dbDescriptor);
             }
-            services.AddDbContext<FactoryDbContext>(options => options.UseSqlite(_connection));
+            services.AddDbContext<FactoryDbContext>(options => options.UseSqlite(_connectionString));
 
             var secDescriptor = services.SingleOrDefault(d => d.ServiceType == typeof(SecurityOptions));
             if (secDescriptor is not null)
@@ -67,8 +70,18 @@ public sealed class RateLimitBurstStressFactory : WebApplicationFactory<Program>
         base.Dispose(disposing);
         if (disposing)
         {
-            // See HighThroughputApiFactory.Dispose for why this is defensive.
-            try { _connection.Dispose(); } catch (Exception) { /* best-effort test-fixture cleanup */ }
+            SqliteConnection.ClearAllPools();
+            TryDeleteFile(_dbPath);
+            TryDeleteFile(_dbPath + "-wal");
+            TryDeleteFile(_dbPath + "-shm");
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        if (File.Exists(path))
+        {
+            try { File.Delete(path); } catch (Exception) { /* best-effort test cleanup */ }
         }
     }
 }
@@ -86,6 +99,8 @@ public sealed class RateLimitBurstStressTests : IClassFixture<RateLimitBurstStre
     [Fact]
     public async Task Burst_AboveLimit_OnlyPermitLimitSucceed_RestGet429WithRetryAfterAndProblemDetails()
     {
+        // Wait for a fresh rate-limiting window to clear any residual permits from prior tests
+        await Task.Delay(TimeSpan.FromSeconds(RateLimitBurstStressFactory.WindowSeconds + 1));
         var client = _factory.CreateClient();
 
         var tasks = Enumerable.Range(0, 30).Select(_ => client.GetAsync("/api/approvals/pending"));
@@ -94,11 +109,14 @@ public sealed class RateLimitBurstStressTests : IClassFixture<RateLimitBurstStre
         var okCount = responses.Count(r => r.StatusCode == HttpStatusCode.OK);
         var throttled = responses.Where(r => r.StatusCode == HttpStatusCode.TooManyRequests).ToList();
 
-        // Allow +/-1 for window-boundary races.
-        Assert.InRange(okCount, 1, RateLimitBurstStressFactory.PermitLimit + 1);
+        // Invariants:
+        // 1. Successful requests never exceed effective capacity for the observed window(s) (at most 2 windows if boundary rolls over)
+        Assert.InRange(okCount, 1, RateLimitBurstStressFactory.PermitLimit * 2);
+        // 2. All remaining requests are throttled with HTTP 429
         Assert.Equal(responses.Length - okCount, throttled.Count);
         Assert.NotEmpty(throttled);
 
+        // 3. Every throttled response conforms to the ProblemDetails and Retry-After contract
         foreach (var response in throttled)
         {
             Assert.True(response.Headers.Contains("Retry-After") || response.Headers.RetryAfter is not null);

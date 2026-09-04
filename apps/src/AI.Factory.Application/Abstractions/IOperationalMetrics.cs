@@ -61,6 +61,8 @@ public interface IOperationalMetrics
 
     void RecordWorkerRecovered();
 
+    void RecordWorkerFaulted();
+
     void RecordOperationsDrained(int count);
 
     void RecordOperationsCancelled(int count);
@@ -152,6 +154,7 @@ public sealed record OperationalMetricsSnapshot(
     long WorkerPollFailures = 0,
     long WorkerDegraded = 0,
     long WorkerRecovered = 0,
+    long WorkerFaulted = 0,
     long OperationsDrained = 0,
     long OperationsCancelled = 0,
     long ShutdownTimedOut = 0,
@@ -237,6 +240,7 @@ public sealed class OperationalMetrics : IOperationalMetrics
     private long _workerPollFailures;
     private long _workerDegraded;
     private long _workerRecovered;
+    private long _workerFaulted;
     private long _operationsDrained;
     private long _operationsCancelled;
     private long _shutdownTimedOut;
@@ -372,6 +376,8 @@ public sealed class OperationalMetrics : IOperationalMetrics
 
     public void RecordWorkerRecovered() => Interlocked.Increment(ref _workerRecovered);
 
+    public void RecordWorkerFaulted() => Interlocked.Increment(ref _workerFaulted);
+
     public void RecordOperationsDrained(int count) => Interlocked.Add(ref _operationsDrained, count);
 
     public void RecordOperationsCancelled(int count) => Interlocked.Add(ref _operationsCancelled, count);
@@ -458,6 +464,7 @@ public sealed class OperationalMetrics : IOperationalMetrics
             Interlocked.Read(ref _workerPollFailures),
             Interlocked.Read(ref _workerDegraded),
             Interlocked.Read(ref _workerRecovered),
+            Interlocked.Read(ref _workerFaulted),
             Interlocked.Read(ref _operationsDrained),
             Interlocked.Read(ref _operationsCancelled),
             Interlocked.Read(ref _shutdownTimedOut),

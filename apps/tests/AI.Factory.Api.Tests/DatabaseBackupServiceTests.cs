@@ -244,4 +244,25 @@ public sealed class DatabaseBackupServiceTests : IDisposable
 
         Assert.Equal(new[] { "alpha" }, ReadProjectNames());
     }
+
+    [Fact]
+    public async Task CreateBackupAsync_ConcurrentInvocation_RejectsWithInvalidOperationException()
+    {
+        SeedActiveDatabase("alpha");
+        var service = CreateService();
+
+        Directory.CreateDirectory(_backupDir);
+        var lockFile = Path.Combine(_backupDir, ".backup.lock");
+
+        // Simulate another backup process holding the exclusive lock
+        using (var lockStream = new FileStream(lockFile, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+        {
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.CreateBackupAsync());
+            Assert.Contains("Another database backup operation is currently in progress", ex.Message);
+        }
+
+        // Once the lock is released, backup succeeds normally
+        var backup = await service.CreateBackupAsync();
+        Assert.NotNull(backup);
+    }
 }

@@ -238,10 +238,10 @@ public sealed class DatabaseConcurrencyStressTests
         Assert.Equal(1, created);
         Assert.Equal(attempts - 1, rejected.Count);
 
-        // Resolved in Phase 17.4.10: ProjectService's slug-uniqueness check is backstopped
-        // by the DB's unique index on Slug. A loser racing past the in-app check hits the
-        // DB unique constraint as a DbUpdateException, which ApiExceptionMapper now safely maps
-        // to HTTP 409 Conflict with sanitized ProblemDetails and correlation ID preserved.
-        Assert.All(rejected, r => Assert.Equal(HttpStatusCode.Conflict, r.StatusCode));
+        foreach (var r in rejected)
+        {
+            var body = await r.Content.ReadAsStringAsync();
+            Assert.True(r.StatusCode == HttpStatusCode.Conflict, $"Expected 409 Conflict but got {r.StatusCode}. Response: {body}");
+        }
     }
 }

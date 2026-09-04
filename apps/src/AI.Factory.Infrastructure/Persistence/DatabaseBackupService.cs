@@ -41,91 +41,113 @@ public sealed class DatabaseBackupService : IDatabaseBackupService
         EnsureEnabled();
         Directory.CreateDirectory(_backupOptions.BackupDirectory);
 
-        var timestamp = DateTime.UtcNow;
-        var backupId = $"{BackupFilePrefix}{timestamp:yyyyMMddTHHmmss}Z-{Guid.NewGuid():N}";
-        var fileName = backupId + ".db";
-        var tempPath = Path.Combine(_backupOptions.BackupDirectory, backupId + ".tmp");
-        var finalPath = Path.Combine(_backupOptions.BackupDirectory, fileName);
+        var lockPath = Path.Combine(_backupOptions.BackupDirectory, ".backup.lock");
+        FileStream lockStream;
+        try
+        {
+            lockStream = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        }
+        catch (IOException ex)
+        {
+            _metrics.RecordBackupFailed();
+            _logger.LogError(ex, "Another backup operation is currently in progress. Concurrent backups are rejected.");
+            await AuditAsync(AuditEventType.DatabaseBackupFailed, AuditSeverity.Warning, "Concurrent backup rejected: another backup operation is currently active.", cancellationToken);
+            throw new InvalidOperationException("Another database backup operation is currently in progress. Concurrent backups are rejected.", ex);
+        }
 
         try
         {
-            var backupTask = Task.Run(
-                () =>
-                {
-                    using var source = new SqliteConnection(_databaseOptions.ConnectionString);
-                    source.Open();
-                    using var destination = new SqliteConnection($"Data Source={tempPath};Pooling=False");
-                    destination.Open();
-                    source.BackupDatabase(destination);
-                },
-                cancellationToken);
+            var timestamp = DateTime.UtcNow;
+            var backupId = $"{BackupFilePrefix}{timestamp:yyyyMMddTHHmmss}Z-{Guid.NewGuid():N}";
+            var fileName = backupId + ".db";
+            var tempPath = Path.Combine(_backupOptions.BackupDirectory, backupId + ".tmp");
+            var finalPath = Path.Combine(_backupOptions.BackupDirectory, fileName);
 
-            await backupTask.WaitAsync(_backupOptions.BackupTimeout, cancellationToken);
-        }
-        catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
-        {
-            TryDelete(tempPath);
-            CleanupSqliteSidecars(tempPath);
-            _metrics.RecordBackupFailed();
-            _logger.LogError(ex, "Database backup timed out or was cancelled after {TimeoutSeconds}s.", _backupOptions.BackupTimeout.TotalSeconds);
-            await AuditAsync(AuditEventType.DatabaseBackupFailed, AuditSeverity.Error, "Database backup timed out or was cancelled.", cancellationToken);
-            throw;
-        }
-        catch (Exception ex)
-        {
-            TryDelete(tempPath);
-            CleanupSqliteSidecars(tempPath);
-            _metrics.RecordBackupFailed();
-            _logger.LogError(ex, "Database backup failed while writing the temporary backup file.");
-            await AuditAsync(AuditEventType.DatabaseBackupFailed, AuditSeverity.Error, "Database backup failed.", cancellationToken);
-            throw;
-        }
+            try
+            {
+                var backupTask = Task.Run(
+                    () =>
+                    {
+                        using var source = new SqliteConnection(_databaseOptions.ConnectionString);
+                        source.Open();
+                        using var destination = new SqliteConnection($"Data Source={tempPath};Pooling=False");
+                        destination.Open();
+                        source.BackupDatabase(destination);
+                    },
+                    cancellationToken);
 
-        // BackupDatabase can leave -wal/-shm sidecars next to the temp file even after the
-        // connection that created them is disposed; they aren't needed for a file that will only
-        // ever be read afterward, and left alone they'd never match the "*.db" retention glob.
-        CleanupSqliteSidecars(tempPath);
-
-        var validationPassed = true;
-        if (_backupOptions.ValidateAfterBackup)
-        {
-            validationPassed = ValidateSqliteFile(tempPath);
-            CleanupSqliteSidecars(tempPath);
-            if (!validationPassed)
+                await backupTask.WaitAsync(_backupOptions.BackupTimeout, cancellationToken);
+            }
+            catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
             {
                 TryDelete(tempPath);
+                CleanupSqliteSidecars(tempPath);
                 _metrics.RecordBackupFailed();
-                _logger.LogError("Database backup validation (PRAGMA integrity_check) failed for a freshly created backup; discarding it.");
-                await AuditAsync(AuditEventType.DatabaseBackupFailed, AuditSeverity.Error, "Database backup validation failed.", cancellationToken);
-                throw new InvalidOperationException("Database backup validation failed; the backup was discarded rather than kept in a possibly-corrupt state.");
+                _logger.LogError(ex, "Database backup timed out or was cancelled after {TimeoutSeconds}s.", _backupOptions.BackupTimeout.TotalSeconds);
+                await AuditAsync(AuditEventType.DatabaseBackupFailed, AuditSeverity.Error, "Database backup timed out or was cancelled.", cancellationToken);
+                throw;
             }
+            catch (Exception ex)
+            {
+                TryDelete(tempPath);
+                CleanupSqliteSidecars(tempPath);
+                _metrics.RecordBackupFailed();
+                _logger.LogError(ex, "Database backup failed while writing the temporary backup file.");
+                await AuditAsync(AuditEventType.DatabaseBackupFailed, AuditSeverity.Error, "Database backup failed.", cancellationToken);
+                throw;
+            }
+
+            // BackupDatabase can leave -wal/-shm sidecars next to the temp file even after the
+            // connection that created them is disposed; they aren't needed for a file that will only
+            // ever be read afterward, and left alone they'd never match the "*.db" retention glob.
+            CleanupSqliteSidecars(tempPath);
+
+            var validationPassed = true;
+            if (_backupOptions.ValidateAfterBackup)
+            {
+                validationPassed = ValidateSqliteFile(tempPath);
+                CleanupSqliteSidecars(tempPath);
+                if (!validationPassed)
+                {
+                    TryDelete(tempPath);
+                    _metrics.RecordBackupFailed();
+                    _logger.LogError("Database backup validation (PRAGMA integrity_check) failed for a freshly created backup; discarding it.");
+                    await AuditAsync(AuditEventType.DatabaseBackupFailed, AuditSeverity.Error, "Database backup validation failed.", cancellationToken);
+                    throw new InvalidOperationException("Database backup validation failed; the backup was discarded rather than kept in a possibly-corrupt state.");
+                }
+            }
+
+            // Defensive: Microsoft.Data.Sqlite pools native connections per connection string even
+            // after Dispose, which can hold a Windows file handle open long enough to block the
+            // rename below. Pooling=False on the connections above already avoids this in the common
+            // case; this is a last-resort guard against any pooled handle from elsewhere in-process.
+            SqliteConnection.ClearAllPools();
+            File.Move(tempPath, finalPath, overwrite: true);
+            var deletedCount = ApplyRetention();
+            var sizeBytes = new FileInfo(finalPath).Length;
+
+            _metrics.RecordBackupSucceeded();
+            if (_backupOptions.ValidateAfterBackup)
+            {
+                _metrics.RecordBackupValidated();
+            }
+
+            _logger.LogInformation(
+                "Database backup created: {FileName} ({SizeBytes} bytes, validated={Validated}); retention removed {DeletedCount} older backup(s).",
+                fileName, sizeBytes, validationPassed, deletedCount);
+            await AuditAsync(
+                AuditEventType.DatabaseBackupSucceeded,
+                AuditSeverity.Info,
+                $"Database backup '{fileName}' created (validated={validationPassed}, {deletedCount} older backup(s) removed by retention).",
+                cancellationToken);
+
+            return new DatabaseBackupResult(backupId, fileName, timestamp, _databaseOptions.Provider, sizeBytes, validationPassed, deletedCount);
         }
-
-        // Defensive: Microsoft.Data.Sqlite pools native connections per connection string even
-        // after Dispose, which can hold a Windows file handle open long enough to block the
-        // rename below. Pooling=False on the connections above already avoids this in the common
-        // case; this is a last-resort guard against any pooled handle from elsewhere in-process.
-        SqliteConnection.ClearAllPools();
-        File.Move(tempPath, finalPath, overwrite: true);
-        var deletedCount = ApplyRetention();
-        var sizeBytes = new FileInfo(finalPath).Length;
-
-        _metrics.RecordBackupSucceeded();
-        if (_backupOptions.ValidateAfterBackup)
+        finally
         {
-            _metrics.RecordBackupValidated();
+            lockStream.Dispose();
+            TryDelete(lockPath);
         }
-
-        _logger.LogInformation(
-            "Database backup created: {FileName} ({SizeBytes} bytes, validated={Validated}); retention removed {DeletedCount} older backup(s).",
-            fileName, sizeBytes, validationPassed, deletedCount);
-        await AuditAsync(
-            AuditEventType.DatabaseBackupSucceeded,
-            AuditSeverity.Info,
-            $"Database backup '{fileName}' created (validated={validationPassed}, {deletedCount} older backup(s) removed by retention).",
-            cancellationToken);
-
-        return new DatabaseBackupResult(backupId, fileName, timestamp, _databaseOptions.Provider, sizeBytes, validationPassed, deletedCount);
     }
 
     public Task<IReadOnlyList<string>> ListBackupsAsync(CancellationToken cancellationToken = default)

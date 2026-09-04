@@ -35,7 +35,7 @@ public sealed class ContainerConfigurationTests
     }
 
     [Fact]
-    public void DockerfileWorker_IsProductionReady_AndNonRoot()
+    public void DockerfileWorker_IsProductionReady_AndUsesLivenessHealthCheck()
     {
         var dockerfilePath = Path.Combine(RepoRoot, "Dockerfile.worker");
         Assert.True(File.Exists(dockerfilePath), $"Dockerfile.worker does not exist at {dockerfilePath}");
@@ -51,9 +51,9 @@ public sealed class ContainerConfigurationTests
         // Non-root execution
         Assert.Contains("USER $APP_UID", content);
 
-        // Health check configured
+        // Health check configured with liveness, NOT readiness
         Assert.Contains("HEALTHCHECK", content);
-        Assert.Contains("worker.ready", content);
+        Assert.Contains("worker.live", content);
 
         // Signal-compatible exec entrypoint
         Assert.Contains("ENTRYPOINT [\"dotnet\", \"AI.Factory.Worker.dll\"]", content);
@@ -78,8 +78,17 @@ public sealed class ContainerConfigurationTests
         // Startup ordering: API and Worker wait for migration completion
         Assert.Contains("service_completed_successfully", content);
 
-        // Persistent volume
+        // Worker healthcheck in compose must use liveness (worker.live), not readiness
+        Assert.Contains("worker.live", content);
+
+        // API healthcheck targets valid liveness endpoint
+        Assert.Contains("/health/live", content);
+
+        // Separate persistent data and backup volumes
         Assert.Contains("ai_factory_data:", content);
+        Assert.Contains("ai_factory_backups:", content);
+        Assert.Contains("ai_factory_production_data", content);
+        Assert.Contains("ai_factory_production_backups", content);
 
         // Graceful shutdown stop_grace_period
         Assert.Contains("stop_grace_period: 30s", content);
@@ -89,5 +98,10 @@ public sealed class ContainerConfigurationTests
         Assert.Contains("resources:", content);
         Assert.Contains("limits:", content);
         Assert.Contains("reservations:", content);
+
+        // Secrets are not hardcoded (interpolated via environment variables)
+        Assert.Contains("${OPENROUTER_API_KEY:-}", content);
+        Assert.Contains("${OPERATIONAL_ACCESS_KEY:-}", content);
+        Assert.DoesNotContain("sk-or-v1-", content);
     }
 }

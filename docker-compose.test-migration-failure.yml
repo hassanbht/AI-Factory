@@ -1,0 +1,6 @@
+# Docker Compose override to empirically test migration failure startup blocking.
+# Used by automated integration tests and operators to verify that API and Worker
+# do not start when the Migrator fails.
+services:
+  migrator:
+    command: ["--migrate-only", "--simulate-failure"]

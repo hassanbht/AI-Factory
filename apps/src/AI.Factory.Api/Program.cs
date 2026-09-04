@@ -443,11 +443,30 @@ var app = builder.Build();
 if (args.Contains("--migrate-only"))
 {
     using var scope = app.Services.CreateScope();
-    var db = scope.ServiceProvider.GetRequiredService<FactoryDbContext>();
     var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
-    logger.LogInformation("Dedicated migration runner started. Applying pending database migrations...");
-    await db.Database.MigrateAsync();
-    logger.LogInformation("Database migrations successfully applied. Exiting with code 0.");
+    logger.LogInformation("Dedicated migration runner started.");
+
+    if (args.Contains("--simulate-failure") ||
+        string.Equals(Environment.GetEnvironmentVariable("AI_FACTORY_MIGRATE_FAIL_TEST"), "1", StringComparison.OrdinalIgnoreCase))
+    {
+        logger.LogError("Simulated migration failure triggered for verification. Exiting with code 1.");
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    var db = scope.ServiceProvider.GetRequiredService<FactoryDbContext>();
+    logger.LogInformation("Applying pending database migrations...");
+    try
+    {
+        await db.Database.MigrateAsync();
+        logger.LogInformation("Database migrations successfully applied. Exiting with code 0.");
+        Environment.ExitCode = 0;
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Database migration failed. Exiting with code 1.");
+        Environment.ExitCode = 1;
+    }
     return;
 }
 

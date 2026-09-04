@@ -20,12 +20,15 @@ namespace AI.Factory.Api.Tests.Load;
 /// </summary>
 public sealed class HighThroughputApiFactory : WebApplicationFactory<Program>
 {
-    private readonly SqliteConnection _connection = new("Data Source=:memory:");
+    private readonly string _dbPath;
+    private readonly string _connectionString;
 
     public HighThroughputApiFactory()
     {
-        _connection.Open();
-        var options = new DbContextOptionsBuilder<FactoryDbContext>().UseSqlite(_connection).Options;
+        _dbPath = Path.Combine(Path.GetTempPath(), $"ai-factory-load-{Guid.NewGuid():N}.db");
+        _connectionString = $"Data Source={_dbPath};Pooling=False";
+
+        var options = new DbContextOptionsBuilder<FactoryDbContext>().UseSqlite(_connectionString).Options;
         using var db = new FactoryDbContext(options);
         db.Database.EnsureCreated();
     }
@@ -39,7 +42,7 @@ public sealed class HighThroughputApiFactory : WebApplicationFactory<Program>
             {
                 services.Remove(dbDescriptor);
             }
-            services.AddDbContext<FactoryDbContext>(options => options.UseSqlite(_connection));
+            services.AddDbContext<FactoryDbContext>(options => options.UseSqlite(_connectionString));
 
             var secDescriptor = services.SingleOrDefault(d => d.ServiceType == typeof(SecurityOptions));
             if (secDescriptor is not null)
@@ -65,10 +68,18 @@ public sealed class HighThroughputApiFactory : WebApplicationFactory<Program>
         base.Dispose(disposing);
         if (disposing)
         {
-            // Under concurrent-class test execution, WebApplicationFactory's own host teardown
-            // can race with this explicit connection dispose; swallow the (idempotent-in-intent)
-            // double-dispose rather than fail fixture teardown for what is otherwise a clean run.
-            try { _connection.Dispose(); } catch (Exception) { /* best-effort test-fixture cleanup */ }
+            SqliteConnection.ClearAllPools();
+            TryDeleteFile(_dbPath);
+            TryDeleteFile(_dbPath + "-wal");
+            TryDeleteFile(_dbPath + "-shm");
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        if (File.Exists(path))
+        {
+            try { File.Delete(path); } catch (Exception) { /* best-effort test cleanup */ }
         }
     }
 }

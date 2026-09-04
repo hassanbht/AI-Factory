@@ -510,7 +510,7 @@ public sealed class AutonomousCodingOrchestrator : IAutonomousCodingOrchestrator
             WorkItemId = workItem.Id,
             Success = validationResult.Success,
             BuildSucceeded = validationResult.BuildSucceeded,
-            BuildOutput = validationResult.BuildOutput,
+            BuildOutput = validationResult.BuildOutput ?? string.Empty,
             TestsSucceeded = validationResult.TestsSucceeded,
             TestOutput = validationResult.TestOutput,
             FailuresJson = JsonSerializer.Serialize(validationResult.Failures),

@@ -61,12 +61,13 @@ public sealed class OrchestrationRunWorker : BackgroundService
 
             try
             {
+                var wasDegraded = _coordinator?.GetSnapshot().State == WorkerLifecycleState.Degraded;
                 await PollOnceAsync(stoppingToken);
-                if (_coordinator?.GetSnapshot().State == WorkerLifecycleState.Degraded)
+                _coordinator?.ReportPollSuccess();
+                if (wasDegraded && _coordinator?.GetSnapshot().State == WorkerLifecycleState.Ready)
                 {
                     _metrics.RecordWorkerRecovered();
                 }
-                _coordinator?.ReportPollSuccess();
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested || _shutdown.IsStopping)
             {

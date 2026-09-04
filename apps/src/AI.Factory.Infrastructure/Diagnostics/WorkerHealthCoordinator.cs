@@ -21,6 +21,7 @@ public sealed class WorkerHealthCoordinator : IWorkerHealthCoordinator
     private readonly string _liveFilePath;
     private readonly string _degradedFilePath;
     private readonly WorkerHealthOptions _options;
+    private readonly IOperationalMetrics? _metrics;
 
     private WorkerLifecycleState _state = WorkerLifecycleState.Starting;
     private DateTime _startedAtUtc = DateTime.UtcNow;
@@ -33,11 +34,13 @@ public sealed class WorkerHealthCoordinator : IWorkerHealthCoordinator
         WorkerHealthOptions options,
         string? healthDirectory = null,
         ILogger<WorkerHealthCoordinator>? logger = null,
-        IServiceScopeFactory? scopeFactory = null)
+        IServiceScopeFactory? scopeFactory = null,
+        IOperationalMetrics? metrics = null)
     {
         _options = options;
         _logger = logger ?? NullLogger<WorkerHealthCoordinator>.Instance;
         _scopeFactory = scopeFactory;
+        _metrics = metrics;
 
         _healthDir = healthDirectory
                      ?? Environment.GetEnvironmentVariable("AI_FACTORY_HEALTH_DIR")
@@ -115,6 +118,7 @@ public sealed class WorkerHealthCoordinator : IWorkerHealthCoordinator
             RemoveFile(_degradedFilePath);
             RemoveFile(_liveFilePath);
             _logger.LogError(ex, "Worker marked as Faulted: State={State}, Message={Message}", _state, _lastError);
+            _metrics?.RecordWorkerFaulted();
             RaiseAuditEvent(AuditEventType.WorkerFaulted, AuditSeverity.Critical, $"Worker faulted: {_lastError}");
         }
     }

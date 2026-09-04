@@ -166,8 +166,14 @@ public sealed class BulkheadStressTests
             }
         })).ToArray();
 
-        // Give the 8 callers time to race through acquisition before releasing.
-        await Task.Delay(TimeSpan.FromMilliseconds(100));
+        // Wait until all 8 callers have either entered the queue (2) or been rejected (6),
+        // rather than guessing with an arbitrary sleep that races under threadpool load.
+        var spinTimeout = TimeSpan.FromSeconds(5);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.Elapsed < spinTimeout && (bulkhead.GetSnapshot().QueuedExecutions < 2 || Volatile.Read(ref rejected) < 6))
+        {
+            await Task.Yield();
+        }
 
         release.SetResult();
         permit1.Dispose();

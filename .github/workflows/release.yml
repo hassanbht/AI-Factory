@@ -31,7 +31,7 @@ jobs:
     steps:
       # fetch-depth: 0 (full history, all tags) is required by the tag-validation steps below —
       # `git rev-list`/`git merge-base --is-ancestor` need real history, not a shallow clone.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
@@ -114,8 +114,8 @@ jobs:
     needs: setup
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
@@ -149,8 +149,8 @@ jobs:
     needs: setup
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
@@ -179,14 +179,14 @@ jobs:
       api_digest: ${{ steps.digest.outputs.api_digest }}
       worker_digest: ${{ steps.digest.outputs.worker_digest }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # Dormant until this repo has a remote: this login only succeeds once the repository
       # actually exists on GitHub. github.actor / secrets.GITHUB_TOKEN are the built-in
       # identity/token GitHub Actions provides automatically — no new secret needs to be created
       # by the user for GHCR specifically.
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -262,14 +262,13 @@ jobs:
           docker save ai-factory-api:${{ needs.setup.outputs.semantic_version }} -o /tmp/ai-factory-api.tar
           docker save ai-factory-worker:${{ needs.setup.outputs.semantic_version }} -o /tmp/ai-factory-worker.tar
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: docker-images-${{ needs.setup.outputs.artifact_suffix }}
           path: /tmp/ai-factory-*.tar
           retention-days: 7
 
-      # Registry push — only succeeds once this repo actually lives on GitHub with GHCR access.
-      # No workaround is added for the lack of a remote; this step is simply unexecuted today.
+      # Registry push — pushes all tags to GHCR
       - name: Push API image (all tags)
         run: |
           docker push ${{ steps.img.outputs.api_image }}:${{ needs.setup.outputs.semantic_version }}
@@ -284,9 +283,7 @@ jobs:
           docker push ${{ steps.img.outputs.worker_image }}:${{ steps.img.outputs.build_tag }}
           docker push ${{ steps.img.outputs.worker_image }}:latest
 
-      # Digest capture (phase 17.5.2 §6.1): plain `docker inspect` on the just-pushed tag, no
-      # buildx — the rest of this workflow uses plain `docker build`/`push`, so this avoids
-      # introducing a new toolchain just for digest capture.
+      # Digest capture (phase 17.5.2 §6.1 / phase 17.5.3 §8):
       - name: Capture published digests
         id: digest
         run: |
@@ -307,9 +304,9 @@ jobs:
     needs: [setup, docker-release]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: docker-images-${{ needs.setup.outputs.artifact_suffix }}
           path: /tmp
@@ -320,20 +317,20 @@ jobs:
           docker load -i /tmp/ai-factory-worker.tar
 
       - name: Generate SBOM — API image
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           image: ai-factory-api:${{ needs.setup.outputs.semantic_version }}
           format: cyclonedx-json
           output-file: sbom-api-${{ needs.setup.outputs.semantic_version }}.cyclonedx.json
 
       - name: Generate SBOM — Worker image
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           image: ai-factory-worker:${{ needs.setup.outputs.semantic_version }}
           format: cyclonedx-json
           output-file: sbom-worker-${{ needs.setup.outputs.semantic_version }}.cyclonedx.json
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sbom-${{ needs.setup.outputs.artifact_suffix }}
           path: '*.cyclonedx.json'
@@ -342,20 +339,15 @@ jobs:
     needs: [setup, docker-release]
     runs-on: ubuntu-latest
     steps:
-      # Scans the actual REGISTRY ARTIFACT that docker-release just pushed (ghcr.io/...), not a
-      # locally-built image — phase 17.5.2, Workstream F §9.1. Requires the same GHCR login as
-      # docker-release since this runs in a separate job/runner with no shared Docker daemon
-      # state. Dormant until this repo has a remote: the pull (and therefore the scan) only
-      # succeeds once these images actually exist in GHCR.
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Scan API image (published registry artifact)
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
         with:
           image-ref: ghcr.io/${{ github.repository }}/api:${{ needs.setup.outputs.semantic_version }}
           severity: 'CRITICAL,HIGH'
@@ -365,7 +357,7 @@ jobs:
 
       - name: Scan Worker image (published registry artifact)
         if: always()
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
         with:
           image-ref: ghcr.io/${{ github.repository }}/worker:${{ needs.setup.outputs.semantic_version }}
           severity: 'CRITICAL,HIGH'
@@ -373,7 +365,7 @@ jobs:
           format: 'table'
           output: 'trivy-worker.txt'
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: trivy-scan-${{ needs.setup.outputs.artifact_suffix }}
@@ -383,7 +375,7 @@ jobs:
     needs: setup
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Run migrator with simulated failure and assert non-zero exit
         run: |
@@ -414,26 +406,67 @@ jobs:
         if: always()
         run: docker compose -f docker-compose.yml -f docker-compose.test-migration-failure.yml down -v
 
-  backup-restore-gate:
+  published-smoke-test:
     needs: [setup, docker-release]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Bring up isolated stack
-        run: docker compose -p ai-factory-release-test up -d
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Wait for api/worker healthy
+      - name: Pull published release images by immutable digest
+        env:
+          AI_FACTORY_API_IMAGE: ${{ needs.docker-release.outputs.api_digest }}
+          AI_FACTORY_WORKER_IMAGE: ${{ needs.docker-release.outputs.worker_digest }}
+        run: |
+          echo "Pulling published API: $AI_FACTORY_API_IMAGE"
+          echo "Pulling published Worker: $AI_FACTORY_WORKER_IMAGE"
+          docker compose -f docker-compose.yml -f docker-compose.release.yml pull
+
+      - name: Start stack from published images (--no-build)
+        env:
+          AI_FACTORY_API_IMAGE: ${{ needs.docker-release.outputs.api_digest }}
+          AI_FACTORY_WORKER_IMAGE: ${{ needs.docker-release.outputs.worker_digest }}
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.release.yml up -d --no-build
+
+      - name: Wait for migrator to complete successfully
+        run: |
+          set -e
+          timeout=120
+          elapsed=0
+          while [ "$(docker inspect -f '{{.State.Status}}' $(docker compose -f docker-compose.yml -f docker-compose.release.yml ps -q migrator))" != "exited" ]; do
+            if [ "$elapsed" -ge "$timeout" ]; then
+              echo "::error::Timed out waiting for migrator to exit."
+              docker compose -f docker-compose.yml -f docker-compose.release.yml logs migrator
+              exit 1
+            fi
+            sleep 3
+            elapsed=$((elapsed + 3))
+          done
+          exit_code=$(docker inspect -f '{{.State.ExitCode}}' $(docker compose -f docker-compose.yml -f docker-compose.release.yml ps -q migrator))
+          echo "migrator exit code: $exit_code"
+          if [ "$exit_code" != "0" ]; then
+            docker compose -f docker-compose.yml -f docker-compose.release.yml logs migrator
+            exit 1
+          fi
+
+      - name: Wait for api and worker to report healthy
         run: |
           set -e
           for service in api worker; do
             timeout=120
             elapsed=0
-            cid=$(docker compose -p ai-factory-release-test ps -q "$service")
+            cid=$(docker compose -f docker-compose.yml -f docker-compose.release.yml ps -q "$service")
             while [ "$(docker inspect --format='{{.State.Health.Status}}' "$cid")" != "healthy" ]; do
               if [ "$elapsed" -ge "$timeout" ]; then
                 echo "::error::Timed out waiting for $service to become healthy."
-                docker compose -p ai-factory-release-test logs "$service"
+                docker compose -f docker-compose.yml -f docker-compose.release.yml logs "$service"
                 exit 1
               fi
               sleep 3
@@ -441,36 +474,59 @@ jobs:
             done
           done
 
+      - name: Validate health endpoints
+        run: |
+          set -e
+          curl -f http://localhost:8080/health/live
+          curl -f http://localhost:8080/health/ready
+
+      - name: Confirm worker liveness probe file
+        run: docker compose -f docker-compose.yml -f docker-compose.release.yml exec -T worker test -f /tmp/ai-factory-health/worker.live
+
+      - name: Validate deployment diagnostics metadata and security
+        run: |
+          set -e
+          body=$(curl -f http://localhost:8080/api/operations/deployment)
+          echo "Diagnostics response: $body"
+          if echo "$body" | grep -iE 'password|secret|apikey|Data Source=' >/dev/null; then
+            echo "::error::Deployment diagnostics response appears to leak sensitive data."
+            exit 1
+          fi
+          expected_version="${{ needs.setup.outputs.semantic_version }}"
+          if ! echo "$body" | grep -q "$expected_version"; then
+            echo "::error::Deployment diagnostics did not contain expected version $expected_version"
+            exit 1
+          fi
+
       - name: Run backup (--backup-database)
-        run: docker compose -p ai-factory-release-test exec -T api dotnet AI.Factory.Api.dll --backup-database
+        run: docker compose -f docker-compose.yml -f docker-compose.release.yml exec -T api dotnet AI.Factory.Api.dll --backup-database
 
       - name: Restore latest backup (--restore-database <path>)
         run: |
           set -e
-          backup_file=$(docker compose -p ai-factory-release-test exec -T api sh -c "ls -t /var/lib/ai-factory/backups | head -n1")
-          backup_file=$(echo "$backup_file" | tr -d '\r')
+          backup_file=$(docker compose -f docker-compose.yml -f docker-compose.release.yml exec -T api sh -c "ls -t /var/lib/ai-factory/backups | head -n1" | tr -d '\r')
           echo "Restoring from $backup_file"
-          docker compose -p ai-factory-release-test exec -T api dotnet AI.Factory.Api.dll --restore-database "/var/lib/ai-factory/backups/$backup_file"
+          docker compose -f docker-compose.yml -f docker-compose.release.yml exec -T api dotnet AI.Factory.Api.dll --restore-database "/var/lib/ai-factory/backups/$backup_file"
 
-      - name: Assert api/worker remain healthy after restore
+      - name: Assert api and worker remain healthy after restore
         run: |
           set -e
           for service in api worker; do
-            cid=$(docker compose -p ai-factory-release-test ps -q "$service")
+            cid=$(docker compose -f docker-compose.yml -f docker-compose.release.yml ps -q "$service")
             status=$(docker inspect --format='{{.State.Health.Status}}' "$cid")
             if [ "$status" != "healthy" ]; then
               echo "::error::$service is not healthy after restore (status: $status)."
-              docker compose -p ai-factory-release-test logs "$service"
+              docker compose -f docker-compose.yml -f docker-compose.release.yml logs "$service"
               exit 1
             fi
           done
 
       - name: Tear down
         if: always()
-        run: docker compose -p ai-factory-release-test down -v
+        run: docker compose -f docker-compose.yml -f docker-compose.release.yml down -v
 
   release-gate:
-    needs: [stability-gate, versioned-build, docker-release, sbom, container-scan, migration-failure-gate, backup-restore-gate]
+    needs: [stability-gate, versioned-build, docker-release, sbom, container-scan, migration-failure-gate, published-smoke-test]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -483,7 +539,7 @@ jobs:
             [sbom]="${{ needs.sbom.result }}"
             [container-scan]="${{ needs.container-scan.result }}"
             [migration-failure-gate]="${{ needs.migration-failure-gate.result }}"
-            [backup-restore-gate]="${{ needs.backup-restore-gate.result }}"
+            [published-smoke-test]="${{ needs.published-smoke-test.result }}"
           )
 
           overall="GO"

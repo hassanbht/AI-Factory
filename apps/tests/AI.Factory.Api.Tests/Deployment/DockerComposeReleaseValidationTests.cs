@@ -12,7 +12,7 @@ namespace AI.Factory.Api.Tests.Deployment;
 public sealed class DockerComposeReleaseValidationTests
 {
     [Fact]
-    public async Task DockerComposeConfig_WithoutImageTag_FailsLoudly()
+    public async Task DockerComposeConfig_WithoutImageTagOrDirectImages_FailsLoudly()
     {
         if (!IsDockerAvailable())
         {
@@ -24,10 +24,38 @@ public sealed class DockerComposeReleaseValidationTests
             "docker",
             BuildConfigArgs(repoRoot),
             repoRoot,
-            env: new Dictionary<string, string?> { ["AI_FACTORY_IMAGE_TAG"] = null });
+            env: new Dictionary<string, string?>
+            {
+                ["AI_FACTORY_API_IMAGE"] = null,
+                ["AI_FACTORY_WORKER_IMAGE"] = null,
+                ["AI_FACTORY_IMAGE_TAG"] = null,
+            });
 
         Assert.NotEqual(0, exitCode);
-        Assert.Contains("AI_FACTORY_IMAGE_TAG must be set", stderr, StringComparison.Ordinal);
+        Assert.Contains("AI_FACTORY_API_IMAGE or AI_FACTORY_IMAGE_TAG must be set", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DockerComposeConfig_WithImmutableDirectImagesSet_ExitsZero()
+    {
+        if (!IsDockerAvailable())
+        {
+            return;
+        }
+
+        var repoRoot = FindRepoRoot();
+        var (exitCode, _, stderr) = await RunProcessAsync(
+            "docker",
+            BuildConfigArgs(repoRoot),
+            repoRoot,
+            env: new Dictionary<string, string?>
+            {
+                ["AI_FACTORY_API_IMAGE"] = "ghcr.io/example-owner/example-repo/api@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                ["AI_FACTORY_WORKER_IMAGE"] = "ghcr.io/example-owner/example-repo/worker@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                ["AI_FACTORY_IMAGE_TAG"] = null,
+            });
+
+        Assert.True(exitCode == 0, $"`docker compose config -q` failed with exit code {exitCode}: {stderr}");
     }
 
     [Fact]
@@ -45,6 +73,8 @@ public sealed class DockerComposeReleaseValidationTests
             repoRoot,
             env: new Dictionary<string, string?>
             {
+                ["AI_FACTORY_API_IMAGE"] = null,
+                ["AI_FACTORY_WORKER_IMAGE"] = null,
                 ["AI_FACTORY_IMAGE_TAG"] = "0.1.0",
                 ["AI_FACTORY_IMAGE_REGISTRY"] = "ghcr.io/example-owner/example-repo",
             });

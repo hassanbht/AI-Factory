@@ -1,0 +1,32 @@
+# Release deployment override — consumes a PUBLISHED, PINNED image only. Phase 17.5.2,
+# Workstream E ("Deployment Artifact Mode").
+#
+# Safe invocation (pull the pinned image explicitly, then start without ever building locally):
+#
+#   AI_FACTORY_IMAGE_REGISTRY=ghcr.io/<owner>/<repo> AI_FACTORY_IMAGE_TAG=0.1.0 \
+#     docker compose -f docker-compose.yml -f docker-compose.release.yml pull
+#   AI_FACTORY_IMAGE_REGISTRY=ghcr.io/<owner>/<repo> AI_FACTORY_IMAGE_TAG=0.1.0 \
+#     docker compose -f docker-compose.yml -f docker-compose.release.yml up -d --no-build
+#
+# IMPORTANT — this override replaces each service's `image:` key, but docker-compose.yml's
+# `migrator`/`api`/`worker` services still carry a `build:` key (kept intentionally, for local
+# development via `docker compose up --build`). Merging an `image:` override on top of an
+# existing `build:` key does NOT remove that `build:` key — so a bare `docker compose ... up` or
+# `up --build` invocation can still silently build Dockerfile.api/Dockerfile.worker locally
+# instead of running the exact scanned, published artifact. Operators MUST use `pull` followed
+# by `up -d --no-build` as shown above, never a bare `up`/`up --build`, to guarantee the pinned
+# image is what actually runs. This is also documented in the phase-17.5.2 doc, Workstream E.
+#
+# AI_FACTORY_IMAGE_TAG has no default and fails loudly (`:?...`) if unset — unlike
+# docker-compose.yml's own dev-only `${IMAGE_TAG:-latest}` fallback, this file's entire purpose
+# is pinned, explicit production deployment, so a silent fallback to `latest` here would defeat
+# that purpose.
+services:
+  migrator:
+    image: ${AI_FACTORY_IMAGE_REGISTRY:-ghcr.io/OWNER/REPO}/api:${AI_FACTORY_IMAGE_TAG:?AI_FACTORY_IMAGE_TAG must be set}
+
+  api:
+    image: ${AI_FACTORY_IMAGE_REGISTRY:-ghcr.io/OWNER/REPO}/api:${AI_FACTORY_IMAGE_TAG:?AI_FACTORY_IMAGE_TAG must be set}
+
+  worker:
+    image: ${AI_FACTORY_IMAGE_REGISTRY:-ghcr.io/OWNER/REPO}/worker:${AI_FACTORY_IMAGE_TAG:?AI_FACTORY_IMAGE_TAG must be set}

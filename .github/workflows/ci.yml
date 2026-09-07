@@ -1,0 +1,181 @@
+name: CI
+
+# Runs on every PR (any branch) and on every push to main. This is the fast, single-pass
+# validation gate — one build, one full test run, one docker compose smoke test. The
+# repeated-3x stability gate and release certification (SBOM, container scan, migration
+# failure gate, backup/restore gate) live in release.yml instead, gated on version tags.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore apps/AI.Factory.slnx
+
+      - name: Build (Release)
+        run: dotnet build apps/AI.Factory.slnx --configuration Release --no-restore
+
+      - name: Test (full run)
+        run: dotnet test apps/AI.Factory.slnx --configuration Release --no-build --blame-hang-timeout 90s --logger "trx;LogFileName=test-results.trx"
+
+      - name: Test — Category=Resilience
+        run: dotnet test apps/AI.Factory.slnx --configuration Release --no-build --blame-hang-timeout 90s --filter "Category=Resilience" --logger "trx;LogFileName=test-results-resilience.trx"
+
+      - name: Test — Category=Stress
+        run: dotnet test apps/AI.Factory.slnx --configuration Release --no-build --blame-hang-timeout 90s --filter "Category=Stress" --logger "trx;LogFileName=test-results-stress.trx"
+
+      - name: Test — Category=Load
+        run: dotnet test apps/AI.Factory.slnx --configuration Release --no-build --blame-hang-timeout 90s --filter "Category=Load" --logger "trx;LogFileName=test-results-load.trx"
+
+      - name: Test — Category=ContainerIntegration
+        run: dotnet test apps/AI.Factory.slnx --configuration Release --no-build --blame-hang-timeout 90s --filter "Category=ContainerIntegration" --logger "trx;LogFileName=test-results-container-integration.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trx-test-results
+          path: '**/TestResults/*.trx'
+          if-no-files-found: warn
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  dependency-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore apps/AI.Factory.slnx
+
+      # KNOWN LIMITATION: `dotnet list package --vulnerable` output is text, not structured
+      # JSON/SARIF, so we cannot reliably bucket findings by exact severity here. Any
+      # vulnerability at any severity fails this job — see phase-17.5.1 doc, "Known
+      # Limitations", for the tracked follow-up (e.g. parsing --format json once the CLI
+      # supports it, or switching to a SARIF-producing scanner).
+      - name: Scan for vulnerable NuGet packages (any severity blocks)
+        run: |
+          set -o pipefail
+          dotnet list apps/AI.Factory.slnx package --vulnerable --include-transitive | tee vulnerable-packages.txt
+          if grep -q "has the following vulnerable packages" vulnerable-packages.txt; then
+            echo "::error::Vulnerable NuGet package(s) detected — see output above."
+            exit 1
+          fi
+
+      - name: Upload dependency scan output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-scan-output
+          path: vulnerable-packages.txt
+
+  docker-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate compose file
+        run: docker compose config -q
+
+      - name: Build images
+        run: docker compose build
+
+  container-smoke-test:
+    needs: docker-validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start stack
+        run: docker compose up -d
+
+      - name: Wait for migrator to complete successfully
+        run: |
+          set -e
+          timeout=120
+          elapsed=0
+          while [ "$(docker inspect -f '{{.State.Status}}' $(docker compose ps -q migrator))" != "exited" ]; do
+            if [ "$elapsed" -ge "$timeout" ]; then
+              echo "::error::Timed out waiting for migrator to exit."
+              docker compose logs migrator
+              exit 1
+            fi
+            sleep 3
+            elapsed=$((elapsed + 3))
+          done
+          exit_code=$(docker inspect -f '{{.State.ExitCode}}' $(docker compose ps -q migrator))
+          echo "migrator exit code: $exit_code"
+          if [ "$exit_code" != "0" ]; then
+            docker compose logs migrator
+            exit 1
+          fi
+
+      - name: Wait for api and worker to report healthy
+        run: |
+          set -e
+          for service in api worker; do
+            timeout=120
+            elapsed=0
+            cid=$(docker compose ps -q "$service")
+            while [ "$(docker inspect --format='{{.State.Health.Status}}' "$cid")" != "healthy" ]; do
+              if [ "$elapsed" -ge "$timeout" ]; then
+                echo "::error::Timed out waiting for $service to become healthy."
+                docker compose logs "$service"
+                exit 1
+              fi
+              sleep 3
+              elapsed=$((elapsed + 3))
+            done
+          done
+
+      - name: Probe health endpoints
+        run: |
+          set -e
+          curl -f http://localhost:8080/health/live
+          curl -f http://localhost:8080/health/ready
+
+      - name: Confirm worker liveness file
+        run: docker compose exec -T worker test -f /tmp/ai-factory-health/worker.live
+
+      - name: Deployment diagnostics must not leak secrets
+        run: |
+          set -e
+          body=$(curl -f http://localhost:8080/api/operations/deployment)
+          echo "$body"
+          if echo "$body" | grep -iE 'password|secret|apikey|Data Source=' >/dev/null; then
+            echo "::error::Deployment diagnostics response appears to leak sensitive data."
+            exit 1
+          fi
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

@@ -275,3 +275,18 @@ docker run --rm -v ai_factory_production_backups:/b busybox ls -la /b
 | Persistent Database Locked | Review active operations | Restart Stack | Tier 2 (DevOps / SRE) |
 | Database Corruption / Disk Loss | Disaster Recovery Runbook | Restore from Backup | Tier 3 (Database Lead / Architect) |
 | Migration Script Failure | Analyze schema difference | Rollback release | Tier 3 (Lead Engineer) |
+
+---
+
+## 6. CI/CD, Release & Rollback (Phase 17.5.1)
+
+CI validation (build, full test suite, the four `Category=` filters, secret scan, dependency
+scan, docker compose validation, and a container smoke test), release certification (repeated
+stability runs, versioned builds, image tagging, SBOM generation, container vulnerability
+scanning, the migration-failure regression gate, and the backup/restore release gate), image
+tagging/rollback strategy, and the full list of known limitations (no container registry
+configured, dependency-scan severity-bucketing limitation, etc.) are documented in
+[`phase-17.5.1-cicd-release-automation-supply-chain.md`](./phase-17.5.1-cicd-release-automation-supply-chain.md).
+Use that document, not this section, as the source of truth for anything CI/CD- or
+release-pipeline-related; this runbook's §4.6/§4.7 above remain the source of truth for the
+underlying migration/backup/restore *mechanics* that the release pipeline exercises.

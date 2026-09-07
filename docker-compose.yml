@@ -7,7 +7,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
-    image: ai-factory-api:latest
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-0.0.0-dev}
+        GIT_COMMIT: ${GIT_COMMIT:-local}
+        GIT_BRANCH: ${GIT_BRANCH:-local}
+        BUILD_NUMBER: ${BUILD_NUMBER:-0}
+        BUILD_TIMESTAMP_UTC: ${BUILD_TIMESTAMP_UTC:-unknown}
+    image: ai-factory-api:${IMAGE_TAG:-latest}
     command: ["--migrate-only"]
     restart: "no"
     environment:
@@ -31,7 +37,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
-    image: ai-factory-api:latest
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-0.0.0-dev}
+        GIT_COMMIT: ${GIT_COMMIT:-local}
+        GIT_BRANCH: ${GIT_BRANCH:-local}
+        BUILD_NUMBER: ${BUILD_NUMBER:-0}
+        BUILD_TIMESTAMP_UTC: ${BUILD_TIMESTAMP_UTC:-unknown}
+    image: ai-factory-api:${IMAGE_TAG:-latest}
     restart: unless-stopped
     stop_grace_period: 30s
     depends_on:
@@ -79,7 +91,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.worker
-    image: ai-factory-worker:latest
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-0.0.0-dev}
+        GIT_COMMIT: ${GIT_COMMIT:-local}
+        GIT_BRANCH: ${GIT_BRANCH:-local}
+        BUILD_NUMBER: ${BUILD_NUMBER:-0}
+        BUILD_TIMESTAMP_UTC: ${BUILD_TIMESTAMP_UTC:-unknown}
+    image: ai-factory-worker:${IMAGE_TAG:-latest}
     restart: unless-stopped
     stop_grace_period: 45s
     depends_on:

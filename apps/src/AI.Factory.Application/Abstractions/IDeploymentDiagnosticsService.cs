@@ -17,7 +17,9 @@ public sealed record DeploymentDiagnosticsSnapshot(
     TimeSpan Uptime,
     string DatabaseProvider,
     string? GitCommit = null,
-    string? BuildTimestamp = null);
+    string? BuildTimestamp = null,
+    string? GitBranch = null,
+    string? BuildNumber = null);
 
 /// <summary>
 /// Collects runtime deployment and container diagnostics.

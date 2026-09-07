@@ -37,9 +37,17 @@ RUN dotnet restore apps/src/AI.Factory.Api/AI.Factory.Api.csproj
 # Copy remaining source code
 COPY apps/src/ apps/src/
 
+# Version metadata (Phase 17.5.1) — property names match apps/Directory.Build.props exactly.
+# Local builds keep the defaults below; CI/release builds override them via --build-arg.
+ARG BUILD_VERSION=0.0.0-dev
+ARG GIT_COMMIT=local
+ARG GIT_BRANCH=local
+ARG BUILD_NUMBER=0
+ARG BUILD_TIMESTAMP_UTC=unknown
+
 # Build in Release configuration
 WORKDIR /src/apps/src/AI.Factory.Api
-RUN dotnet build AI.Factory.Api.csproj -c Release --no-restore
+RUN dotnet build AI.Factory.Api.csproj -c Release --no-restore -p:SemanticVersion=$BUILD_VERSION -p:GitCommit=$GIT_COMMIT -p:GitBranch=$GIT_BRANCH -p:BuildNumber=$BUILD_NUMBER
 
 # Stage 3: Publish
 FROM build AS publish
@@ -48,6 +56,29 @@ RUN dotnet publish AI.Factory.Api.csproj -c Release -o /app/publish --no-build /
 # Stage 4: Final Production Runtime Image
 FROM base AS final
 WORKDIR /app
+
+# Docker ARGs don't cross stages — redeclare, then expose as runtime ENV so
+# DeploymentDiagnosticsService (Phase 17.5.1) can read them from the running container.
+ARG BUILD_VERSION=0.0.0-dev
+ARG GIT_COMMIT=local
+ARG GIT_BRANCH=local
+ARG BUILD_NUMBER=0
+ARG BUILD_TIMESTAMP_UTC=unknown
+# The Dockerfile alone doesn't know the repo URL, so it's passed in separately (defaults to
+# "unknown" for local builds; release.yml passes the real https://github.com/<owner>/<repo>).
+ARG IMAGE_SOURCE_URL=unknown
+ENV BUILD_COMMIT=$GIT_COMMIT \
+    BUILD_BRANCH=$GIT_BRANCH \
+    BUILD_NUMBER=$BUILD_NUMBER \
+    BUILD_TIMESTAMP_UTC=$BUILD_TIMESTAMP_UTC
+
+# Standard OCI labels (phase 17.5.2). Values come from the same ARGs used for the assembly
+# version metadata above (SemanticVersion/GitCommit/BuildTimestampUtc via Directory.Build.props),
+# and release.yml passes matching --label flags at build time — no independent version source.
+LABEL org.opencontainers.image.version=$BUILD_VERSION \
+      org.opencontainers.image.revision=$GIT_COMMIT \
+      org.opencontainers.image.created=$BUILD_TIMESTAMP_UTC \
+      org.opencontainers.image.source=$IMAGE_SOURCE_URL
 
 # Ensure persistent and temporary directory structures exist and are owned by non-root user
 RUN mkdir -p /var/lib/ai-factory/data /var/lib/ai-factory/backups /tmp/ai-factory && \

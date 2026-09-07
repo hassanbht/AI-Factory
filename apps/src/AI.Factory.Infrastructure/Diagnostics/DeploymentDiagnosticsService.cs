@@ -23,6 +23,8 @@ public sealed class DeploymentDiagnosticsService : IDeploymentDiagnosticsService
     private readonly DateTime _startedAtUtc;
     private readonly string? _gitCommit;
     private readonly string? _buildTimestamp;
+    private readonly string? _gitBranch;
+    private readonly string? _buildNumber;
 
     public DeploymentDiagnosticsService(DatabaseOptions databaseOptions)
     {
@@ -53,7 +55,14 @@ public sealed class DeploymentDiagnosticsService : IDeploymentDiagnosticsService
         _gitCommit = Environment.GetEnvironmentVariable("BUILD_COMMIT")
                      ?? Environment.GetEnvironmentVariable("GIT_COMMIT");
 
-        _buildTimestamp = Environment.GetEnvironmentVariable("BUILD_TIMESTAMP");
+        _buildTimestamp = Environment.GetEnvironmentVariable("BUILD_TIMESTAMP")
+                           ?? Environment.GetEnvironmentVariable("BUILD_TIMESTAMP_UTC");
+
+        _gitBranch = Environment.GetEnvironmentVariable("BUILD_BRANCH")
+                     ?? Environment.GetEnvironmentVariable("GIT_BRANCH");
+
+        _buildNumber = Environment.GetEnvironmentVariable("BUILD_NUMBER")
+                       ?? Environment.GetEnvironmentVariable("GITHUB_RUN_ID");
     }
 
     public DeploymentDiagnosticsSnapshot GetSnapshot()
@@ -73,6 +82,8 @@ public sealed class DeploymentDiagnosticsService : IDeploymentDiagnosticsService
             Uptime: uptime,
             DatabaseProvider: _databaseOptions.Provider,
             GitCommit: _gitCommit,
-            BuildTimestamp: _buildTimestamp);
+            BuildTimestamp: _buildTimestamp,
+            GitBranch: _gitBranch,
+            BuildNumber: _buildNumber);
     }
 }

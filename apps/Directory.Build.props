@@ -1,0 +1,27 @@
+<Project>
+
+  <!--
+    Deterministic version metadata for every project under apps/.
+
+    Local builds fall back to the VERSION file plus "local"/"dev" markers so the
+    solution still builds identically outside CI. GitHub Actions builds inject the
+    real commit, branch, and run id via -p:GitCommit=... -p:GitBranch=... -p:BuildNumber=...
+    (see .github/workflows/ci.yml and .github/workflows/release.yml).
+  -->
+
+  <PropertyGroup>
+    <RepoRoot>$(MSBuildThisFileDirectory)..\</RepoRoot>
+    <SemanticVersion Condition="'$(SemanticVersion)' == ''">$([System.IO.File]::ReadAllText('$(RepoRoot)VERSION').Trim())</SemanticVersion>
+
+    <GitCommit Condition="'$(GitCommit)' == ''">local</GitCommit>
+    <GitBranch Condition="'$(GitBranch)' == ''">local</GitBranch>
+    <BuildNumber Condition="'$(BuildNumber)' == ''">0</BuildNumber>
+    <BuildTimestampUtc Condition="'$(BuildTimestampUtc)' == ''">$([System.DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"))</BuildTimestampUtc>
+
+    <Version>$(SemanticVersion)</Version>
+    <AssemblyVersion>$(SemanticVersion).0</AssemblyVersion>
+    <FileVersion>$(SemanticVersion).0</FileVersion>
+    <InformationalVersion>$(SemanticVersion)+$(GitCommit).$(GitBranch).$(BuildNumber)</InformationalVersion>
+  </PropertyGroup>
+
+</Project>

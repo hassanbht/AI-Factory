@@ -44,6 +44,12 @@ public sealed class DeploymentDiagnosticsTests : IClassFixture<ApiTestFactory>
         Assert.True(root.TryGetProperty("isContainerized", out _));
         Assert.True(root.TryGetProperty("uptime", out _));
 
+        // gitBranch/buildNumber are CI-only metadata (Phase 17.5.1); a local test run has
+        // neither BUILD_BRANCH/GIT_BRANCH nor BUILD_NUMBER/GITHUB_RUN_ID set, so only assert
+        // the properties are present, not that they carry a non-null value.
+        Assert.True(root.TryGetProperty("gitBranch", out _));
+        Assert.True(root.TryGetProperty("buildNumber", out _));
+
         // CRITICAL: Deployment diagnostics must NEVER expose connection strings, passwords, or secret values!
         var rawJson = root.GetRawText();
         Assert.DoesNotContain("Data Source=", rawJson, StringComparison.OrdinalIgnoreCase);

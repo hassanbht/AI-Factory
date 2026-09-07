@@ -440,7 +440,7 @@ jobs:
           set -e
           timeout=120
           elapsed=0
-          while [ "$(docker inspect -f '{{.State.Status}}' $(docker compose -f docker-compose.yml -f docker-compose.release.yml ps -q migrator))" != "exited" ]; do
+          while [ "$(docker inspect -f '{{.State.Status}}' $(docker compose -f docker-compose.yml -f docker-compose.release.yml ps -a -q migrator))" != "exited" ]; do
             if [ "$elapsed" -ge "$timeout" ]; then
               echo "::error::Timed out waiting for migrator to exit."
               docker compose -f docker-compose.yml -f docker-compose.release.yml logs migrator
@@ -449,7 +449,7 @@ jobs:
             sleep 3
             elapsed=$((elapsed + 3))
           done
-          exit_code=$(docker inspect -f '{{.State.ExitCode}}' $(docker compose -f docker-compose.yml -f docker-compose.release.yml ps -q migrator))
+          exit_code=$(docker inspect -f '{{.State.ExitCode}}' $(docker compose -f docker-compose.yml -f docker-compose.release.yml ps -a -q migrator))
           echo "migrator exit code: $exit_code"
           if [ "$exit_code" != "0" ]; then
             docker compose -f docker-compose.yml -f docker-compose.release.yml logs migrator

@@ -12,7 +12,7 @@ namespace AI.Factory.Api.Tests.Deployment;
 public sealed class DockerComposeReleaseValidationTests
 {
     [Fact]
-    public async Task DockerComposeConfig_WithoutImageTagOrDirectImages_FailsLoudly()
+    public async Task DockerComposeConfig_WithoutDirectImages_FailsLoudly()
     {
         if (!IsDockerAvailable())
         {
@@ -28,11 +28,10 @@ public sealed class DockerComposeReleaseValidationTests
             {
                 ["AI_FACTORY_API_IMAGE"] = null,
                 ["AI_FACTORY_WORKER_IMAGE"] = null,
-                ["AI_FACTORY_IMAGE_TAG"] = null,
             });
 
         Assert.NotEqual(0, exitCode);
-        Assert.Contains("AI_FACTORY_API_IMAGE or AI_FACTORY_IMAGE_TAG must be set", stderr, StringComparison.Ordinal);
+        Assert.Contains("AI_FACTORY_API_IMAGE must be set", stderr, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -52,14 +51,13 @@ public sealed class DockerComposeReleaseValidationTests
             {
                 ["AI_FACTORY_API_IMAGE"] = "ghcr.io/example-owner/example-repo/api@sha256:1111111111111111111111111111111111111111111111111111111111111111",
                 ["AI_FACTORY_WORKER_IMAGE"] = "ghcr.io/example-owner/example-repo/worker@sha256:2222222222222222222222222222222222222222222222222222222222222222",
-                ["AI_FACTORY_IMAGE_TAG"] = null,
             });
 
         Assert.True(exitCode == 0, $"`docker compose config -q` failed with exit code {exitCode}: {stderr}");
     }
 
     [Fact]
-    public async Task DockerComposeConfig_WithImageTagAndRegistrySet_ExitsZero()
+    public async Task DockerComposeConfig_WithoutWorkerImage_FailsLoudly()
     {
         if (!IsDockerAvailable())
         {
@@ -73,13 +71,12 @@ public sealed class DockerComposeReleaseValidationTests
             repoRoot,
             env: new Dictionary<string, string?>
             {
-                ["AI_FACTORY_API_IMAGE"] = null,
+                ["AI_FACTORY_API_IMAGE"] = "ghcr.io/example-owner/example-repo/api@sha256:1111111111111111111111111111111111111111111111111111111111111111",
                 ["AI_FACTORY_WORKER_IMAGE"] = null,
-                ["AI_FACTORY_IMAGE_TAG"] = "0.1.0",
-                ["AI_FACTORY_IMAGE_REGISTRY"] = "ghcr.io/example-owner/example-repo",
             });
 
-        Assert.True(exitCode == 0, $"`docker compose config -q` failed with exit code {exitCode}: {stderr}");
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("AI_FACTORY_WORKER_IMAGE must be set", stderr, StringComparison.Ordinal);
     }
 
     private static string BuildConfigArgs(string repoRoot)

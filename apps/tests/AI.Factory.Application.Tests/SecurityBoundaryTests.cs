@@ -77,9 +77,13 @@ public sealed class SecurityBoundaryTests
     [Fact]
     public async Task SystemProcessRunner_AllowsExplicitlyAllowedCommand_ToProceedPastPolicyCheck()
     {
+        var isWindows = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows);
+        var shellExe = isWindows ? "cmd.exe" : "sh";
+        var args = isWindows ? new[] { "/c", "exit", "0" } : new[] { "-c", "exit 0" };
+
         var runner = new SystemProcessRunner(new CommandPolicyOptions
         {
-            AllowedCommands = new[] { "cmd" },
+            AllowedCommands = new[] { "cmd", "cmd.exe", "sh" },
             DeniedCommands = Array.Empty<string>()
         });
 
@@ -87,7 +91,7 @@ public sealed class SecurityBoundaryTests
         // that it is NOT rejected as a SecurityViolationException proves
         // the allow-list let it through the boundary check.
         var result = await runner.RunAsync(
-            new ProcessRunRequest("cmd.exe", new[] { "/c", "exit", "0" }, TimeSpan.FromSeconds(10)));
+            new ProcessRunRequest(shellExe, args, TimeSpan.FromSeconds(10)));
 
         Assert.Equal(0, result.ExitCode);
     }

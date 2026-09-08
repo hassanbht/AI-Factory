@@ -104,10 +104,14 @@ public sealed class WorkerRestartRecoveryTests
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await worker.StartAsync(cts.Token);
 
-        // Let a few poll ticks happen so we know claiming is actually live.
-        await Task.Delay(150);
+        // Let poll ticks happen until we know claiming is actually live.
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (runRepository.TryClaimCalls == 0 && sw.ElapsedMilliseconds < 2000)
+        {
+            await Task.Delay(20);
+        }
         var claimsBeforeStop = runRepository.TryClaimCalls;
-        Assert.True(claimsBeforeStop > 0);
+        Assert.True(claimsBeforeStop > 0, "Worker never polled for work before stop.");
 
         await worker.StopAsync(CancellationToken.None);
         var claimsAtStop = runRepository.TryClaimCalls;

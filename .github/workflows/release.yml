@@ -28,6 +28,7 @@ jobs:
       git_branch: ${{ steps.vars.outputs.git_branch }}
       build_number: ${{ steps.vars.outputs.build_number }}
       artifact_suffix: ${{ steps.vars.outputs.artifact_suffix }}
+      repo_lower: ${{ steps.vars.outputs.repo_lower }}
     steps:
       # fetch-depth: 0 (full history, all tags) is required by the tag-validation steps below —
       # `git rev-list`/`git merge-base --is-ancestor` need real history, not a shallow clone.
@@ -104,11 +105,13 @@ jobs:
         run: |
           semantic_version=$(cat VERSION | tr -d '[:space:]')
           git_commit=$(git rev-parse --short HEAD)
+          repo_lower=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           echo "semantic_version=$semantic_version" >> "$GITHUB_OUTPUT"
           echo "git_commit=$git_commit" >> "$GITHUB_OUTPUT"
           echo "git_branch=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
           echo "build_number=${{ github.run_id }}" >> "$GITHUB_OUTPUT"
           echo "artifact_suffix=$semantic_version-$git_commit" >> "$GITHUB_OUTPUT"
+          echo "repo_lower=$repo_lower" >> "$GITHUB_OUTPUT"
 
   stability-gate:
     needs: setup
@@ -195,8 +198,8 @@ jobs:
       - name: Compute image references and tags
         id: img
         run: |
-          echo "api_image=ghcr.io/${{ github.repository }}/api" >> "$GITHUB_OUTPUT"
-          echo "worker_image=ghcr.io/${{ github.repository }}/worker" >> "$GITHUB_OUTPUT"
+          echo "api_image=ghcr.io/${{ needs.setup.outputs.repo_lower }}/api" >> "$GITHUB_OUTPUT"
+          echo "worker_image=ghcr.io/${{ needs.setup.outputs.repo_lower }}/worker" >> "$GITHUB_OUTPUT"
           echo "sha_tag=sha-${{ needs.setup.outputs.git_commit }}" >> "$GITHUB_OUTPUT"
           echo "build_tag=build-${{ needs.setup.outputs.build_number }}" >> "$GITHUB_OUTPUT"
           echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
@@ -349,7 +352,7 @@ jobs:
       - name: Scan API image (published registry artifact)
         uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
         with:
-          image-ref: ghcr.io/${{ github.repository }}/api:${{ needs.setup.outputs.semantic_version }}
+          image-ref: ghcr.io/${{ needs.setup.outputs.repo_lower }}/api:${{ needs.setup.outputs.semantic_version }}
           severity: 'CRITICAL,HIGH'
           exit-code: '1'
           format: 'table'
@@ -359,7 +362,7 @@ jobs:
         if: always()
         uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
         with:
-          image-ref: ghcr.io/${{ github.repository }}/worker:${{ needs.setup.outputs.semantic_version }}
+          image-ref: ghcr.io/${{ needs.setup.outputs.repo_lower }}/worker:${{ needs.setup.outputs.semantic_version }}
           severity: 'CRITICAL,HIGH'
           exit-code: '1'
           format: 'table'

@@ -450,7 +450,10 @@ if (args.Contains("--migrate-only"))
         string.Equals(Environment.GetEnvironmentVariable("AI_FACTORY_MIGRATE_FAIL_TEST"), "1", StringComparison.OrdinalIgnoreCase))
     {
         logger.LogError("Simulated migration failure triggered for verification. Exiting with code 1.");
+        Console.Error.WriteLine("Simulated migration failure triggered for verification. Exiting with code 1.");
+        Console.Error.Flush();
         Environment.ExitCode = 1;
+        await ((IAsyncDisposable)app).DisposeAsync();
         return;
     }
 

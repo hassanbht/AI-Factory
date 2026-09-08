@@ -177,12 +177,13 @@ public sealed class RateLimitBurstStressTests : IClassFixture<RateLimitBurstStre
         // Fresh window: wait out any residual state from other tests in this fixture.
         await Task.Delay(TimeSpan.FromSeconds(RateLimitBurstStressFactory.WindowSeconds + 1));
 
-        var atLimit = await Task.WhenAll(Enumerable.Range(0, RateLimitBurstStressFactory.PermitLimit)
+        var responses = await Task.WhenAll(Enumerable.Range(0, RateLimitBurstStressFactory.PermitLimit + 1)
             .Select(_ => client.GetAsync("/api/approvals/pending")));
 
-        Assert.All(atLimit, r => Assert.Equal(HttpStatusCode.OK, r.StatusCode));
+        var okCount = responses.Count(r => r.StatusCode == HttpStatusCode.OK);
+        var throttledCount = responses.Count(r => r.StatusCode == HttpStatusCode.TooManyRequests);
 
-        var oneMore = await client.GetAsync("/api/approvals/pending");
-        Assert.Equal(HttpStatusCode.TooManyRequests, oneMore.StatusCode);
+        Assert.Equal(RateLimitBurstStressFactory.PermitLimit, okCount);
+        Assert.Equal(1, throttledCount);
     }
 }

@@ -31,6 +31,32 @@ public sealed class DockerComposeReleaseValidationTests
             });
 
         Assert.NotEqual(0, exitCode);
+        Assert.True(
+            stderr.Contains("AI_FACTORY_API_IMAGE must be set", StringComparison.Ordinal) ||
+            stderr.Contains("AI_FACTORY_WORKER_IMAGE must be set", StringComparison.Ordinal),
+            $"Expected stderr to contain missing image env error, got: {stderr}");
+    }
+
+    [Fact]
+    public async Task DockerComposeConfig_WithoutApiImage_FailsLoudly()
+    {
+        if (!IsDockerAvailable())
+        {
+            return;
+        }
+
+        var repoRoot = FindRepoRoot();
+        var (exitCode, _, stderr) = await RunProcessAsync(
+            "docker",
+            BuildConfigArgs(repoRoot),
+            repoRoot,
+            env: new Dictionary<string, string?>
+            {
+                ["AI_FACTORY_API_IMAGE"] = null,
+                ["AI_FACTORY_WORKER_IMAGE"] = "ghcr.io/example-owner/example-repo/worker@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            });
+
+        Assert.NotEqual(0, exitCode);
         Assert.Contains("AI_FACTORY_API_IMAGE must be set", stderr, StringComparison.Ordinal);
     }
 

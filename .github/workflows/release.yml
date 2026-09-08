@@ -341,6 +341,9 @@ jobs:
   container-scan:
     needs: [setup, docker-release]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     steps:
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -349,8 +352,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Pull published images for local scanning
+        run: |
+          docker pull ghcr.io/${{ needs.setup.outputs.repo_lower }}/api:${{ needs.setup.outputs.semantic_version }}
+          docker pull ghcr.io/${{ needs.setup.outputs.repo_lower }}/worker:${{ needs.setup.outputs.semantic_version }}
+
       - name: Scan API image (published registry artifact)
         uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         with:
           image-ref: ghcr.io/${{ needs.setup.outputs.repo_lower }}/api:${{ needs.setup.outputs.semantic_version }}
           severity: 'CRITICAL,HIGH'
@@ -361,6 +372,9 @@ jobs:
       - name: Scan Worker image (published registry artifact)
         if: always()
         uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         with:
           image-ref: ghcr.io/${{ needs.setup.outputs.repo_lower }}/worker:${{ needs.setup.outputs.semantic_version }}
           severity: 'CRITICAL,HIGH'
@@ -412,6 +426,12 @@ jobs:
   published-smoke-test:
     needs: [setup, docker-release]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    env:
+      AI_FACTORY_API_IMAGE: ${{ needs.docker-release.outputs.api_digest }}
+      AI_FACTORY_WORKER_IMAGE: ${{ needs.docker-release.outputs.worker_digest }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 

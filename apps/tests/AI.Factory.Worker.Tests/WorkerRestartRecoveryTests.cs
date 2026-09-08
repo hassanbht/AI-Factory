@@ -279,7 +279,7 @@ public sealed class WorkerRestartRecoveryTests
 
         // Wait until repeated poll failures drive coordinator to Degraded
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (coordinator.GetSnapshot().State != WorkerLifecycleState.Degraded && sw.ElapsedMilliseconds < 2000)
+        while ((coordinator.GetSnapshot().State != WorkerLifecycleState.Degraded || metrics.GetSnapshot().WorkerDegraded < 1) && sw.ElapsedMilliseconds < 2000)
         {
             await Task.Delay(15);
         }
@@ -294,7 +294,7 @@ public sealed class WorkerRestartRecoveryTests
         // Signal repository to recover (stop throwing, return null)
         repository.ShouldThrow = false;
         sw.Restart();
-        while (coordinator.GetSnapshot().State != WorkerLifecycleState.Ready && sw.ElapsedMilliseconds < 2000)
+        while ((coordinator.GetSnapshot().State != WorkerLifecycleState.Ready || metrics.GetSnapshot().WorkerRecovered < 1) && sw.ElapsedMilliseconds < 2000)
         {
             await Task.Delay(15);
         }

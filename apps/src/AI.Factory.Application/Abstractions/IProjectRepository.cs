@@ -12,6 +12,9 @@ public interface IProjectRepository
         string slug,
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<Project>> ListAsync(
+        CancellationToken cancellationToken = default);
+
     Task AddAsync(
         Project project,
         CancellationToken cancellationToken = default);

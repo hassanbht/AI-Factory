@@ -36,6 +36,18 @@ public sealed class WorkItemTaskSchedulerTests
         {
             return Task.CompletedTask;
         }
+
+        public Task AddAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
+            throw new NotImplementedException();
+
+        public Task AddDependencyAsync(Guid workItemId, Guid dependsOnWorkItemId, CancellationToken cancellationToken = default) =>
+            throw new NotImplementedException();
+
+        public Task<bool> RemoveDependencyAsync(Guid workItemId, Guid dependsOnWorkItemId, CancellationToken cancellationToken = default) =>
+            throw new NotImplementedException();
+
+        public Task<bool> DependencyExistsAsync(Guid workItemId, Guid dependsOnWorkItemId, CancellationToken cancellationToken = default) =>
+            throw new NotImplementedException();
     }
 
     private static WorkItem MakeItem(

@@ -106,6 +106,20 @@ builder.Services.AddSingleton<ITaskDependencyResolver, TaskDependencyResolver>()
 builder.Services.AddScoped<ITaskStateManager, TaskStateManager>();
 builder.Services.AddScoped<ITaskScheduler, WorkItemTaskScheduler>();
 
+// Phase 18.3 — Deterministic Task Scheduler & Dispatch Engine. The scheduling
+// loop itself runs in the Worker process (TaskSchedulerHostedService); these
+// registrations exist here so /api/scheduler/status has something to read —
+// same split-process pattern as IOperationalMetrics/GetSnapshot below.
+var taskSchedulerOptions = new TaskSchedulerOptions();
+builder.Configuration.GetSection(TaskSchedulerOptions.SectionName).Bind(taskSchedulerOptions);
+builder.Services.AddSingleton(taskSchedulerOptions);
+builder.Services.AddSingleton<ISchedulerStatusTracker, SchedulerStatusTracker>();
+
+// Phase 18.2 — Project & Task Domain Foundation
+builder.Services.AddScoped<AI.Factory.Application.Tasks.WorkItemService>();
+builder.Services.AddScoped<AI.Factory.Application.Tasks.TaskDependencyService>();
+builder.Services.AddScoped<AI.Factory.Application.Tasks.TaskReadinessService>();
+
 var hermesOptions = new HermesOptions();
 builder.Configuration.GetSection("Hermes").Bind(hermesOptions);
 
@@ -756,13 +770,15 @@ app.MapPost("/api/projects", async (
 
     return Results.Created(
         $"/api/projects/{project.Id}",
-        new
-        {
-            project.Id,
-            project.Name,
-            project.Slug,
-            project.Status
-        });
+        ToProjectDto(project));
+}).RequireRateLimiting("GeneralApi");
+
+app.MapGet("/api/projects", async (
+    ProjectService service,
+    CancellationToken cancellationToken) =>
+{
+    var projects = await service.ListAsync(cancellationToken);
+    return Results.Ok(projects.Select(ToProjectDto));
 }).RequireRateLimiting("GeneralApi");
 
 app.MapGet("/api/projects/{id}", async (
@@ -781,8 +797,185 @@ app.MapGet("/api/projects/{id}", async (
 
     return project is null
         ? Results.NotFound()
-        : Results.Ok(project);
+        : Results.Ok(ToProjectDto(project));
 }).RequireRateLimiting("GeneralApi");
+
+app.MapPatch("/api/projects/{id}/status", async (
+    string id,
+    UpdateStatusRequest request,
+    ProjectService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!Guid.TryParse(id, out var parsedGuid) || parsedGuid == Guid.Empty)
+    {
+        throw new ValidationException("Invalid project identifier.");
+    }
+
+    if (!Enum.TryParse<ProjectStatus>(request.Status, ignoreCase: true, out var next) || !Enum.IsDefined(next))
+    {
+        throw new ValidationException($"Invalid project status '{request.Status}'.");
+    }
+
+    var project = await service.TransitionStatusAsync(parsedGuid, next, cancellationToken);
+    return Results.Ok(ToProjectDto(project));
+}).RequireRateLimiting("GeneralApi");
+
+// ------------------------------------------------------------
+// Tasks (Phase 18.2)
+// ------------------------------------------------------------
+
+app.MapPost("/api/projects/{projectId}/tasks", async (
+    string projectId,
+    CreateWorkItemRequest request,
+    AI.Factory.Application.Tasks.WorkItemService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!Guid.TryParse(projectId, out var parsedProjectId) || parsedProjectId == Guid.Empty)
+    {
+        throw new ValidationException("Invalid project identifier.");
+    }
+
+    if (!Enum.TryParse<WorkItemType>(request.Type, ignoreCase: true, out var type) || !Enum.IsDefined(type))
+    {
+        throw new ValidationException($"Invalid task type '{request.Type}'.");
+    }
+
+    var workItem = await service.CreateAsync(
+        parsedProjectId, type, request.Title, request.Description, request.Priority ?? "Normal", cancellationToken);
+
+    return Results.Created($"/api/tasks/{workItem.Id}", ToWorkItemDto(workItem));
+}).RequireRateLimiting("GeneralApi");
+
+app.MapGet("/api/projects/{projectId}/tasks", async (
+    string projectId,
+    AI.Factory.Application.Tasks.WorkItemService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!Guid.TryParse(projectId, out var parsedProjectId) || parsedProjectId == Guid.Empty)
+    {
+        throw new ValidationException("Invalid project identifier.");
+    }
+
+    var items = await service.ListByProjectAsync(parsedProjectId, cancellationToken);
+    return Results.Ok(items.Select(ToWorkItemDto));
+}).RequireRateLimiting("GeneralApi");
+
+app.MapGet("/api/tasks/{id}", async (
+    string id,
+    AI.Factory.Application.Tasks.WorkItemService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!Guid.TryParse(id, out var parsedId) || parsedId == Guid.Empty)
+    {
+        throw new ValidationException("Invalid task identifier.");
+    }
+
+    var workItem = await service.GetAsync(parsedId, cancellationToken);
+    return workItem is null ? Results.NotFound() : Results.Ok(ToWorkItemDto(workItem));
+}).RequireRateLimiting("GeneralApi");
+
+app.MapPatch("/api/tasks/{id}/status", async (
+    string id,
+    UpdateStatusRequest request,
+    AI.Factory.Application.Tasks.WorkItemService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!Guid.TryParse(id, out var parsedId) || parsedId == Guid.Empty)
+    {
+        throw new ValidationException("Invalid task identifier.");
+    }
+
+    if (!Enum.TryParse<WorkItemStatus>(request.Status, ignoreCase: true, out var next) || !Enum.IsDefined(next))
+    {
+        throw new ValidationException($"Invalid task status '{request.Status}'.");
+    }
+
+    var workItem = await service.TransitionStatusAsync(parsedId, next, cancellationToken);
+    return Results.Ok(ToWorkItemDto(workItem));
+}).RequireRateLimiting("GeneralApi");
+
+app.MapPost("/api/tasks/{id}/dependencies", async (
+    string id,
+    AddDependencyRequest request,
+    AI.Factory.Application.Tasks.TaskDependencyService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!Guid.TryParse(id, out var parsedId) || parsedId == Guid.Empty)
+    {
+        throw new ValidationException("Invalid task identifier.");
+    }
+
+    if (request.DependsOnTaskId == Guid.Empty)
+    {
+        throw new ValidationException("DependsOnTaskId must be a non-empty GUID.");
+    }
+
+    await service.AddDependencyAsync(parsedId, request.DependsOnTaskId, cancellationToken);
+    return Results.Created($"/api/tasks/{id}/dependencies", new { TaskId = parsedId, request.DependsOnTaskId });
+}).RequireRateLimiting("GeneralApi");
+
+app.MapDelete("/api/tasks/{id}/dependencies/{dependsOnTaskId}", async (
+    string id,
+    string dependsOnTaskId,
+    AI.Factory.Application.Tasks.TaskDependencyService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!Guid.TryParse(id, out var parsedId) || parsedId == Guid.Empty
+        || !Guid.TryParse(dependsOnTaskId, out var parsedDependsOnId) || parsedDependsOnId == Guid.Empty)
+    {
+        throw new ValidationException("Invalid task identifier.");
+    }
+
+    await service.RemoveDependencyAsync(parsedId, parsedDependsOnId, cancellationToken);
+    return Results.NoContent();
+}).RequireRateLimiting("GeneralApi");
+
+app.MapGet("/api/tasks/{id}/readiness", async (
+    string id,
+    AI.Factory.Application.Tasks.TaskReadinessService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!Guid.TryParse(id, out var parsedId) || parsedId == Guid.Empty)
+    {
+        throw new ValidationException("Invalid task identifier.");
+    }
+
+    var readiness = await service.GetReadinessAsync(parsedId, cancellationToken);
+    return Results.Ok(new { TaskId = parsedId, Readiness = readiness.ToString() });
+}).RequireRateLimiting("GeneralApi");
+
+// ------------------------------------------------------------
+// Task Scheduler (Phase 18.3)
+// ------------------------------------------------------------
+
+app.MapGet("/api/scheduler/status", (ISchedulerStatusTracker statusTracker) =>
+{
+    return Results.Ok(statusTracker.GetSnapshot());
+}).RequireRateLimiting("GeneralApi");
+
+static object ToProjectDto(Project project) => new
+{
+    project.Id,
+    project.Name,
+    project.Slug,
+    project.Description,
+    Status = project.Status.ToString(),
+    project.CreatedAtUtc,
+    project.UpdatedAtUtc
+};
+
+static object ToWorkItemDto(WorkItem workItem) => new
+{
+    workItem.Id,
+    workItem.ProjectId,
+    Type = workItem.Type.ToString(),
+    workItem.Title,
+    workItem.Description,
+    workItem.Status,
+    workItem.Priority,
+    workItem.CreatedAtUtc,
+    workItem.UpdatedAtUtc
+};
 
 // ------------------------------------------------------------
 // Human Approval
@@ -1185,6 +1378,7 @@ static object ToAgentRunDto(AgentRun run) => new
 {
     run.Id,
     run.ProjectId,
+    run.WorkItemId,
     run.AgentDefinitionId,
     Status = run.Status.ToString(),
     run.CreatedAtUtc,
@@ -1420,6 +1614,16 @@ app.Run();
 public sealed record CreateProjectRequest(
     string Name,
     string? Description);
+
+public sealed record UpdateStatusRequest(string Status);
+
+public sealed record CreateWorkItemRequest(
+    string Type,
+    string Title,
+    string? Description,
+    string? Priority);
+
+public sealed record AddDependencyRequest(Guid DependsOnTaskId);
 
 public sealed record ApprovalDecisionRequest(
     string? Comment);

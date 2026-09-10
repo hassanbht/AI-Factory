@@ -154,6 +154,21 @@ public sealed class AgentRunWorker : BackgroundService
             var result = await orchestrator.ExecuteAsync(run.Id, executionCts.Token);
             _metrics.RecordAgentExecution(result.Success, result.DurationMs);
             RecordLifecycleMetrics(result);
+
+            if (result.Executed && run.WorkItemId is not null)
+            {
+                // Phase 18.3 §10: AgentOrchestrator already persisted the
+                // terminal AgentRun (including ErrorMessage) — reload it
+                // rather than reconstructing from AgentOrchestrationResult.
+                var runRepositoryForSync = executionScope.ServiceProvider.GetRequiredService<IAgentRunRepository>();
+                var completedRun = await runRepositoryForSync.GetByIdAsync(run.Id, CancellationToken.None);
+
+                if (completedRun is not null)
+                {
+                    var sync = executionScope.ServiceProvider.GetRequiredService<IAgentRunWorkItemSync>();
+                    await sync.SyncAsync(completedRun, CancellationToken.None);
+                }
+            }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested || _shutdown.IsStopping)
         {

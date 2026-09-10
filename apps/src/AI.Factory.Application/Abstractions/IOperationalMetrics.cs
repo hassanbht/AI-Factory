@@ -137,6 +137,17 @@ public interface IOperationalMetrics
 
     void RecordAgentWorkerClaimSuccess();
 
+    // Phase 18.3 — TaskDispatchScheduler cycle counters.
+    void RecordSchedulingCycleRun();
+
+    void RecordSchedulerTaskDispatched();
+
+    void RecordSchedulerDispatchFailure();
+
+    void RecordSchedulerRaceLost();
+
+    void RecordSchedulerConcurrencyLimitSkipped(int count);
+
     OperationalMetricsSnapshot GetSnapshot();
 }
 
@@ -224,7 +235,12 @@ public sealed record OperationalMetricsSnapshot(
     long AgentRunsFailed = 0,
     long AgentRunsTimedOut = 0,
     long AgentRunsCancelled = 0,
-    long AgentWorkerClaimSuccess = 0);
+    long AgentWorkerClaimSuccess = 0,
+    long SchedulingCyclesRun = 0,
+    long SchedulerTasksDispatched = 0,
+    long SchedulerDispatchFailures = 0,
+    long SchedulerRaceLost = 0,
+    long SchedulerConcurrencyLimitSkipped = 0);
 
 public sealed class OperationalMetrics : IOperationalMetrics
 {
@@ -318,6 +334,12 @@ public sealed class OperationalMetrics : IOperationalMetrics
     private long _agentRunsTimedOut;
     private long _agentRunsCancelled;
     private long _agentWorkerClaimSuccess;
+
+    private long _schedulingCyclesRun;
+    private long _schedulerTasksDispatched;
+    private long _schedulerDispatchFailures;
+    private long _schedulerRaceLost;
+    private long _schedulerConcurrencyLimitSkipped;
 
     public void RecordOperationStarted() => Interlocked.Increment(ref _operationsStarted);
 
@@ -500,6 +522,12 @@ public sealed class OperationalMetrics : IOperationalMetrics
     public void RecordAgentRunCancelled() => Interlocked.Increment(ref _agentRunsCancelled);
     public void RecordAgentWorkerClaimSuccess() => Interlocked.Increment(ref _agentWorkerClaimSuccess);
 
+    public void RecordSchedulingCycleRun() => Interlocked.Increment(ref _schedulingCyclesRun);
+    public void RecordSchedulerTaskDispatched() => Interlocked.Increment(ref _schedulerTasksDispatched);
+    public void RecordSchedulerDispatchFailure() => Interlocked.Increment(ref _schedulerDispatchFailures);
+    public void RecordSchedulerRaceLost() => Interlocked.Increment(ref _schedulerRaceLost);
+    public void RecordSchedulerConcurrencyLimitSkipped(int count) => Interlocked.Add(ref _schedulerConcurrencyLimitSkipped, count);
+
     public OperationalMetricsSnapshot GetSnapshot()
     {
         return new OperationalMetricsSnapshot(
@@ -586,7 +614,12 @@ public sealed class OperationalMetrics : IOperationalMetrics
             Interlocked.Read(ref _agentRunsFailed),
             Interlocked.Read(ref _agentRunsTimedOut),
             Interlocked.Read(ref _agentRunsCancelled),
-            Interlocked.Read(ref _agentWorkerClaimSuccess));
+            Interlocked.Read(ref _agentWorkerClaimSuccess),
+            Interlocked.Read(ref _schedulingCyclesRun),
+            Interlocked.Read(ref _schedulerTasksDispatched),
+            Interlocked.Read(ref _schedulerDispatchFailures),
+            Interlocked.Read(ref _schedulerRaceLost),
+            Interlocked.Read(ref _schedulerConcurrencyLimitSkipped));
     }
 
     /// <summary>Count + running total, so average is derived rather than stored — no raw samples kept.</summary>

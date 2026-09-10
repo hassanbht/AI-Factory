@@ -8,6 +8,7 @@ public enum ProjectStatus
     Architecture = 30,
     Planning = 40,
     Implementation = 50,
+    Paused = 55,
     Testing = 60,
     Repairing = 70,
     Reviewing = 80,

@@ -15,4 +15,23 @@ public interface IWorkItemRepository
     Task UpdateAsync(
         WorkItem workItem,
         CancellationToken cancellationToken = default);
+
+    Task AddAsync(
+        WorkItem workItem,
+        CancellationToken cancellationToken = default);
+
+    Task AddDependencyAsync(
+        Guid workItemId,
+        Guid dependsOnWorkItemId,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> RemoveDependencyAsync(
+        Guid workItemId,
+        Guid dependsOnWorkItemId,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> DependencyExistsAsync(
+        Guid workItemId,
+        Guid dependsOnWorkItemId,
+        CancellationToken cancellationToken = default);
 }

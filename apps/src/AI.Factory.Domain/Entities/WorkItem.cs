@@ -1,5 +1,6 @@
 using AI.Factory.Domain.Common;
 using AI.Factory.Domain.Enums;
+using AI.Factory.Domain.Exceptions;
 
 namespace AI.Factory.Domain.Entities;
 
@@ -67,4 +68,33 @@ public sealed class WorkItem : IVersionedEntity
 
     public ICollection<EvaluationRun> EvaluationRuns { get; set; }
         = new List<EvaluationRun>();
+
+    /// <summary>
+    /// Applies a lifecycle transition through <see cref="WorkItemTransitions"/>,
+    /// throwing <see cref="InvalidWorkItemTransitionException"/> if not allowed.
+    /// Existing code that assigns <see cref="Status"/> directly (e.g. TaskStateManager)
+    /// is untouched — this is the new, guarded path for new callers.
+    /// </summary>
+    public void TransitionTo(WorkItemStatus next)
+    {
+        var current = Enum.TryParse<WorkItemStatus>(Status, out var parsed) ? parsed : (WorkItemStatus?)null;
+
+        if (current is null || !WorkItemTransitions.IsValid(current.Value, next))
+        {
+            throw new InvalidWorkItemTransitionException(current ?? WorkItemStatus.Draft, next);
+        }
+
+        Status = next.ToString();
+        UpdatedAtUtc = DateTime.UtcNow;
+
+        if (next == WorkItemStatus.Running && StartedAtUtc is null)
+        {
+            StartedAtUtc = DateTime.UtcNow;
+        }
+
+        if (WorkItemTransitions.IsTerminal(next))
+        {
+            CompletedAtUtc = DateTime.UtcNow;
+        }
+    }
 }

@@ -63,7 +63,7 @@ public sealed class ApiExceptionMapper
                 FailureCategory.Validation,
                 ShouldAudit: false),
 
-            ConflictException => new ApiErrorMapping(
+            ConflictException or AI.Factory.Domain.Exceptions.InvalidProjectTransitionException or AI.Factory.Domain.Exceptions.InvalidWorkItemTransitionException => new ApiErrorMapping(
                 StatusCodes.Status409Conflict,
                 "Operation conflict",
                 SensitiveDataSanitizer.Sanitize(string.IsNullOrWhiteSpace(exception.Message) ? "The operation conflicts with the current state." : exception.Message),

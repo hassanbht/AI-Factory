@@ -105,6 +105,14 @@ builder.Services.AddSingleton<ITaskDependencyResolver, TaskDependencyResolver>()
 builder.Services.AddScoped<ITaskStateManager, TaskStateManager>();
 builder.Services.AddScoped<ITaskScheduler, WorkItemTaskScheduler>();
 
+// Phase 18.3 — Deterministic Task Scheduler & Dispatch Engine.
+var taskSchedulerOptions = new TaskSchedulerOptions();
+builder.Configuration.GetSection(TaskSchedulerOptions.SectionName).Bind(taskSchedulerOptions);
+builder.Services.AddSingleton(taskSchedulerOptions);
+builder.Services.AddSingleton<ISchedulerStatusTracker, SchedulerStatusTracker>();
+builder.Services.AddScoped<ITaskDispatchScheduler, TaskDispatchScheduler>();
+builder.Services.AddScoped<IAgentRunWorkItemSync, AgentRunWorkItemSync>();
+
 var hermesOptions = new HermesOptions();
 builder.Configuration.GetSection("Hermes").Bind(hermesOptions);
 
@@ -359,5 +367,6 @@ builder.Services.AddScoped<OrchestrationRunExecutionEngine>();
         builder.Services.AddHostedService<WorkflowRecoveryHostedService>();
         builder.Services.AddHostedService<OrchestrationRunWorker>();
         builder.Services.AddHostedService<AgentRunWorker>();
+        builder.Services.AddHostedService<TaskSchedulerHostedService>();
     }
 }

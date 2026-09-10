@@ -35,6 +35,7 @@ public sealed class WorkItemRepository : IWorkItemRepository
         }
 
         return await _db.WorkItems
+            .Include(x => x.Dependencies)
             .FirstOrDefaultAsync(x => x.Id == workItemId, cancellationToken);
     }
 
@@ -51,5 +52,53 @@ public sealed class WorkItemRepository : IWorkItemRepository
         }
 
         await _db.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task AddAsync(
+        WorkItem workItem,
+        CancellationToken cancellationToken = default)
+    {
+        await _db.WorkItems.AddAsync(workItem, cancellationToken);
+        await _db.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task AddDependencyAsync(
+        Guid workItemId,
+        Guid dependsOnWorkItemId,
+        CancellationToken cancellationToken = default)
+    {
+        await _db.WorkItemDependencies.AddAsync(
+            new WorkItemDependency { WorkItemId = workItemId, DependsOnWorkItemId = dependsOnWorkItemId },
+            cancellationToken);
+        await _db.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task<bool> RemoveDependencyAsync(
+        Guid workItemId,
+        Guid dependsOnWorkItemId,
+        CancellationToken cancellationToken = default)
+    {
+        var existing = await _db.WorkItemDependencies.FirstOrDefaultAsync(
+            x => x.WorkItemId == workItemId && x.DependsOnWorkItemId == dependsOnWorkItemId,
+            cancellationToken);
+
+        if (existing is null)
+        {
+            return false;
+        }
+
+        _db.WorkItemDependencies.Remove(existing);
+        await _db.SaveChangesAsync(cancellationToken);
+        return true;
+    }
+
+    public Task<bool> DependencyExistsAsync(
+        Guid workItemId,
+        Guid dependsOnWorkItemId,
+        CancellationToken cancellationToken = default)
+    {
+        return _db.WorkItemDependencies.AnyAsync(
+            x => x.WorkItemId == workItemId && x.DependsOnWorkItemId == dependsOnWorkItemId,
+            cancellationToken);
     }
 }

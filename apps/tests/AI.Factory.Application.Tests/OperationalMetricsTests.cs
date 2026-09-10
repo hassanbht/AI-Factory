@@ -82,4 +82,38 @@ public sealed class OperationalMetricsTests
         Assert.Equal(1, snapshot.ApprovalApproved);
         Assert.Equal(2, snapshot.ApprovalRejected);
     }
+
+    [Fact]
+    public void AiMetrics_TrackRequestsSuccessesFailuresFallbacksAndRateLimits_Independently()
+    {
+        var metrics = new OperationalMetrics();
+
+        metrics.RecordAiRequestStarted();
+        metrics.RecordAiRequestStarted();
+        metrics.RecordAiRequestSucceeded(120);
+        metrics.RecordAiRequestFailed();
+        metrics.RecordAiProviderFailure();
+        metrics.RecordAiRateLimited();
+        metrics.RecordAiRoutingFallback();
+
+        var snapshot = metrics.GetSnapshot();
+        Assert.Equal(2, snapshot.AiRequests);
+        Assert.Equal(1, snapshot.AiRequestsSucceeded);
+        Assert.Equal(1, snapshot.AiRequestsFailed);
+        Assert.Equal(1, snapshot.AiProviderFailures);
+        Assert.Equal(1, snapshot.AiRateLimited);
+        Assert.Equal(1, snapshot.AiRoutingFallbacks);
+        Assert.Equal(120, snapshot.AverageAiRequestDurationMs);
+        Assert.Equal(120, snapshot.TotalAiRequestDurationMs);
+    }
+
+    [Fact]
+    public void AiMetrics_ConcurrentIncrements_ProduceExactCount()
+    {
+        var metrics = new OperationalMetrics();
+
+        Parallel.For(0, 1000, _ => metrics.RecordAiRoutingFallback());
+
+        Assert.Equal(1000, metrics.GetSnapshot().AiRoutingFallbacks);
+    }
 }

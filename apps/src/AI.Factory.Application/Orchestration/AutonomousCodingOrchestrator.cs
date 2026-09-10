@@ -20,7 +20,7 @@ public sealed class AutonomousCodingOrchestrator : IAutonomousCodingOrchestrator
     private readonly ITaskScheduler _scheduler;
     private readonly ITaskStateManager _taskStateManager;
     private readonly IAgentExecutor _agentExecutor;
-    private readonly IAgentRunRepository _agentRunRepository;
+    private readonly IHermesExecutionRepository _agentRunRepository;
     private readonly IArtifactRecorder _artifactRecorder;
     private readonly IContextProvider _contextProvider;
     private readonly IModelRouter _modelRouter;
@@ -50,7 +50,7 @@ public sealed class AutonomousCodingOrchestrator : IAutonomousCodingOrchestrator
         ITaskScheduler scheduler,
         ITaskStateManager taskStateManager,
         IAgentExecutor agentExecutor,
-        IAgentRunRepository agentRunRepository,
+        IHermesExecutionRepository agentRunRepository,
         IArtifactRecorder artifactRecorder,
         IContextProvider contextProvider,
         IModelRouter modelRouter,
@@ -342,7 +342,7 @@ public sealed class AutonomousCodingOrchestrator : IAutonomousCodingOrchestrator
         var prompt = BuildPrompt(workItem, contextText, repairContextText);
         var agentRunId = Guid.NewGuid();
 
-        await _agentRunRepository.CreatePendingAsync(new AgentRun
+        await _agentRunRepository.CreatePendingAsync(new HermesExecution
         {
             Id = agentRunId,
             WorkItemId = workItem.Id,

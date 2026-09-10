@@ -56,8 +56,8 @@ public sealed class WorkItem : IVersionedEntity
     public ICollection<WorkItemDependency> Dependencies { get; set; }
         = new List<WorkItemDependency>();
 
-    public ICollection<AgentRun> Runs { get; set; }
-        = new List<AgentRun>();
+    public ICollection<HermesExecution> HermesExecutions { get; set; }
+        = new List<HermesExecution>();
 
     public ICollection<ValidationRun> ValidationRuns { get; set; }
         = new List<ValidationRun>();

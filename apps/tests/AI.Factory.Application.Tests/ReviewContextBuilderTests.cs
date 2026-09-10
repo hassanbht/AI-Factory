@@ -86,7 +86,7 @@ public sealed class ReviewContextBuilderTests : IDisposable
                 CreatedAtUtc = DateTime.UtcNow
             });
 
-            db.AgentRuns.Add(new AgentRun
+            db.HermesExecutions.Add(new HermesExecution
             {
                 Id = Guid.NewGuid(),
                 WorkItemId = workItemId,

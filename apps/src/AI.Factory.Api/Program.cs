@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Threading.RateLimiting;
 using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Agents;
 using AI.Factory.Application.Approvals;
 using AI.Factory.Application.Configuration;
 using AI.Factory.Application.Exceptions;
@@ -8,15 +9,18 @@ using AI.Factory.Application.Learning;
 using AI.Factory.Application.Orchestration;
 using AI.Factory.Application.Projects;
 using AI.Factory.Application.Security;
+using AI.Factory.Application.Tools;
 using AI.Factory.Infrastructure.Agents;
 using AI.Factory.Infrastructure.Configuration;
 using AI.Factory.Infrastructure.Context;
 using AI.Factory.Infrastructure.Persistence;
+using AI.Factory.Infrastructure.Providers;
 using AI.Factory.Infrastructure.Resilience;
 using AI.Factory.Infrastructure.Shutdown;
 using AI.Factory.Api.HealthChecks;
 using AI.Factory.Api.Middleware;
 using AI.Factory.Application.Resilience;
+using AI.Factory.Domain.Entities;
 using AI.Factory.Domain.Enums;
 using AI.Factory.Infrastructure.Validation;
 using AI.Factory.Infrastructure.Diagnostics;
@@ -147,10 +151,99 @@ builder.Services.AddScoped<IAgentExecutor>(sp =>
         sp.GetRequiredService<ILogger<ResilienceAgentExecutorDecorator>>());
 });
 
+// Phase 18.1.3 — first real IAgentRuntime, adapting the canonical AgentRun
+// model onto the same (already resilience-decorated) Hermes execution path
+// above. Does not replace or bypass IAgentExecutor.
+builder.Services.AddScoped<IAgentRuntime, HermesAgentRuntime>();
+
 var modelRoutingOptions = new ModelRoutingOptions();
 builder.Configuration.GetSection("ModelRouting").Bind(modelRoutingOptions);
 builder.Services.AddSingleton(modelRoutingOptions);
 builder.Services.AddSingleton<IModelRouter, ModelRouter>();
+
+// ------------------------------------------------------------
+// AI provider abstraction & routing (Phase 18.1.1) — provider-neutral
+// execution built on top of the AiProviders/ModelRouting catalogs above.
+// Each enabled provider is wrapped with the same ProviderCall resilience
+// profile used elsewhere, then registered into a scoped, in-memory registry.
+// ------------------------------------------------------------
+
+builder.Services.AddHttpClient();
+
+foreach (var (providerId, providerSettings) in aiProviderOptions.Providers)
+{
+    if (!providerSettings.Enabled)
+    {
+        continue;
+    }
+
+    builder.Services.AddHttpClient(providerId, client =>
+    {
+        if (!string.IsNullOrWhiteSpace(providerSettings.BaseUrl))
+        {
+            client.BaseAddress = new Uri(providerSettings.BaseUrl.TrimEnd('/') + "/");
+        }
+
+        client.Timeout = TimeSpan.FromSeconds(providerSettings.TimeoutSeconds);
+    });
+}
+
+builder.Services.AddScoped<IAiModelProviderRegistry>(sp =>
+{
+    var registry = new AiModelProviderRegistry();
+    var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
+    var secretProvider = sp.GetRequiredService<ISecretProvider>();
+    var resilienceExecutor = sp.GetRequiredService<IResilienceExecutor>();
+    var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
+
+    foreach (var (providerId, providerSettings) in aiProviderOptions.Providers)
+    {
+        if (!providerSettings.Enabled)
+        {
+            continue;
+        }
+
+        var providerCapabilities = modelRoutingOptions.Models
+            .Where(m => string.Equals(m.Provider, providerId, StringComparison.OrdinalIgnoreCase))
+            .SelectMany(m => m.Capabilities)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        IModelProvider inner = providerSettings.ProviderType == AiModelProviderKind.Fake
+            ? new FakeModelProvider(providerId, providerCapabilities)
+            : new OpenAiCompatibleModelProvider(
+                providerId,
+                providerCapabilities,
+                httpClientFactory.CreateClient(providerId),
+                secretProvider,
+                providerSettings.ApiKeySecretName,
+                loggerFactory.CreateLogger<OpenAiCompatibleModelProvider>());
+
+        registry.RegisterProvider(new ResilienceModelProviderDecorator(
+            inner, resilienceExecutor, loggerFactory.CreateLogger<ResilienceModelProviderDecorator>()));
+    }
+
+    foreach (var model in modelRoutingOptions.Models)
+    {
+        if (model.Capabilities.Count == 0)
+        {
+            continue;
+        }
+
+        if (registry.TryGetProvider(model.Provider, out _))
+        {
+            registry.RegisterModel(model.ModelId, model.Provider);
+        }
+    }
+
+    return registry;
+});
+
+var aiRoutingOptions = new AiRoutingOptions();
+builder.Configuration.GetSection(AiRoutingOptions.SectionName).Bind(aiRoutingOptions);
+aiRoutingOptions.Validate();
+builder.Services.AddSingleton(aiRoutingOptions);
+builder.Services.AddScoped<IAiModelRouter, AiModelRouter>();
 
 var retryOptions = new RetryOptions();
 builder.Configuration.GetSection("Retry").Bind(retryOptions);
@@ -175,6 +268,8 @@ else
     builder.Services.AddScoped<IContextProvider, LocalContextProvider>();
 }
 
+builder.Services.AddScoped<IHermesExecutionRepository, HermesExecutionRepository>();
+builder.Services.AddScoped<IAgentDefinitionRepository, AgentDefinitionRepository>();
 builder.Services.AddScoped<IAgentRunRepository, AgentRunRepository>();
 builder.Services.AddScoped<IArtifactRecorder, FileSystemArtifactRecorder>();
 
@@ -188,6 +283,24 @@ builder.Configuration.GetSection("Repair").Bind(repairOptions);
 builder.Services.AddSingleton(repairOptions);
 
 builder.Services.AddScoped<IArtifactRepository, ArtifactRepository>();
+
+// Phase 18.1.4 — Agent Tools & Memory Layer. Tools are collected by IEnumerable<IAgentTool>
+// into the registry; add new built-in tools by registering another IAgentTool here.
+builder.Services.AddScoped<IAgentTool, ReadArtifactTool>();
+builder.Services.AddScoped<IAgentToolRegistry, AgentToolRegistry>();
+builder.Services.AddScoped<IAgentMemory, LocalAgentMemoryProvider>();
+
+// Phase 18.1.5 — Agent Orchestration Service. The Worker hosts the actual
+// AgentRunWorker background loop; the API only needs IAgentOrchestrator
+// registered for future direct-invocation endpoints (out of scope here).
+builder.Services.AddScoped<IAgentInstructionBuilder, AgentInstructionBuilder>();
+builder.Services.AddSingleton<IStructuredAgentResultParser, StructuredAgentResultParser>();
+builder.Services.AddScoped<IAgentOrchestrator, AgentOrchestrator>();
+
+// Phase 18.1.6 — Agent API. Application-layer use-cases behind /api/agents/...
+builder.Services.AddScoped<IAgentDefinitionService, AgentDefinitionService>();
+builder.Services.AddScoped<IAgentRunService, AgentRunService>();
+
 builder.Services.AddScoped<IReviewRunRepository, ReviewRunRepository>();
 builder.Services.AddScoped<IReviewContextBuilder, ReviewContextBuilder>();
 builder.Services.AddScoped<ICodeReviewer, AgentCodeReviewer>();
@@ -1049,6 +1162,259 @@ app.MapGet("/api/operations/deployment", (IDeploymentDiagnosticsService diagnost
     return Results.Ok(diagnostics.GetSnapshot());
 }).RequireRateLimiting("OperationalApi");
 
+// ------------------------------------------------------------
+// Agent Definitions (Phase 18.1.6)
+// ------------------------------------------------------------
+
+// DTO projections — never return the EF entity directly. AgentRun has no
+// persisted ToolCallNames/QueuedAtUtc columns (HermesAgentRuntime doesn't
+// call tools yet; CreateAsync queues synchronously so CreatedAtUtc already
+// is the queued time) — omitted rather than fabricated, see phase 18.1.6 doc.
+static object ToAgentDefinitionDto(AgentDefinition definition) => new
+{
+    definition.Id,
+    definition.Name,
+    definition.Description,
+    definition.AgentType,
+    definition.Enabled,
+    definition.CreatedAtUtc,
+    definition.UpdatedAtUtc
+};
+
+static object ToAgentRunDto(AgentRun run) => new
+{
+    run.Id,
+    run.ProjectId,
+    run.AgentDefinitionId,
+    Status = run.Status.ToString(),
+    run.CreatedAtUtc,
+    run.StartedAtUtc,
+    run.CompletedAtUtc,
+    DurationMs = run.StartedAtUtc.HasValue && run.CompletedAtUtc.HasValue
+        ? (long?)(run.CompletedAtUtc.Value - run.StartedAtUtc.Value).TotalMilliseconds
+        : null,
+    run.Output,
+    FailureCategory = run.FailureCategory?.ToString(),
+    run.ErrorMessage,
+    run.CorrelationId,
+    StructuredResult = ToStructuredResultDto(run.StructuredResult)
+};
+
+// Phase 18.1.8 §9 — kept separate from the persisted JSON blob (run.StructuredResult
+// is never exposed raw): parses it back into the same contract shape API consumers
+// already understand, and degrades to null rather than surfacing a deserialization
+// error for a row written before this contract existed or an already-invalid result.
+static object? ToStructuredResultDto(string? structuredResultJson)
+{
+    if (string.IsNullOrWhiteSpace(structuredResultJson))
+    {
+        return null;
+    }
+
+    try
+    {
+        var parsed = JsonSerializer.Deserialize<StructuredAgentResult>(structuredResultJson, StructuredAgentResult.JsonOptions);
+
+        return parsed is null
+            ? null
+            : new
+            {
+                parsed.Version,
+                Status = parsed.Status.ToString(),
+                parsed.Summary,
+                parsed.Output,
+                parsed.Data,
+                parsed.Warnings,
+                parsed.Errors,
+                parsed.Artifacts,
+                parsed.Metadata
+            };
+    }
+    catch (JsonException)
+    {
+        return null;
+    }
+}
+
+app.MapPost("/api/agents/definitions", async (
+    CreateAgentDefinitionRequest request,
+    IAgentDefinitionService service,
+    CancellationToken cancellationToken) =>
+{
+    var definition = await service.CreateAsync(
+        new CreateAgentDefinitionCommand(
+            request.Name, request.Description, request.AgentType, request.SystemPrompt, request.Enabled ?? true),
+        cancellationToken);
+
+    return Results.Created($"/api/agents/definitions/{definition.Id}", ToAgentDefinitionDto(definition));
+}).RequireRateLimiting("GeneralApi");
+
+app.MapGet("/api/agents/definitions/{id}", async (
+    string id,
+    IAgentDefinitionService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!Guid.TryParse(id, out var parsedId) || parsedId == Guid.Empty)
+    {
+        throw new ValidationException("Invalid AgentDefinition identifier.");
+    }
+
+    var definition = await service.GetAsync(parsedId, cancellationToken);
+    return definition is null ? Results.NotFound() : Results.Ok(ToAgentDefinitionDto(definition));
+}).RequireRateLimiting("GeneralApi");
+
+app.MapGet("/api/agents/definitions", async (
+    IAgentDefinitionService service,
+    CancellationToken cancellationToken) =>
+{
+    var definitions = await service.ListAsync(cancellationToken);
+    return Results.Ok(definitions.Select(ToAgentDefinitionDto));
+}).RequireRateLimiting("GeneralApi");
+
+// ------------------------------------------------------------
+// Agent Runs (Phase 18.1.6)
+// ------------------------------------------------------------
+
+app.MapPost("/api/agents/runs", async (
+    CreateAgentRunRequest request,
+    IAgentRunService service,
+    CancellationToken cancellationToken) =>
+{
+    if (request.AgentDefinitionId == Guid.Empty)
+    {
+        throw new ValidationException("AgentDefinitionId must be a non-empty GUID.");
+    }
+
+    var run = await service.CreateAsync(
+        new CreateAgentRunCommand(request.AgentDefinitionId, request.ProjectId, request.Input),
+        cancellationToken);
+
+    return Results.Created($"/api/agents/runs/{run.Id}", ToAgentRunDto(run));
+}).RequireRateLimiting("ExpensiveOperation");
+
+app.MapGet("/api/agents/runs/{id}", async (
+    string id,
+    IAgentRunService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!Guid.TryParse(id, out var parsedId) || parsedId == Guid.Empty)
+    {
+        throw new ValidationException("Invalid AgentRun identifier.");
+    }
+
+    var run = await service.GetAsync(parsedId, cancellationToken);
+    return run is null ? Results.NotFound() : Results.Ok(ToAgentRunDto(run));
+}).RequireRateLimiting("GeneralApi");
+
+app.MapGet("/api/agents/runs", async (
+    string? projectId,
+    string? agentDefinitionId,
+    string? status,
+    DateTime? from,
+    DateTime? to,
+    int? page,
+    int? pageSize,
+    IAgentRunService service,
+    CancellationToken cancellationToken) =>
+{
+    Guid? parsedProjectId = null;
+    if (!string.IsNullOrWhiteSpace(projectId))
+    {
+        if (!Guid.TryParse(projectId, out var pid) || pid == Guid.Empty)
+        {
+            throw new ValidationException("Invalid ProjectId identifier.");
+        }
+        parsedProjectId = pid;
+    }
+
+    Guid? parsedDefinitionId = null;
+    if (!string.IsNullOrWhiteSpace(agentDefinitionId))
+    {
+        if (!Guid.TryParse(agentDefinitionId, out var did) || did == Guid.Empty)
+        {
+            throw new ValidationException("Invalid AgentDefinitionId identifier.");
+        }
+        parsedDefinitionId = did;
+    }
+
+    AgentRunStatus? parsedStatus = null;
+    if (!string.IsNullOrWhiteSpace(status))
+    {
+        if (!Enum.TryParse<AgentRunStatus>(status, ignoreCase: true, out var s) || !Enum.IsDefined(typeof(AgentRunStatus), s))
+        {
+            throw new ValidationException($"Invalid status '{status}'.");
+        }
+        parsedStatus = s;
+    }
+
+    if (page.HasValue && page.Value < 1)
+    {
+        throw new ValidationException("Page must be greater than or equal to 1.");
+    }
+
+    if (pageSize.HasValue && pageSize.Value < 1)
+    {
+        throw new ValidationException("PageSize must be greater than or equal to 1.");
+    }
+
+    if (pageSize.HasValue && pageSize.Value > 100)
+    {
+        throw new ValidationException("PageSize cannot exceed 100.");
+    }
+
+    var query = new AgentRunQuery(
+        parsedProjectId, parsedDefinitionId, parsedStatus, from, to, page ?? 1, pageSize ?? 50);
+
+    var result = await service.ListAsync(query, cancellationToken);
+
+    return Results.Ok(new
+    {
+        Items = result.Items.Select(ToAgentRunDto),
+        result.TotalCount,
+        result.Page,
+        result.PageSize
+    });
+}).RequireRateLimiting("GeneralApi");
+
+app.MapPost("/api/agents/runs/{id}/cancel", async (
+    string id,
+    IAgentRunService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!Guid.TryParse(id, out var parsedId) || parsedId == Guid.Empty)
+    {
+        throw new ValidationException("Invalid AgentRun identifier.");
+    }
+
+    await service.CancelAsync(parsedId, cancellationToken);
+    return Results.Accepted();
+}).RequireRateLimiting("GeneralApi");
+
+app.MapGet("/api/agents/metrics", async (
+    IOperationalMetrics metrics,
+    IAgentRunRepository runRepository,
+    CancellationToken cancellationToken) =>
+{
+    var snapshot = metrics.GetSnapshot();
+    var queued = await runRepository.CountByStatusAsync(AgentRunStatus.Queued, cancellationToken);
+    var running = await runRepository.CountByStatusAsync(AgentRunStatus.Running, cancellationToken);
+
+    return Results.Ok(new
+    {
+        Queued = queued,
+        Running = running,
+        Created = snapshot.AgentRunsCreated,
+        Started = snapshot.AgentRunsStarted,
+        Succeeded = snapshot.AgentRunsSucceeded,
+        Failed = snapshot.AgentRunsFailed,
+        TimedOut = snapshot.AgentRunsTimedOut,
+        Cancelled = snapshot.AgentRunsCancelled,
+        WorkerClaimSuccess = snapshot.AgentWorkerClaimSuccess,
+        AverageDurationMs = snapshot.AverageAgentExecutionDurationMs,
+        TotalDurationMs = snapshot.TotalAgentExecutionDurationMs
+    });
+}).RequireRateLimiting("OperationalApi");
+
 app.Run();
 
 public sealed record CreateProjectRequest(
@@ -1062,6 +1428,18 @@ public sealed record StartOrchestrationRunRequest(
     Guid ProjectId,
     Guid TaskId,
     int? MaxAttempts);
+
+public sealed record CreateAgentDefinitionRequest(
+    string Name,
+    string? Description,
+    string AgentType,
+    string? SystemPrompt,
+    bool? Enabled);
+
+public sealed record CreateAgentRunRequest(
+    Guid AgentDefinitionId,
+    Guid? ProjectId,
+    string? Input);
 
 // Exposes the top-level-statement entry point to WebApplicationFactory<Program> for integration tests.
 public partial class Program

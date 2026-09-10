@@ -22,4 +22,12 @@ public sealed class ArtifactRepository : IArtifactRepository
             .OrderBy(x => x.CreatedAtUtc)
             .ToListAsync(cancellationToken);
     }
+
+    public async Task<Artifact?> GetByIdAsync(
+        Guid artifactId,
+        CancellationToken cancellationToken = default)
+    {
+        return await _db.Artifacts
+            .FirstOrDefaultAsync(x => x.Id == artifactId, cancellationToken);
+    }
 }

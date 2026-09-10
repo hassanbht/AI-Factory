@@ -178,7 +178,7 @@ public sealed class AutonomousCodingOrchestratorTests : IDisposable
         var resolver = new TaskDependencyResolver();
         var scheduler = new WorkItemTaskScheduler(workItemRepository, resolver);
         var taskStateManager = new TaskStateManager(db);
-        var agentRunRepository = new AgentRunRepository(db);
+        var agentRunRepository = new HermesExecutionRepository(db);
         var artifactRecorder = new FileSystemArtifactRecorder(db);
         var contextProvider = new LocalContextProvider(db);
         var modelRouter = new ModelRouter(MakeModelRoutingOptions());
@@ -267,7 +267,7 @@ public sealed class AutonomousCodingOrchestratorTests : IDisposable
         Assert.Equal(WorkItemStatus.Completed.ToString(), workItem.Status);
         Assert.Equal(1, workItem.AttemptCount);
 
-        var agentRun = await db.AgentRuns.SingleAsync(x => x.WorkItemId == workItemId);
+        var agentRun = await db.HermesExecutions.SingleAsync(x => x.WorkItemId == workItemId);
         Assert.True(agentRun.Success);
         Assert.Equal("Implemented successfully.", agentRun.Response);
         Assert.Equal("test-model", agentRun.Model);
@@ -301,7 +301,7 @@ public sealed class AutonomousCodingOrchestratorTests : IDisposable
         Assert.Equal(WorkItemStatus.Repairing.ToString(), workItem.Status);
         Assert.Equal(1, workItem.AttemptCount);
 
-        var agentRun = await db.AgentRuns.SingleAsync(x => x.WorkItemId == workItemId);
+        var agentRun = await db.HermesExecutions.SingleAsync(x => x.WorkItemId == workItemId);
         Assert.False(agentRun.Success);
         Assert.Equal("build failed", agentRun.Error);
     }
@@ -376,7 +376,7 @@ public sealed class AutonomousCodingOrchestratorTests : IDisposable
             // connection, mid-call — proves the AgentRun row was persisted
             // BEFORE the agent even returned, not after.
             using var midExecutionDb = new FactoryDbContext(_options);
-            var pending = midExecutionDb.AgentRuns.SingleOrDefault(x => x.WorkItemId == workItemId);
+            var pending = midExecutionDb.HermesExecutions.SingleOrDefault(x => x.WorkItemId == workItemId);
             attemptSeenDuringExecution = pending?.AttemptNumber ?? -1;
 
             return new AgentExecutionResult(true, "done", null, 5);

@@ -53,6 +53,14 @@ public sealed class ModelCapability
     public bool IsCodingOptimized { get; set; }
 
     public bool IsAvailable { get; set; } = true;
+
+    /// <summary>
+    /// AI capabilities (see <see cref="AiCapability"/>, matched by name) this
+    /// model advertises support for. Empty means the model is not eligible
+    /// for capability-based routing via <see cref="IAiModelRouter"/> — it
+    /// only participates in the legacy task-category routing above.
+    /// </summary>
+    public List<string> Capabilities { get; set; } = new();
 }
 
 /// <summary>Thrown when no configured, available model satisfies a routing request.</summary>

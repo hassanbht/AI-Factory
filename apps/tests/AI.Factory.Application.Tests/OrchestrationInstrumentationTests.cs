@@ -208,7 +208,7 @@ public sealed class OrchestrationInstrumentationTests : IDisposable
         var resolver = new TaskDependencyResolver();
         var scheduler = new WorkItemTaskScheduler(workItemRepository, resolver);
         var taskStateManager = new TaskStateManager(db);
-        var agentRunRepository = new AgentRunRepository(db);
+        var agentRunRepository = new HermesExecutionRepository(db);
         var artifactRecorder = new FileSystemArtifactRecorder(db);
         var contextProvider = new LocalContextProvider(db);
         var modelRouter = new ModelRouter(MakeModelRoutingOptions());

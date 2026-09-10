@@ -208,7 +208,7 @@ public sealed class LocalContextProvider : IContextProvider
     {
         var workItems = await _db.WorkItems
             .Where(x => x.ProjectId == query.ProjectId)
-            .Include(x => x.Runs)
+            .Include(x => x.HermesExecutions)
             .OrderByDescending(x => x.UpdatedAtUtc)
             .Take(query.MaxResults)
             .ToListAsync(cancellationToken);
@@ -218,7 +218,7 @@ public sealed class LocalContextProvider : IContextProvider
         for (var i = 0; i < workItems.Count; i++)
         {
             var workItem = workItems[i];
-            var latestRun = workItem.Runs
+            var latestRun = workItem.HermesExecutions
                 .OrderByDescending(r => r.StartedAtUtc)
                 .FirstOrDefault();
 
@@ -245,7 +245,7 @@ public sealed class LocalContextProvider : IContextProvider
         ContextQuery query,
         CancellationToken cancellationToken)
     {
-        var runs = await _db.AgentRuns
+        var runs = await _db.HermesExecutions
             .Where(r => _db.WorkItems.Any(w => w.Id == r.WorkItemId && w.ProjectId == query.ProjectId))
             .OrderByDescending(r => r.StartedAtUtc)
             .Take(query.MaxResults)

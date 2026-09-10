@@ -1,13 +1,16 @@
 using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Agents;
 using AI.Factory.Application.Approvals;
 using AI.Factory.Application.Configuration;
 using AI.Factory.Application.Learning;
 using AI.Factory.Application.Orchestration;
 using AI.Factory.Application.Security;
+using AI.Factory.Application.Tools;
 using AI.Factory.Infrastructure.Agents;
 using AI.Factory.Infrastructure.Configuration;
 using AI.Factory.Infrastructure.Context;
 using AI.Factory.Infrastructure.Persistence;
+using AI.Factory.Infrastructure.Providers;
 using AI.Factory.Infrastructure.Resilience;
 using AI.Factory.Application.Resilience;
 using AI.Factory.Infrastructure.Diagnostics;
@@ -146,10 +149,99 @@ builder.Services.AddScoped<IAgentExecutor>(sp =>
         sp.GetRequiredService<ILogger<ResilienceAgentExecutorDecorator>>());
 });
 
+// Phase 18.1.3 — first real IAgentRuntime, adapting the canonical AgentRun
+// model onto the same (already resilience-decorated) Hermes execution path
+// above. Does not replace or bypass IAgentExecutor.
+builder.Services.AddScoped<IAgentRuntime, HermesAgentRuntime>();
+
 var modelRoutingOptions = new ModelRoutingOptions();
 builder.Configuration.GetSection("ModelRouting").Bind(modelRoutingOptions);
 builder.Services.AddSingleton(modelRoutingOptions);
 builder.Services.AddSingleton<IModelRouter, ModelRouter>();
+
+// ------------------------------------------------------------
+// AI provider abstraction & routing (Phase 18.1.1) — provider-neutral
+// execution built on top of the AiProviders/ModelRouting catalogs above.
+// Each enabled provider is wrapped with the same ProviderCall resilience
+// profile used elsewhere, then registered into a scoped, in-memory registry.
+// ------------------------------------------------------------
+
+builder.Services.AddHttpClient();
+
+foreach (var (providerId, providerSettings) in aiProviderOptions.Providers)
+{
+    if (!providerSettings.Enabled)
+    {
+        continue;
+    }
+
+    builder.Services.AddHttpClient(providerId, client =>
+    {
+        if (!string.IsNullOrWhiteSpace(providerSettings.BaseUrl))
+        {
+            client.BaseAddress = new Uri(providerSettings.BaseUrl.TrimEnd('/') + "/");
+        }
+
+        client.Timeout = TimeSpan.FromSeconds(providerSettings.TimeoutSeconds);
+    });
+}
+
+builder.Services.AddScoped<IAiModelProviderRegistry>(sp =>
+{
+    var registry = new AiModelProviderRegistry();
+    var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
+    var secretProvider = sp.GetRequiredService<ISecretProvider>();
+    var resilienceExecutor = sp.GetRequiredService<IResilienceExecutor>();
+    var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
+
+    foreach (var (providerId, providerSettings) in aiProviderOptions.Providers)
+    {
+        if (!providerSettings.Enabled)
+        {
+            continue;
+        }
+
+        var providerCapabilities = modelRoutingOptions.Models
+            .Where(m => string.Equals(m.Provider, providerId, StringComparison.OrdinalIgnoreCase))
+            .SelectMany(m => m.Capabilities)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        IModelProvider inner = providerSettings.ProviderType == AiModelProviderKind.Fake
+            ? new FakeModelProvider(providerId, providerCapabilities)
+            : new OpenAiCompatibleModelProvider(
+                providerId,
+                providerCapabilities,
+                httpClientFactory.CreateClient(providerId),
+                secretProvider,
+                providerSettings.ApiKeySecretName,
+                loggerFactory.CreateLogger<OpenAiCompatibleModelProvider>());
+
+        registry.RegisterProvider(new ResilienceModelProviderDecorator(
+            inner, resilienceExecutor, loggerFactory.CreateLogger<ResilienceModelProviderDecorator>()));
+    }
+
+    foreach (var model in modelRoutingOptions.Models)
+    {
+        if (model.Capabilities.Count == 0)
+        {
+            continue;
+        }
+
+        if (registry.TryGetProvider(model.Provider, out _))
+        {
+            registry.RegisterModel(model.ModelId, model.Provider);
+        }
+    }
+
+    return registry;
+});
+
+var aiRoutingOptions = new AiRoutingOptions();
+builder.Configuration.GetSection(AiRoutingOptions.SectionName).Bind(aiRoutingOptions);
+aiRoutingOptions.Validate();
+builder.Services.AddSingleton(aiRoutingOptions);
+builder.Services.AddScoped<IAiModelRouter, AiModelRouter>();
 
 var retryOptions = new RetryOptions();
 builder.Configuration.GetSection("Retry").Bind(retryOptions);
@@ -174,6 +266,8 @@ else
     builder.Services.AddScoped<IContextProvider, LocalContextProvider>();
 }
 
+builder.Services.AddScoped<IHermesExecutionRepository, HermesExecutionRepository>();
+builder.Services.AddScoped<IAgentDefinitionRepository, AgentDefinitionRepository>();
 builder.Services.AddScoped<IAgentRunRepository, AgentRunRepository>();
 builder.Services.AddScoped<IArtifactRecorder, FileSystemArtifactRecorder>();
 
@@ -187,6 +281,23 @@ builder.Configuration.GetSection("Repair").Bind(repairOptions);
 builder.Services.AddSingleton(repairOptions);
 
 builder.Services.AddScoped<IArtifactRepository, ArtifactRepository>();
+
+// Phase 18.1.4 — Agent Tools & Memory Layer. Tools are collected by IEnumerable<IAgentTool>
+// into the registry; add new built-in tools by registering another IAgentTool here.
+builder.Services.AddScoped<IAgentTool, ReadArtifactTool>();
+builder.Services.AddScoped<IAgentToolRegistry, AgentToolRegistry>();
+builder.Services.AddScoped<IAgentMemory, LocalAgentMemoryProvider>();
+
+// Phase 18.1.5 — Agent Orchestration Service + Worker.
+builder.Services.AddScoped<IAgentInstructionBuilder, AgentInstructionBuilder>();
+builder.Services.AddSingleton<IStructuredAgentResultParser, StructuredAgentResultParser>();
+builder.Services.AddScoped<IAgentOrchestrator, AgentOrchestrator>();
+
+var agentWorkerOptions = new AgentWorkerOptions();
+builder.Configuration.GetSection("AgentWorker").Bind(agentWorkerOptions);
+agentWorkerOptions.Validate();
+builder.Services.AddSingleton(agentWorkerOptions);
+
 builder.Services.AddScoped<IReviewRunRepository, ReviewRunRepository>();
 builder.Services.AddScoped<IReviewContextBuilder, ReviewContextBuilder>();
 builder.Services.AddScoped<ICodeReviewer, AgentCodeReviewer>();
@@ -247,5 +358,6 @@ builder.Services.AddScoped<OrchestrationRunExecutionEngine>();
 
         builder.Services.AddHostedService<WorkflowRecoveryHostedService>();
         builder.Services.AddHostedService<OrchestrationRunWorker>();
+        builder.Services.AddHostedService<AgentRunWorker>();
     }
 }

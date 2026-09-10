@@ -23,9 +23,15 @@ public sealed class FactoryDbContext : DbContext
     public DbSet<WorkItemDependency> WorkItemDependencies =>
         Set<WorkItemDependency>();
 
+    public DbSet<HermesExecution> HermesExecutions => Set<HermesExecution>();
+
+    public DbSet<AgentDefinition> AgentDefinitions => Set<AgentDefinition>();
+
     public DbSet<AgentRun> AgentRuns => Set<AgentRun>();
 
     public DbSet<Artifact> Artifacts => Set<Artifact>();
+
+    public DbSet<AgentMemoryRecord> AgentMemories => Set<AgentMemoryRecord>();
 
     public DbSet<WorkflowTransition> WorkflowTransitions => Set<WorkflowTransition>();
 
@@ -189,14 +195,14 @@ public sealed class FactoryDbContext : DbContext
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
-        modelBuilder.Entity<AgentRun>(entity =>
+        modelBuilder.Entity<HermesExecution>(entity =>
         {
-            entity.ToTable("agent_runs");
+            entity.ToTable("hermes_executions");
 
             entity.HasKey(x => x.Id);
 
             entity.HasOne(x => x.WorkItem)
-                .WithMany(x => x.Runs)
+                .WithMany(x => x.HermesExecutions)
                 .HasForeignKey(x => x.WorkItemId)
                 .OnDelete(DeleteBehavior.Cascade);
 
@@ -205,6 +211,62 @@ public sealed class FactoryDbContext : DbContext
                 x.WorkItemId,
                 x.AttemptNumber
             });
+        });
+
+        modelBuilder.Entity<AgentDefinition>(entity =>
+        {
+            entity.ToTable("agent_definitions");
+
+            entity.HasKey(x => x.Id);
+
+            entity.Property(x => x.Name)
+                .HasMaxLength(200)
+                .IsRequired();
+
+            entity.Property(x => x.AgentType)
+                .HasMaxLength(100)
+                .IsRequired();
+
+            entity.HasIndex(x => x.Enabled);
+
+            entity.Property(x => x.Version)
+                .IsConcurrencyToken();
+        });
+
+        modelBuilder.Entity<AgentRun>(entity =>
+        {
+            entity.ToTable("agent_runs");
+
+            entity.HasKey(x => x.Id);
+
+            entity.Property(x => x.Status)
+                .HasConversion<string>()
+                .HasMaxLength(30)
+                .IsRequired();
+
+            entity.Property(x => x.FailureCategory)
+                .HasConversion<string>()
+                .HasMaxLength(30);
+
+            entity.HasOne(x => x.AgentDefinition)
+                .WithMany(x => x.Runs)
+                .HasForeignKey(x => x.AgentDefinitionId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // No FK to WorkItem/Project — an AgentRun's own history should
+            // never vanish because of an unrelated cascade delete elsewhere,
+            // matching the OrchestrationRun precedent.
+            entity.HasIndex(x => x.AgentDefinitionId);
+            entity.HasIndex(x => x.ProjectId);
+            entity.HasIndex(x => x.WorkItemId);
+            entity.HasIndex(x => x.Status);
+            entity.HasIndex(x => x.CreatedAtUtc);
+
+            entity.HasIndex(x => x.CorrelationId)
+                .IsUnique();
+
+            entity.Property(x => x.Version)
+                .IsConcurrencyToken();
         });
 
         modelBuilder.Entity<Artifact>(entity =>
@@ -216,6 +278,26 @@ public sealed class FactoryDbContext : DbContext
             entity.HasIndex(x => x.ProjectId);
 
             entity.HasIndex(x => x.WorkItemId);
+        });
+
+        modelBuilder.Entity<AgentMemoryRecord>(entity =>
+        {
+            entity.ToTable("agent_memory");
+
+            entity.HasKey(x => x.Id);
+
+            entity.Property(x => x.Type)
+                .HasMaxLength(100)
+                .IsRequired();
+
+            entity.Property(x => x.Content)
+                .IsRequired();
+
+            entity.HasIndex(x => x.ProjectId);
+            entity.HasIndex(x => x.AgentDefinitionId);
+            entity.HasIndex(x => x.AgentRunId);
+            entity.HasIndex(x => x.Type);
+            entity.HasIndex(x => x.CreatedAtUtc);
         });
 
         modelBuilder.Entity<WorkflowTransition>(entity =>

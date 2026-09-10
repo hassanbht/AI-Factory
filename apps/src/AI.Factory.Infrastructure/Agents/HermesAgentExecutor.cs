@@ -12,17 +12,20 @@ public sealed class HermesAgentExecutor : IAgentExecutor
     private readonly IProcessRunner _processRunner;
     private readonly ILogger<HermesAgentExecutor> _logger;
     private readonly IAuditLogger _auditLogger;
+    private readonly ISecretProvider? _secretProvider;
 
     public HermesAgentExecutor(
         HermesOptions options,
         IProcessRunner processRunner,
         ILogger<HermesAgentExecutor> logger,
-        IAuditLogger? auditLogger = null)
+        IAuditLogger? auditLogger = null,
+        ISecretProvider? secretProvider = null)
     {
         _options = options;
         _processRunner = processRunner;
         _logger = logger;
         _auditLogger = auditLogger ?? NullAuditLogger.Instance;
+        _secretProvider = secretProvider;
     }
 
     public async Task<AgentExecutionResult> ExecuteAsync(
@@ -65,11 +68,55 @@ public sealed class HermesAgentExecutor : IAgentExecutor
             "-v",
             $"{_options.DataVolume}:/opt/data",
             "-v",
-            $"{workspacePath}:/workspace",
-            _options.DockerImage,
-            "-z",
-            request.Prompt
+            $"{workspacePath}:/workspace"
         };
+
+        // `-e NAME=VALUE` are docker-run flags that inject a variable INTO
+        // the container — distinct from (and never mixed up with) the host
+        // docker.exe process's own environment set below via
+        // ProcessRunRequest.EnvironmentVariables. Non-secret values (e.g. a
+        // provider base-url override) come straight from config; the
+        // provider API key, if configured, is resolved through
+        // ISecretProvider so it never sits in appsettings/config in plain
+        // text and is never logged.
+        foreach (var (key, value) in _options.AdditionalEnvironmentVariables)
+        {
+            arguments.Add("-e");
+            arguments.Add($"{key}={value}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(_options.ProviderApiKeyEnvironmentVariable)
+            && !string.IsNullOrWhiteSpace(_options.ProviderApiKeySecretName)
+            && _secretProvider is not null)
+        {
+            var providerApiKey = await _secretProvider.GetSecretAsync(_options.ProviderApiKeySecretName, cancellationToken);
+
+            if (!string.IsNullOrEmpty(providerApiKey))
+            {
+                arguments.Add("-e");
+                arguments.Add($"{_options.ProviderApiKeyEnvironmentVariable}={providerApiKey}");
+            }
+        }
+
+        arguments.Add(_options.DockerImage);
+        arguments.Add("-z");
+        arguments.Add(request.Prompt);
+
+        // AgentRun/AgentExecutionRequest have always carried a Model — this
+        // was the one place it silently never reached the Hermes CLI,
+        // leaving every execution on Hermes's own persisted default model
+        // with no way for a caller to override it.
+        if (!string.IsNullOrWhiteSpace(request.Model))
+        {
+            arguments.Add("-m");
+            arguments.Add(request.Model);
+        }
+
+        if (!string.IsNullOrWhiteSpace(_options.Provider))
+        {
+            arguments.Add("--provider");
+            arguments.Add(_options.Provider);
+        }
 
         _logger.LogInformation(
             "Hermes execution started for agent {Agent} in workspace {WorkspacePath}",

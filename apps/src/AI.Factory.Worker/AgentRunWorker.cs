@@ -1,5 +1,6 @@
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Agents;
+using AI.Factory.Application.Planning;
 using AI.Factory.Domain.Enums;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -149,9 +150,28 @@ public sealed class AgentRunWorker : BackgroundService
         using var executionCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, _shutdown.StoppingToken);
         executionCts.CancelAfter(_options.ExecutionTimeout);
 
+        // Phase 18.4: heartbeat the linked WorkItem (if any) for the
+        // duration of orchestrator execution, so the existing
+        // WorkflowRecoveryHostedService/ITaskStateManager stale-execution
+        // sweep can tell a genuinely still-running AgentRun-backed WorkItem
+        // apart from an orphaned one. Independent linked token — cancelling
+        // it does not touch executionCts/the orchestrator call, only stops
+        // this loop.
+        using var heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(executionCts.Token);
+        var heartbeatTask = run.WorkItemId is { } workItemId
+            ? RunHeartbeatLoopAsync(
+                executionScope.ServiceProvider.GetRequiredService<ITaskStateManager>(), workItemId, heartbeatCts.Token)
+            : null;
+
         try
         {
             var result = await orchestrator.ExecuteAsync(run.Id, executionCts.Token);
+
+            // Stop the heartbeat before the WorkItem sync below runs, so no
+            // straggling heartbeat write can race the terminal WorkItem
+            // transition (Phase 18.4 §7/§11).
+            await StopHeartbeatAsync(heartbeatCts, heartbeatTask);
+
             _metrics.RecordAgentExecution(result.Success, result.DurationMs);
             RecordLifecycleMetrics(result);
 
@@ -169,6 +189,16 @@ public sealed class AgentRunWorker : BackgroundService
                     await sync.SyncAsync(completedRun, CancellationToken.None);
                 }
             }
+            else if (result.Executed && run.WorkItemId is null && run.ProjectId is not null)
+            {
+                // Phase 18.6 — a Planner AgentRun has no WorkItemId (it is a
+                // Project-level run, not a WorkItem execution), so the branch
+                // above never fires for it. IProjectPlanner.MaterializeAsync
+                // itself re-checks AgentType/terminal status and is a no-op
+                // for any other Project-level, WorkItem-less AgentRun.
+                var planner = executionScope.ServiceProvider.GetRequiredService<IProjectPlanner>();
+                await planner.MaterializeAsync(run.Id, CancellationToken.None);
+            }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested || _shutdown.IsStopping)
         {
@@ -184,6 +214,76 @@ public sealed class AgentRunWorker : BackgroundService
             // TimedOut/Cancelled. This branch only guards a cancellation
             // surfacing directly from a repository call around that window.
             _logger.LogWarning("AgentRun {AgentRunId} exceeded the configured execution timeout.", run.Id);
+        }
+        finally
+        {
+            // Safety net for the exception paths above (StopHeartbeatAsync
+            // was already called on the normal-completion path — calling it
+            // again here is a harmless no-op against an already-completed task).
+            await StopHeartbeatAsync(heartbeatCts, heartbeatTask);
+        }
+    }
+
+    /// <summary>
+    /// Cancels and awaits the heartbeat loop to completion. Idempotent —
+    /// safe to call twice (Cancel() on an already-cancelled source is a
+    /// no-op; awaiting an already-completed task returns immediately).
+    /// </summary>
+    private static async Task StopHeartbeatAsync(CancellationTokenSource heartbeatCts, Task? heartbeatTask)
+    {
+        if (heartbeatTask is null)
+        {
+            return;
+        }
+
+        heartbeatCts.Cancel();
+
+        try
+        {
+            await heartbeatTask;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Periodically refreshes WorkItem.LastHeartbeatAtUtc through the
+    /// existing ITaskStateManager.HeartbeatAsync (purely observational —
+    /// never touches Status/AttemptCount, so it cannot resurrect a terminal
+    /// WorkItem or bypass WorkItemTransitions) for as long as
+    /// cancellationToken allows. A transient heartbeat failure (e.g. a lost
+    /// race with a concurrent recovery sweep) is logged and counted but
+    /// never terminates the loop — the AgentRun execution itself remains
+    /// authoritative (Phase 18.4 §10).
+    /// </summary>
+    private async Task RunHeartbeatLoopAsync(
+        ITaskStateManager taskStateManager, Guid workItemId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(_options.HeartbeatInterval, cancellationToken);
+
+                try
+                {
+                    await taskStateManager.HeartbeatAsync(workItemId, "AgentExecutionInProgress", cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "AgentRunHeartbeatFailed WorkItemId={WorkItemId}", workItemId);
+                    _metrics.RecordAgentRunHeartbeatFailure();
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal stop signal — execution finished, or Worker shutting down.
         }
     }
 

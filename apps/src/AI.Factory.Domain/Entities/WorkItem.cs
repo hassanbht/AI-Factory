@@ -30,6 +30,16 @@ public sealed class WorkItem : IVersionedEntity
 
     public string? AcceptanceCriteria { get; set; }
 
+    /// <summary>
+    /// Phase 18.5 — the deterministic, caller-supplied plan-scoped key
+    /// (e.g. "feature.authentication") this WorkItem was created from, if
+    /// any. Null for WorkItems created outside planning (e.g. the plain
+    /// task API). Unique per ProjectId when set — lets a re-planning
+    /// request and GET /api/projects/{id}/plan resolve dependencies and
+    /// identity without relying on Title text matching or random GUIDs.
+    /// </summary>
+    public string? PlanKey { get; set; }
+
     public string? CurrentError { get; set; }
 
     public DateTime? StartedAtUtc { get; set; }

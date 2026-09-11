@@ -26,7 +26,8 @@ public sealed class DotNetTestExecutor : ITestExecutor
                 !result.TimedOut && result.ExitCode == 0,
                 result.StandardOutput,
                 result.StandardError,
-                result.TimedOut ? -1 : result.ExitCode);
+                result.TimedOut ? -1 : result.ExitCode,
+                result.TimedOut);
         }
         catch (ProcessLaunchException ex)
         {

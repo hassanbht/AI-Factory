@@ -15,4 +15,5 @@ public sealed record TestExecutionResult(
     bool Success,
     string StandardOutput,
     string StandardError,
-    int ExitCode);
+    int ExitCode,
+    bool TimedOut = false);

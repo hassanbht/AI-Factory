@@ -111,7 +111,19 @@ builder.Configuration.GetSection(TaskSchedulerOptions.SectionName).Bind(taskSche
 builder.Services.AddSingleton(taskSchedulerOptions);
 builder.Services.AddSingleton<ISchedulerStatusTracker, SchedulerStatusTracker>();
 builder.Services.AddScoped<ITaskDispatchScheduler, TaskDispatchScheduler>();
+builder.Services.AddScoped<IWorkItemExecutionResultMapper, WorkItemExecutionResultMapper>();
+builder.Services.AddScoped<IVerificationGate, VerificationGate>();
 builder.Services.AddScoped<IAgentRunWorkItemSync, AgentRunWorkItemSync>();
+
+// Phase 18.5 — Deterministic Project Planner & Execution Plan
+builder.Services.AddScoped<IProjectPlanService, AI.Factory.Application.Planning.ProjectPlanService>();
+
+// Phase 18.6 — LLM Planner Agent & Candidate Plan Generation
+var plannerOptions = new AI.Factory.Application.Planning.PlannerOptions();
+builder.Configuration.GetSection(AI.Factory.Application.Planning.PlannerOptions.SectionName).Bind(plannerOptions);
+builder.Services.AddSingleton(plannerOptions);
+builder.Services.AddScoped<AI.Factory.Application.Planning.IPlannerResultMapper, AI.Factory.Application.Planning.PlannerResultMapper>();
+builder.Services.AddScoped<AI.Factory.Application.Planning.IProjectPlanner, AI.Factory.Application.Planning.ProjectPlanner>();
 
 var hermesOptions = new HermesOptions();
 builder.Configuration.GetSection("Hermes").Bind(hermesOptions);

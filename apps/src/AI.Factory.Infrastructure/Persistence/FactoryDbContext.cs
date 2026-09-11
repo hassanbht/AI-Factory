@@ -149,11 +149,20 @@ public sealed class FactoryDbContext : DbContext
                 .HasMaxLength(50)
                 .IsRequired();
 
+            entity.Property(x => x.PlanKey)
+                .HasMaxLength(200);
+
             entity.HasIndex(x => new
             {
                 x.ProjectId,
                 x.Status
             });
+
+            entity.HasIndex(x => new
+            {
+                x.ProjectId,
+                x.PlanKey
+            }).IsUnique();
 
             entity.HasOne(x => x.Project)
                 .WithMany()

@@ -1,3 +1,5 @@
+using System.Text.Json;
+using AI.Factory.Application.Agents;
 using AI.Factory.Application.Orchestration;
 using AI.Factory.Application.Projects;
 using AI.Factory.Application.Tasks;
@@ -28,6 +30,9 @@ public sealed class AgentRunWorkItemSyncTests : IDisposable
 
     public void Dispose() => _connection.Dispose();
 
+    private static AgentRunWorkItemSync CreateSync(FactoryDbContext db) => new(
+        new WorkItemRepository(db), new WorkItemExecutionResultMapper(), NullLogger<AgentRunWorkItemSync>.Instance);
+
     private async Task<Guid> SeedRunningTaskAsync()
     {
         await using var db = new FactoryDbContext(_options);
@@ -40,21 +45,113 @@ public sealed class AgentRunWorkItemSyncTests : IDisposable
     }
 
     [Theory]
-    [InlineData(AgentRunStatus.Succeeded, WorkItemStatus.Completed)]
     [InlineData(AgentRunStatus.Failed, WorkItemStatus.Failed)]
     [InlineData(AgentRunStatus.Cancelled, WorkItemStatus.Cancelled)]
     [InlineData(AgentRunStatus.TimedOut, WorkItemStatus.Failed)]
-    public async Task SyncAsync_TerminalAgentRun_TransitionsWorkItem(AgentRunStatus runStatus, WorkItemStatus expected)
+    public async Task SyncAsync_TerminalRuntimeFailure_TransitionsWorkItem(AgentRunStatus runStatus, WorkItemStatus expected)
     {
+        // Phase 18.7 §12 "Runtime failure" — unchanged since Phase 18.3: the
+        // AgentRun's own terminal status decides these, no StructuredResult
+        // interpretation involved.
         var taskId = await SeedRunningTaskAsync();
         var run = new AgentRun { WorkItemId = taskId, Status = runStatus };
 
         await using var db = new FactoryDbContext(_options);
-        await new AgentRunWorkItemSync(new WorkItemRepository(db), NullLogger<AgentRunWorkItemSync>.Instance)
-            .SyncAsync(run);
+        await CreateSync(db).SyncAsync(run);
 
         var workItem = await new WorkItemRepository(db).GetByIdAsync(taskId);
         Assert.Equal(expected.ToString(), workItem!.Status);
+    }
+
+    // ---------------- Phase 18.7 — Succeeded AgentRun is interpreted, not trusted blindly ----------------
+
+    /// <summary>
+    /// Builds the exact persisted-column shape AgentOrchestrator itself
+    /// writes: StructuredAgentResult.Data is a plain string holding raw JSON
+    /// text (never a nested JSON object) — serialized here through the same
+    /// StructuredAgentResult.JsonOptions the real pipeline uses, so this
+    /// never drifts from the actual persistence format.
+    /// </summary>
+    private static string SucceededStructuredResult(string executionStatus)
+    {
+        var data = "{\"execution\":{\"version\":1,\"status\":\"" + executionStatus + "\",\"summary\":\"exec summary\"}}";
+
+        var envelope = new StructuredAgentResult(
+            StructuredAgentResult.CurrentVersion, StructuredResultStatus.Succeeded, "s", "ok", data,
+            Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>(), null);
+
+        return JsonSerializer.Serialize(envelope, StructuredAgentResult.JsonOptions);
+    }
+
+    [Fact]
+    public async Task SyncAsync_SucceededWithValidCompletedExecutionResult_TransitionsToCompleted()
+    {
+        var taskId = await SeedRunningTaskAsync();
+        var run = new AgentRun
+        {
+            WorkItemId = taskId,
+            Status = AgentRunStatus.Succeeded,
+            StructuredResult = SucceededStructuredResult("completed")
+        };
+
+        await using var db = new FactoryDbContext(_options);
+        await CreateSync(db).SyncAsync(run);
+
+        var workItem = await new WorkItemRepository(db).GetByIdAsync(taskId);
+        Assert.Equal(WorkItemStatus.Completed.ToString(), workItem!.Status);
+    }
+
+    [Fact]
+    public async Task SyncAsync_SucceededWithRepairRequiredExecutionResult_TransitionsToBlocked()
+    {
+        var taskId = await SeedRunningTaskAsync();
+        var run = new AgentRun
+        {
+            WorkItemId = taskId,
+            Status = AgentRunStatus.Succeeded,
+            StructuredResult = SucceededStructuredResult("repair_required")
+        };
+
+        await using var db = new FactoryDbContext(_options);
+        await CreateSync(db).SyncAsync(run);
+
+        var workItem = await new WorkItemRepository(db).GetByIdAsync(taskId);
+        Assert.Equal(WorkItemStatus.Blocked.ToString(), workItem!.Status);
+        Assert.Equal("exec summary", workItem.CurrentError);
+    }
+
+    [Fact]
+    public async Task SyncAsync_SucceededWithNoStructuredResult_TransitionsToFailed()
+    {
+        // Phase 18.7 §12 "Execution result invalid" — a bare Succeeded with
+        // no interpretable structured result can no longer be trusted as a
+        // completed WorkItem (the gap this phase closes).
+        var taskId = await SeedRunningTaskAsync();
+        var run = new AgentRun { WorkItemId = taskId, Status = AgentRunStatus.Succeeded, StructuredResult = null };
+
+        await using var db = new FactoryDbContext(_options);
+        await CreateSync(db).SyncAsync(run);
+
+        var workItem = await new WorkItemRepository(db).GetByIdAsync(taskId);
+        Assert.Equal(WorkItemStatus.Failed.ToString(), workItem!.Status);
+    }
+
+    [Fact]
+    public async Task SyncAsync_SucceededWithMalformedExecutionData_TransitionsToFailed()
+    {
+        var taskId = await SeedRunningTaskAsync();
+        var run = new AgentRun
+        {
+            WorkItemId = taskId,
+            Status = AgentRunStatus.Succeeded,
+            StructuredResult = SucceededStructuredResult("not-a-real-status")
+        };
+
+        await using var db = new FactoryDbContext(_options);
+        await CreateSync(db).SyncAsync(run);
+
+        var workItem = await new WorkItemRepository(db).GetByIdAsync(taskId);
+        Assert.Equal(WorkItemStatus.Failed.ToString(), workItem!.Status);
     }
 
     [Fact]
@@ -71,8 +168,7 @@ public sealed class AgentRunWorkItemSyncTests : IDisposable
         var run = new AgentRun { WorkItemId = taskId, Status = AgentRunStatus.Failed };
 
         await using var syncDb = new FactoryDbContext(_options);
-        await new AgentRunWorkItemSync(new WorkItemRepository(syncDb), NullLogger<AgentRunWorkItemSync>.Instance)
-            .SyncAsync(run);
+        await CreateSync(syncDb).SyncAsync(run);
 
         var workItem = await new WorkItemRepository(syncDb).GetByIdAsync(taskId);
         Assert.Equal(WorkItemStatus.Completed.ToString(), workItem!.Status);
@@ -84,8 +180,7 @@ public sealed class AgentRunWorkItemSyncTests : IDisposable
         var run = new AgentRun { WorkItemId = null, Status = AgentRunStatus.Succeeded };
 
         await using var db = new FactoryDbContext(_options);
-        await new AgentRunWorkItemSync(new WorkItemRepository(db), NullLogger<AgentRunWorkItemSync>.Instance)
-            .SyncAsync(run);
+        await CreateSync(db).SyncAsync(run);
 
         // No exception, no WorkItem touched — nothing further to assert.
     }

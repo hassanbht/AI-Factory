@@ -958,6 +958,10 @@ namespace AI.Factory.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("ParentWorkItemId")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("PlanKey")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Priority")
                         .IsRequired()
                         .HasMaxLength(50)
@@ -996,6 +1000,9 @@ namespace AI.Factory.Infrastructure.Persistence.Migrations
                     b.HasIndex("FeatureId");
 
                     b.HasIndex("ParentWorkItemId");
+
+                    b.HasIndex("ProjectId", "PlanKey")
+                        .IsUnique();
 
                     b.HasIndex("ProjectId", "Status");
 

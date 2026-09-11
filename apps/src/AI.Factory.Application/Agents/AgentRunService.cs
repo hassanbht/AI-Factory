@@ -24,7 +24,13 @@ public interface IAgentRunService
     Task CancelAsync(Guid agentRunId, CancellationToken cancellationToken = default);
 }
 
-public sealed record CreateAgentRunCommand(Guid AgentDefinitionId, Guid? ProjectId, string? Input);
+/// <summary>
+/// <paramref name="Model"/> is optional and defaults to null (runtime/provider
+/// picks its own default) — added in Phase 18.6 §19 so IProjectPlanner can
+/// flow an explicit Planner model into the created AgentRun without a
+/// broader model-selection subsystem. Existing callers are unaffected.
+/// </summary>
+public sealed record CreateAgentRunCommand(Guid AgentDefinitionId, Guid? ProjectId, string? Input, string? Model = null);
 
 public sealed class AgentRunService : IAgentRunService
 {
@@ -65,7 +71,8 @@ public sealed class AgentRunService : IAgentRunService
         {
             AgentDefinitionId = definition.Id,
             ProjectId = command.ProjectId,
-            Input = command.Input
+            Input = command.Input,
+            Model = command.Model
         };
 
         run = await _runRepository.CreateAsync(run, cancellationToken);

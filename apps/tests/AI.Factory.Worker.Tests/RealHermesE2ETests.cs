@@ -1,6 +1,10 @@
 using System.Text.Json;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Agents;
+using AI.Factory.Application.Orchestration;
+using AI.Factory.Application.Planning;
+using AI.Factory.Application.Projects;
+using AI.Factory.Application.Tasks;
 using AI.Factory.Domain.Entities;
 using AI.Factory.Domain.Enums;
 using AI.Factory.Infrastructure.Agents;
@@ -308,6 +312,212 @@ public sealed class RealHermesE2ETests
         }
 
         Assert.All(results, r => Assert.Equal(AgentRunStatus.Succeeded, r.Status));
+    }
+
+    [Fact]
+    public async Task Planner_RealAgentRun_ThroughFullFactoryPipeline_MaterializesPersistedPlan()
+    {
+        // Phase 18.6 §24 — the single narrow real-Hermes gate for the LLM
+        // Planner: Project -> Planner AgentRun -> AgentRunWorker ->
+        // AgentOrchestrator -> Hermes -> OmniRoute -> real LLM ->
+        // StructuredAgentResult -> ProjectPlanService -> persisted
+        // WorkItems, all through the unmodified production pipeline.
+        if (!Enabled)
+        {
+            return;
+        }
+
+        const string plannerMarker = "AI_FACTORY_PLANNER_E2E_OK";
+
+        using var testHost = BuildHost();
+
+        Guid projectId;
+        AgentRun run;
+        await using (var scope = testHost.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<FactoryDbContext>();
+            var projectService = new ProjectService(new ProjectRepository(db));
+            var project = await projectService.CreateAsync("Planner E2E Project", "A tiny two-task project.");
+            projectId = project.Id;
+            await projectService.TransitionStatusAsync(projectId, ProjectStatus.Analyzing);
+            await projectService.TransitionStatusAsync(projectId, ProjectStatus.Specification);
+            await projectService.TransitionStatusAsync(projectId, ProjectStatus.Architecture);
+            await projectService.TransitionStatusAsync(projectId, ProjectStatus.Planning);
+
+            var definitionRepository = new AgentDefinitionRepository(db);
+            await definitionRepository.CreateAsync(new AgentDefinition { Name = "Planner", AgentType = ProjectPlanner.PlannerAgentType });
+
+            // One AgentDefinition per non-Planner WorkItemType, so ProjectPlanService's
+            // AgentDefinition-compatibility check (Phase 18.5 §14) can never reject the
+            // real LLM's task-type choice regardless of which types it picks.
+            foreach (var type in Enum.GetNames<WorkItemType>())
+            {
+                await definitionRepository.CreateAsync(new AgentDefinition { Name = $"Agent-{type}", AgentType = type });
+            }
+
+            var planner = scope.ServiceProvider.GetRequiredService<IProjectPlanner>();
+            run = await planner.GenerateAsync(projectId);
+
+            // Augment the production-generated Objective with a marker
+            // requirement, purely so this test can honestly confirm the
+            // real model actually produced fresh output — never fabricated.
+            var runRepository = new AgentRunRepository(db);
+            var reloaded = (await runRepository.GetByIdAsync(run.Id))!;
+            reloaded.Input += $"\n\nAlso include this exact marker string in your \"summary\" field: {plannerMarker}";
+            reloaded.Model = OmniRouteModel;
+            await runRepository.UpdateAsync(reloaded);
+        }
+
+        var worker = GetAgentRunWorker(testHost.Host);
+        using var cts = new CancellationTokenSource();
+        await worker.StartAsync(cts.Token);
+
+        var final = await WaitForTerminalAsync(testHost, run.Id, TimeSpan.FromSeconds(150));
+
+        Assert.NotNull(final);
+        Assert.Equal(AgentRunStatus.Succeeded, final!.Status);
+        Assert.NotNull(final.StructuredResult);
+
+        var structured = JsonSerializer.Deserialize<StructuredAgentResult>(final.StructuredResult!, StructuredAgentResult.JsonOptions);
+        Assert.NotNull(structured);
+        var haystack = $"{structured!.Summary} {structured.Output}";
+        Assert.Contains(plannerMarker, haystack, StringComparison.OrdinalIgnoreCase);
+
+        // AgentRunWorker materializes the plan right after the terminal
+        // status write, in the same poll cycle — but on an independent
+        // subsequent database write, so poll for it rather than assuming
+        // it is already visible the instant the AgentRun turned terminal.
+        var plan = await WaitForPlanAsync(testHost, projectId, TimeSpan.FromSeconds(30));
+
+        await worker.StopAsync(CancellationToken.None);
+
+        Assert.NotNull(plan);
+        Assert.NotEmpty(plan!.Tasks);
+    }
+
+    [Fact]
+    public async Task WorkItemExecution_RealAgentRun_ThroughFullFactoryPipeline_UpdatesPersistedWorkItemState()
+    {
+        // Phase 18.7 §15 — the single narrow real-Hermes gate for WorkItem
+        // execution: Ready WorkItem -> TaskDispatchScheduler -> real AgentRun
+        // -> AgentRunWorker -> AgentOrchestrator -> Hermes -> OmniRoute ->
+        // real LLM -> StructuredAgentResult -> execution result mapping ->
+        // persisted WorkItem state, all through the unmodified production
+        // pipeline (AgentRunWorkItemSync's Phase 18.7 sync branch runs
+        // automatically inside the Worker's own poll loop, same as always).
+        if (!Enabled)
+        {
+            return;
+        }
+
+        const string executionMarker = "AI_FACTORY_WORKITEM_EXECUTION_E2E_OK";
+
+        using var testHost = BuildHost();
+
+        Guid projectId, workItemId, agentRunId;
+        await using (var scope = testHost.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<FactoryDbContext>();
+            var project = await new ProjectService(new ProjectRepository(db)).CreateAsync("WorkItem Execution E2E Project", "d");
+            projectId = project.Id;
+
+            await new AgentDefinitionRepository(db).CreateAsync(
+                new AgentDefinition { Name = "Coder", AgentType = "Implementation" });
+
+            var workItems = new WorkItemService(new WorkItemRepository(db), new ProjectRepository(db));
+            var item = await workItems.CreateAsync(
+                projectId, WorkItemType.Implementation, "Trivial marker task",
+                "Respond only with the required structured execution result — no real code changes are needed.",
+                "Normal");
+            workItemId = item.Id;
+            await workItems.TransitionStatusAsync(workItemId, WorkItemStatus.Ready);
+
+            var scheduler = scope.ServiceProvider.GetRequiredService<ITaskDispatchScheduler>();
+            var cycle = await scheduler.RunCycleAsync(projectId);
+            agentRunId = cycle.Outcomes.Single().AgentRunId!.Value;
+
+            // Augment the production-generated Objective with a marker
+            // requirement, purely so this test can honestly confirm the
+            // real model actually produced fresh output — never fabricated.
+            var runRepository = new AgentRunRepository(db);
+            var reloaded = (await runRepository.GetByIdAsync(agentRunId))!;
+            reloaded.Input += $"\n\nAlso include this exact marker string in your \"summary\" field: {executionMarker}";
+            reloaded.Model = OmniRouteModel;
+            await runRepository.UpdateAsync(reloaded);
+        }
+
+        var worker = GetAgentRunWorker(testHost.Host);
+        using var cts = new CancellationTokenSource();
+        await worker.StartAsync(cts.Token);
+
+        var finalRun = await WaitForTerminalAsync(testHost, agentRunId, TimeSpan.FromSeconds(150));
+
+        Assert.NotNull(finalRun);
+        Assert.Equal(AgentRunStatus.Succeeded, finalRun!.Status);
+        Assert.NotNull(finalRun.StructuredResult);
+
+        var structured = JsonSerializer.Deserialize<StructuredAgentResult>(finalRun.StructuredResult!, StructuredAgentResult.JsonOptions);
+        Assert.NotNull(structured);
+        var haystack = $"{structured!.Summary} {structured.Output} {structured.Data}";
+        Assert.Contains(executionMarker, haystack, StringComparison.OrdinalIgnoreCase);
+
+        // AgentRunWorkItemSync runs inside the same Worker poll cycle right
+        // after the AgentRun turns terminal, but on an independent
+        // subsequent database write — poll for the WorkItem to leave
+        // Running rather than assuming it is already visible.
+        var finalWorkItem = await WaitForWorkItemLeavesRunningAsync(testHost, workItemId, TimeSpan.FromSeconds(30));
+
+        await worker.StopAsync(CancellationToken.None);
+
+        Assert.NotNull(finalWorkItem);
+        // The real model decides completed/repair_required on its own — this
+        // proves the deterministic mapping pipeline actually ran and reached
+        // one of its known outcomes, not any specific one.
+        Assert.Contains(
+            finalWorkItem!.Status,
+            new[] { WorkItemStatus.Completed.ToString(), WorkItemStatus.Blocked.ToString(), WorkItemStatus.Failed.ToString() });
+    }
+
+    private static async Task<WorkItem?> WaitForWorkItemLeavesRunningAsync(TestHost testHost, Guid workItemId, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            await using var scope = testHost.Host.Services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<FactoryDbContext>();
+            var workItem = await new WorkItemRepository(db).GetByIdAsync(workItemId);
+
+            if (workItem is not null && workItem.Status != WorkItemStatus.Running.ToString())
+            {
+                return workItem;
+            }
+
+            await Task.Delay(250);
+        }
+
+        return null;
+    }
+
+    private static async Task<ProjectPlanResult?> WaitForPlanAsync(TestHost testHost, Guid projectId, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            await using var scope = testHost.Host.Services.CreateAsyncScope();
+            var planService = scope.ServiceProvider.GetRequiredService<IProjectPlanService>();
+            var plan = await planService.GetPlanAsync(projectId);
+
+            if (plan is not null)
+            {
+                return plan;
+            }
+
+            await Task.Delay(250);
+        }
+
+        return null;
     }
 
     private static async Task<(AgentRun Run, Guid DefinitionId)> CreateQueuedRunAsync(

@@ -36,6 +36,7 @@ public sealed class TaskDispatchSchedulerTests : IDisposable
         FactoryDbContext db, IOperationalMetrics? metrics = null, TaskSchedulerOptions? options = null) =>
         new(
             new WorkItemRepository(db),
+            new ProjectRepository(db),
             new TaskDependencyResolver(),
             new AgentRunRepository(db),
             new AgentDefinitionRepository(db),
@@ -359,6 +360,7 @@ public sealed class TaskDispatchSchedulerTests : IDisposable
         public void RecordSchedulerDispatchFailure() { }
         public void RecordSchedulerRaceLost() { }
         public void RecordSchedulerConcurrencyLimitSkipped(int count) { }
+        public void RecordAgentRunHeartbeatFailure() { }
 
         public OperationalMetricsSnapshot GetSnapshot() => new(
             DateTime.UtcNow, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, null, null, null, null, null, null);

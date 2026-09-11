@@ -52,7 +52,23 @@ public sealed class WorkflowRecoveryHostedService : BackgroundService
                     break;
                 }
 
-                await RunStaleSweepAsync(stoppingToken);
+                try
+                {
+                    await RunStaleSweepAsync(stoppingToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    // Phase 18.4 §7: a concurrent AgentRun heartbeat write can
+                    // legitimately collide with this sweep's optimistic-
+                    // concurrency save (ConcurrencyConflictException) — a
+                    // single failed sweep must never take the whole recovery
+                    // loop down; the next periodic tick retries.
+                    _logger.LogError(ex, "Workflow recovery: stale sweep failed.");
+                }
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

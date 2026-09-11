@@ -31,6 +31,7 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
         };
 
     private readonly IWorkItemRepository _workItems;
+    private readonly IProjectRepository _projects;
     private readonly ITaskDependencyResolver _resolver;
     private readonly IAgentRunRepository _agentRuns;
     private readonly IAgentDefinitionRepository _agentDefinitions;
@@ -40,6 +41,7 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
 
     public TaskDispatchScheduler(
         IWorkItemRepository workItems,
+        IProjectRepository projects,
         ITaskDependencyResolver resolver,
         IAgentRunRepository agentRuns,
         IAgentDefinitionRepository agentDefinitions,
@@ -48,6 +50,7 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
         ILogger<TaskDispatchScheduler> logger)
     {
         _workItems = workItems;
+        _projects = projects;
         _resolver = resolver;
         _agentRuns = agentRuns;
         _agentDefinitions = agentDefinitions;
@@ -110,6 +113,7 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
         }
 
         var definitions = await _agentDefinitions.GetAllAsync(cancellationToken);
+        var project = candidates.Count > 0 ? await _projects.GetByIdAsync(projectId, cancellationToken) : null;
         var outcomes = new List<TaskDispatchOutcome>();
 
         foreach (var workItem in candidates)
@@ -118,7 +122,7 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
 
             try
             {
-                outcomes.Add(await DispatchOneAsync(workItem, definitions, cancellationToken));
+                outcomes.Add(await DispatchOneAsync(workItem, definitions, project, items, cancellationToken));
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -136,7 +140,11 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
     }
 
     private async Task<TaskDispatchOutcome> DispatchOneAsync(
-        WorkItem workItem, IReadOnlyList<AgentDefinition> definitions, CancellationToken cancellationToken)
+        WorkItem workItem,
+        IReadOnlyList<AgentDefinition> definitions,
+        Project? project,
+        IReadOnlyList<WorkItem> allProjectItems,
+        CancellationToken cancellationToken)
     {
         // Looked up by convention (AgentType == WorkItem.Type name) — no
         // Planner/Coder-specific agent is created or assumed here; if the
@@ -180,7 +188,7 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
             AgentDefinitionId = definition.Id,
             ProjectId = workItem.ProjectId,
             WorkItemId = workItem.Id,
-            Input = BuildObjective(workItem)
+            Input = BuildObjective(workItem, project, allProjectItems)
         };
 
         // CreateAsync is idempotent on CorrelationId (a fresh Guid here, so
@@ -203,10 +211,60 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
         return new TaskDispatchOutcome(workItem.Id, true, run.Id, null, null);
     }
 
-    private static string BuildObjective(WorkItem workItem) =>
-        string.IsNullOrWhiteSpace(workItem.Description)
-            ? workItem.Title
-            : $"{workItem.Title}\n\n{workItem.Description}";
+    /// <summary>
+    /// Phase 18.7 §8 — the WorkItem-execution Objective. AgentOrchestrator
+    /// already routes every AgentRun's Input through the existing
+    /// IAgentInstructionBuilder as its "Objective" (unchanged, no new prompt
+    /// framework here — same approach as Phase 18.6's Planner Objective), so
+    /// enriching this text is the only change needed to give the agent
+    /// enough context and an explicit execution-result contract.
+    /// </summary>
+    private static string BuildObjective(WorkItem workItem, Project? project, IReadOnlyList<WorkItem> allProjectItems)
+    {
+        var dependencyContext = workItem.Dependencies.Count == 0
+            ? "None."
+            : string.Join("\n", workItem.Dependencies
+                .Select(d => allProjectItems.FirstOrDefault(x => x.Id == d.DependsOnWorkItemId))
+                .Where(x => x is not null)
+                .Select(x => $"- {x!.Title} (status: {x.Status})"));
+
+        const string executionShape =
+            """{"execution":{"version":1,"status":"completed|repair_required","summary":"<one-line summary>","artifacts":[],"tests":[],"notes":[]}}""";
+
+        return $"""
+            You are executing one WorkItem for AI Factory. Work only on the
+            WorkItem described below — do not silently expand scope to other
+            files, features, or WorkItems.
+
+            Project name: {project?.Name}
+            Project description: {project?.Description}
+
+            WorkItem PlanKey: {workItem.PlanKey ?? "(none)"}
+            WorkItem type: {workItem.Type}
+            WorkItem priority: {workItem.Priority}
+            WorkItem title: {workItem.Title}
+            WorkItem description: {workItem.Description}
+
+            Dependency context (already-completed prerequisite tasks):
+            {dependencyContext}
+
+            Respond using the standard structured-JSON output contract (see the
+            Output contract section below), with your execution result placed
+            under the top-level "data" object as:
+
+            {executionShape}
+
+            Rules:
+            - "status" must be "completed" only if you actually finished the
+              work described above; use "repair_required" if you attempted it
+              but could not complete it.
+            - Report only tests you actually executed — never fabricate test
+              results.
+            - Report only what you actually changed.
+            - Do not claim "completed" merely because code was generated; it
+              must reflect genuine completion of the assigned WorkItem.
+            """;
+    }
 
     private static int GetPriorityRank(string priority) =>
         PriorityRank.TryGetValue(priority, out var rank) ? rank : PriorityRank["Normal"];

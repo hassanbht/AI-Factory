@@ -148,6 +148,9 @@ public interface IOperationalMetrics
 
     void RecordSchedulerConcurrencyLimitSkipped(int count);
 
+    // Phase 18.4 — AgentRun execution heartbeat.
+    void RecordAgentRunHeartbeatFailure();
+
     OperationalMetricsSnapshot GetSnapshot();
 }
 
@@ -240,7 +243,8 @@ public sealed record OperationalMetricsSnapshot(
     long SchedulerTasksDispatched = 0,
     long SchedulerDispatchFailures = 0,
     long SchedulerRaceLost = 0,
-    long SchedulerConcurrencyLimitSkipped = 0);
+    long SchedulerConcurrencyLimitSkipped = 0,
+    long AgentRunHeartbeatFailures = 0);
 
 public sealed class OperationalMetrics : IOperationalMetrics
 {
@@ -340,6 +344,7 @@ public sealed class OperationalMetrics : IOperationalMetrics
     private long _schedulerDispatchFailures;
     private long _schedulerRaceLost;
     private long _schedulerConcurrencyLimitSkipped;
+    private long _agentRunHeartbeatFailures;
 
     public void RecordOperationStarted() => Interlocked.Increment(ref _operationsStarted);
 
@@ -528,6 +533,8 @@ public sealed class OperationalMetrics : IOperationalMetrics
     public void RecordSchedulerRaceLost() => Interlocked.Increment(ref _schedulerRaceLost);
     public void RecordSchedulerConcurrencyLimitSkipped(int count) => Interlocked.Add(ref _schedulerConcurrencyLimitSkipped, count);
 
+    public void RecordAgentRunHeartbeatFailure() => Interlocked.Increment(ref _agentRunHeartbeatFailures);
+
     public OperationalMetricsSnapshot GetSnapshot()
     {
         return new OperationalMetricsSnapshot(
@@ -619,7 +626,8 @@ public sealed class OperationalMetrics : IOperationalMetrics
             Interlocked.Read(ref _schedulerTasksDispatched),
             Interlocked.Read(ref _schedulerDispatchFailures),
             Interlocked.Read(ref _schedulerRaceLost),
-            Interlocked.Read(ref _schedulerConcurrencyLimitSkipped));
+            Interlocked.Read(ref _schedulerConcurrencyLimitSkipped),
+            Interlocked.Read(ref _agentRunHeartbeatFailures));
     }
 
     /// <summary>Count + running total, so average is derived rather than stored — no raw samples kept.</summary>

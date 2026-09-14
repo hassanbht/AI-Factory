@@ -49,6 +49,16 @@ public interface IAgentRunRepository
     Task<int> CountByStatusAsync(
         AgentRunStatus status,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Phase 18.10 §16 — whether any AgentRun linked to this Project is still
+    /// in a non-terminal status (Created/Queued/Running/Waiting). Used by
+    /// IProjectCompletionGate to avoid advancing a Project while work is
+    /// still in flight, even if every WorkItem already looks Completed.
+    /// </summary>
+    Task<bool> HasActiveRunsForProjectAsync(
+        Guid projectId,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed record AgentRunQuery(

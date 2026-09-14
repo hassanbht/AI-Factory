@@ -830,6 +830,24 @@ app.MapPatch("/api/projects/{id}/status", async (
     return Results.Ok(ToProjectDto(project));
 }).RequireRateLimiting("GeneralApi");
 
+// Phase 18.11 — the sole explicit human-approval boundary: HumanReview ->
+// Completed. Deliberately separate from the generic status endpoint above,
+// which can no longer produce Completed under any input.
+app.MapPost("/api/projects/{id}/approve", async (
+    string id,
+    ApproveProjectRequest? request,
+    ProjectService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!Guid.TryParse(id, out var parsedGuid) || parsedGuid == Guid.Empty)
+    {
+        throw new ValidationException("Invalid project identifier.");
+    }
+
+    var project = await service.ApproveAsync(parsedGuid, request?.Actor, cancellationToken);
+    return Results.Ok(ToProjectDto(project));
+}).RequireRateLimiting("GeneralApi");
+
 // ------------------------------------------------------------
 // Tasks (Phase 18.2)
 // ------------------------------------------------------------
@@ -1717,6 +1735,14 @@ public sealed record CreateProjectRequest(
     string? Description);
 
 public sealed record UpdateStatusRequest(string Status);
+
+/// <summary>
+/// Phase 18.11 — Actor is the simplest repository-compatible identity
+/// available: this repo has no real authentication/authorization
+/// abstraction, so it is an unauthenticated, caller-supplied label recorded
+/// purely for audit purposes, not a verified identity claim.
+/// </summary>
+public sealed record ApproveProjectRequest(string? Actor);
 
 public sealed record CreateWorkItemRequest(
     string Type,

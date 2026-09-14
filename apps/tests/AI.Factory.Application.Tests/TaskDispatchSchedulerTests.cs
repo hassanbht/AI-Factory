@@ -32,8 +32,21 @@ public sealed class TaskDispatchSchedulerTests : IDisposable
 
     private static TestOperationalMetrics NewMetrics() => new();
 
+    /// <summary>This file never drives a WorkItem/Project to completion, so the Phase 18.10 completion gate's verification call is never expected to run.</summary>
+    private sealed class NotCalledVerificationGate : IVerificationGate
+    {
+        public Task<VerificationResult> VerifyAsync(Project project, WorkItem workItem, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("VerifyAsync should not be called in this test file.");
+
+        public Task<VerificationResult> VerifyProjectAsync(Project project, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("VerifyProjectAsync should not be called in this test file.");
+    }
+
     private static TaskDispatchScheduler CreateScheduler(
-        FactoryDbContext db, IOperationalMetrics? metrics = null, TaskSchedulerOptions? options = null) =>
+        FactoryDbContext db,
+        IOperationalMetrics? metrics = null,
+        TaskSchedulerOptions? options = null,
+        ExecutionLimitsOptions? executionLimits = null) =>
         new(
             new WorkItemRepository(db),
             new ProjectRepository(db),
@@ -41,6 +54,10 @@ public sealed class TaskDispatchSchedulerTests : IDisposable
             new AgentRunRepository(db),
             new AgentDefinitionRepository(db),
             options ?? new TaskSchedulerOptions { MaxConcurrentTasks = 1 },
+            executionLimits ?? new ExecutionLimitsOptions(),
+            new ProjectCompletionGate(
+                new ProjectRepository(db), new AgentRunRepository(db), new NotCalledVerificationGate(),
+                NullLogger<ProjectCompletionGate>.Instance),
             metrics ?? NewMetrics(),
             NullLogger<TaskDispatchScheduler>.Instance);
 

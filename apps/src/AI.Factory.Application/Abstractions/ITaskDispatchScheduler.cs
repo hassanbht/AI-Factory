@@ -24,7 +24,9 @@ public enum TaskDispatchSkipReason
 {
     ConcurrentClaimLost,
     NoAgentDefinition,
-    DispatchFailed
+    DispatchFailed,
+    NoRepairAgentDefinition,
+    RepairBudgetExhausted
 }
 
 public sealed record TaskDispatchOutcome(

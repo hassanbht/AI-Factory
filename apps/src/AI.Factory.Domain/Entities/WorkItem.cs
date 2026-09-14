@@ -28,6 +28,16 @@ public sealed class WorkItem : IVersionedEntity
 
     public int MaxAttempts { get; set; } = 3;
 
+    /// <summary>
+    /// Phase 18.9 — number of repair AgentRuns already dispatched for this
+    /// WorkItem's current implementation attempt. Distinct from
+    /// <see cref="AttemptCount"/>, which belongs to the legacy
+    /// AutonomousCodingOrchestrator pipeline and is never read/written by the
+    /// AgentRun/TaskDispatchScheduler/VerificationGate pipeline. Compared
+    /// against ExecutionLimitsOptions.MaxRepairAttempts by TaskDispatchScheduler.
+    /// </summary>
+    public int RepairAttemptCount { get; set; }
+
     public string? AcceptanceCriteria { get; set; }
 
     /// <summary>

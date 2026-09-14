@@ -772,6 +772,9 @@ namespace AI.Factory.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("CurrentError")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Description")
                         .HasColumnType("TEXT");
 
@@ -969,6 +972,9 @@ namespace AI.Factory.Infrastructure.Persistence.Migrations
 
                     b.Property<Guid>("ProjectId")
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("RepairAttemptCount")
+                        .HasColumnType("INTEGER");
 
                     b.Property<DateTime?>("StartedAtUtc")
                         .HasColumnType("TEXT");

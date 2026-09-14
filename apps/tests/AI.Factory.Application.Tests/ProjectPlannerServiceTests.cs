@@ -80,6 +80,16 @@ public sealed class ProjectPlannerServiceTests : IDisposable
         new StructuredAgentResultParser(),
         NullLogger<AgentOrchestrator>.Instance);
 
+    /// <summary>This file never drives a WorkItem/Project to completion, so the Phase 18.10 completion gate's verification call is never expected to run.</summary>
+    private sealed class NotCalledVerificationGate : IVerificationGate
+    {
+        public Task<VerificationResult> VerifyAsync(Project project, WorkItem workItem, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("VerifyAsync should not be called in this test file.");
+
+        public Task<VerificationResult> VerifyProjectAsync(Project project, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("VerifyProjectAsync should not be called in this test file.");
+    }
+
     private static TaskDispatchScheduler CreateScheduler(FactoryDbContext db) => new(
         new WorkItemRepository(db),
         new ProjectRepository(db),
@@ -87,6 +97,10 @@ public sealed class ProjectPlannerServiceTests : IDisposable
         new AgentRunRepository(db),
         new AgentDefinitionRepository(db),
         new TaskSchedulerOptions { MaxConcurrentTasks = 2 },
+        new ExecutionLimitsOptions(),
+        new ProjectCompletionGate(
+            new ProjectRepository(db), new AgentRunRepository(db), new NotCalledVerificationGate(),
+            NullLogger<ProjectCompletionGate>.Instance),
         new OperationalMetrics(),
         NullLogger<TaskDispatchScheduler>.Instance);
 

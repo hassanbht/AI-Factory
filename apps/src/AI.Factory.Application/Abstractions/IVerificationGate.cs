@@ -15,6 +15,16 @@ public interface IVerificationGate
         Project project,
         WorkItem workItem,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Phase 18.10 — the same deterministic build/test run as
+    /// <see cref="VerifyAsync"/>, scoped to the whole Project rather than one
+    /// WorkItem's attempt. No WorkItem context is needed: the underlying
+    /// build/test executors already operate only on Project.RootPath.
+    /// </summary>
+    Task<VerificationResult> VerifyProjectAsync(
+        Project project,
+        CancellationToken cancellationToken = default);
 }
 
 public enum VerificationStatus

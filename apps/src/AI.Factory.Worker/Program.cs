@@ -110,10 +110,13 @@ var taskSchedulerOptions = new TaskSchedulerOptions();
 builder.Configuration.GetSection(TaskSchedulerOptions.SectionName).Bind(taskSchedulerOptions);
 builder.Services.AddSingleton(taskSchedulerOptions);
 builder.Services.AddSingleton<ISchedulerStatusTracker, SchedulerStatusTracker>();
-builder.Services.AddScoped<ITaskDispatchScheduler, TaskDispatchScheduler>();
 builder.Services.AddScoped<IWorkItemExecutionResultMapper, WorkItemExecutionResultMapper>();
 builder.Services.AddScoped<IVerificationGate, VerificationGate>();
 builder.Services.AddScoped<IAgentRunWorkItemSync, AgentRunWorkItemSync>();
+
+// Phase 18.10 — Deterministic Project Completion & Review Gate.
+builder.Services.AddScoped<IProjectCompletionGate, ProjectCompletionGate>();
+builder.Services.AddScoped<ITaskDispatchScheduler, TaskDispatchScheduler>();
 
 // Phase 18.5 — Deterministic Project Planner & Execution Plan
 builder.Services.AddScoped<IProjectPlanService, AI.Factory.Application.Planning.ProjectPlanService>();

@@ -49,6 +49,10 @@ public sealed class WorkItemExecutionIntegrationTests : IDisposable
         new AgentRunRepository(db),
         new AgentDefinitionRepository(db),
         new TaskSchedulerOptions { MaxConcurrentTasks = 2 },
+        new ExecutionLimitsOptions(),
+        new ProjectCompletionGate(
+            new ProjectRepository(db), new AgentRunRepository(db), new FakeVerificationGate(VerificationStatus.Passed),
+            NullLogger<ProjectCompletionGate>.Instance),
         new OperationalMetrics(),
         NullLogger<TaskDispatchScheduler>.Instance);
 
@@ -80,6 +84,10 @@ public sealed class WorkItemExecutionIntegrationTests : IDisposable
 
         public Task<VerificationResult> VerifyAsync(
             Project project, WorkItem workItem, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new VerificationResult(_status, "fake", 0, TimeSpan.Zero));
+
+        public Task<VerificationResult> VerifyProjectAsync(
+            Project project, CancellationToken cancellationToken = default) =>
             Task.FromResult(new VerificationResult(_status, "fake", 0, TimeSpan.Zero));
     }
 

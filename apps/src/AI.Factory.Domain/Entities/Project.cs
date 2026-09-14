@@ -22,6 +22,13 @@ public sealed class Project : IVersionedEntity
 
     public string? GitBranch { get; set; }
 
+    /// <summary>
+    /// Phase 18.10 — bounded reason the Project last landed in a non-happy
+    /// lifecycle state (e.g. a Project-level verification failure summary).
+    /// Mirrors WorkItem.CurrentError; never unbounded raw process output.
+    /// </summary>
+    public string? CurrentError { get; set; }
+
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;

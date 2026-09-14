@@ -35,8 +35,17 @@ public sealed class VerificationGate : IVerificationGate
         _logger = logger;
     }
 
-    public async Task<VerificationResult> VerifyAsync(
-        Project project, WorkItem workItem, CancellationToken cancellationToken = default)
+    public Task<VerificationResult> VerifyAsync(
+        Project project, WorkItem workItem, CancellationToken cancellationToken = default) =>
+        RunAsync(project, workItem.Id, cancellationToken);
+
+    /// <summary>Phase 18.10 — same build/test run, scoped to the whole Project (no WorkItem context needed).</summary>
+    public Task<VerificationResult> VerifyProjectAsync(
+        Project project, CancellationToken cancellationToken = default) =>
+        RunAsync(project, null, cancellationToken);
+
+    private async Task<VerificationResult> RunAsync(
+        Project project, Guid? workItemId, CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
 
@@ -98,7 +107,7 @@ public sealed class VerificationGate : IVerificationGate
             // convert their own known failure modes into a normal result.
             _logger.LogError(
                 ex, "VerificationInfrastructureError WorkItemId={WorkItemId} ProjectId={ProjectId}",
-                workItem.Id, project.Id);
+                workItemId, project.Id);
             return Result(
                 VerificationStatus.InfrastructureError, $"Verification infrastructure error: {ex.Message}",
                 null, stopwatch);

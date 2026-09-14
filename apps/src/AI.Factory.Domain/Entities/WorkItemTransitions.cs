@@ -25,7 +25,10 @@ public static class WorkItemTransitions
                 WorkItemStatus.Repairing, WorkItemStatus.Reviewing, WorkItemStatus.Completed,
                 WorkItemStatus.Failed, WorkItemStatus.Cancelled
             ],
-            [WorkItemStatus.Repairing] = [WorkItemStatus.Testing, WorkItemStatus.Failed, WorkItemStatus.Cancelled],
+            [WorkItemStatus.Repairing] =
+            [
+                WorkItemStatus.Running, WorkItemStatus.Testing, WorkItemStatus.Failed, WorkItemStatus.Cancelled
+            ],
             [WorkItemStatus.Reviewing] =
             [
                 WorkItemStatus.Completed, WorkItemStatus.Repairing, WorkItemStatus.Failed, WorkItemStatus.Cancelled

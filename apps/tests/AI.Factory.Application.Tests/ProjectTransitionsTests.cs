@@ -17,6 +17,9 @@ public sealed class ProjectTransitionsTests
     [InlineData(ProjectStatus.Paused, ProjectStatus.Created, false)]
     [InlineData(ProjectStatus.Completed, ProjectStatus.Analyzing, false)]
     [InlineData(ProjectStatus.Cancelled, ProjectStatus.Analyzing, false)]
+    [InlineData(ProjectStatus.Reviewing, ProjectStatus.Completed, false)]
+    [InlineData(ProjectStatus.Reviewing, ProjectStatus.HumanReview, true)]
+    [InlineData(ProjectStatus.HumanReview, ProjectStatus.Completed, true)]
     public void IsValid_MatchesExpectedTransition(ProjectStatus from, ProjectStatus to, bool expected)
     {
         Assert.Equal(expected, ProjectTransitions.IsValid(from, to));

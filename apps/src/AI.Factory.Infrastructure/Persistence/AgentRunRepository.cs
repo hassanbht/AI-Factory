@@ -8,6 +8,16 @@ namespace AI.Factory.Infrastructure.Persistence;
 
 public sealed class AgentRunRepository : IAgentRunRepository
 {
+    // Duplicated from AgentRunTransitions.TerminalStatuses rather than
+    // calling it: EF Core cannot translate a call to an external static
+    // method inside a Where/AnyAsync predicate into SQL. The same tradeoff
+    // is already made in this codebase by
+    // TaskSchedulerHostedService.TerminalProjectStatuses.
+    private static readonly AgentRunStatus[] TerminalAgentRunStatuses =
+    [
+        AgentRunStatus.Succeeded, AgentRunStatus.Failed, AgentRunStatus.TimedOut, AgentRunStatus.Cancelled
+    ];
+
     private readonly FactoryDbContext _db;
 
     public AgentRunRepository(FactoryDbContext db)
@@ -149,5 +159,14 @@ public sealed class AgentRunRepository : IAgentRunRepository
         CancellationToken cancellationToken = default)
     {
         return await _db.AgentRuns.CountAsync(x => x.Status == status, cancellationToken);
+    }
+
+    public async Task<bool> HasActiveRunsForProjectAsync(
+        Guid projectId,
+        CancellationToken cancellationToken = default)
+    {
+        return await _db.AgentRuns.AnyAsync(
+            x => x.ProjectId == projectId && !TerminalAgentRunStatuses.Contains(x.Status),
+            cancellationToken);
     }
 }

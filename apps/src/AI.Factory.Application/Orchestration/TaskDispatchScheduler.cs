@@ -30,12 +30,17 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
             ["Low"] = 3
         };
 
+    /// <summary>Phase 18.9 §5 — the canonical AgentType a repair AgentDefinition must be registered under.</summary>
+    public const string RepairAgentType = "Repair";
+
     private readonly IWorkItemRepository _workItems;
     private readonly IProjectRepository _projects;
     private readonly ITaskDependencyResolver _resolver;
     private readonly IAgentRunRepository _agentRuns;
     private readonly IAgentDefinitionRepository _agentDefinitions;
     private readonly TaskSchedulerOptions _options;
+    private readonly ExecutionLimitsOptions _executionLimits;
+    private readonly IProjectCompletionGate _completionGate;
     private readonly IOperationalMetrics _metrics;
     private readonly ILogger<TaskDispatchScheduler> _logger;
 
@@ -46,6 +51,8 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
         IAgentRunRepository agentRuns,
         IAgentDefinitionRepository agentDefinitions,
         TaskSchedulerOptions options,
+        ExecutionLimitsOptions executionLimits,
+        IProjectCompletionGate completionGate,
         IOperationalMetrics metrics,
         ILogger<TaskDispatchScheduler> logger)
     {
@@ -55,6 +62,8 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
         _agentRuns = agentRuns;
         _agentDefinitions = agentDefinitions;
         _options = options;
+        _executionLimits = executionLimits;
+        _completionGate = completionGate;
         _metrics = metrics;
         _logger = logger;
     }
@@ -88,6 +97,25 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
         var runningCount = items.Count(x => x.Status == WorkItemStatus.Running.ToString());
         var capacity = Math.Max(0, _options.MaxConcurrentTasks - runningCount);
 
+        // Phase 18.9 §17 — deterministic ordering policy: Repairing
+        // candidates are dispatched first (they are already in-flight work
+        // closer to completion than an untouched Ready item), then any
+        // capacity left over goes to Ready candidates. Repair candidates are
+        // independent of ITaskDependencyResolver — a WorkItem only ever
+        // reaches Repairing after its dependencies were already satisfied
+        // once (Ready -> Running), so re-checking readiness here would be
+        // redundant. Capacity is recomputed every cycle, so Ready work is
+        // never starved beyond whatever repair work already holds the
+        // concurrency budget that cycle.
+        var repairOrdered = items
+            .Where(x => x.Status == WorkItemStatus.Repairing.ToString())
+            .OrderBy(x => x.CreatedAtUtc)
+            .ThenBy(x => x.Id)
+            .ToList();
+
+        var repairCandidates = repairOrdered.Take(capacity).ToList();
+        var remainingCapacity = capacity - repairCandidates.Count;
+
         // TaskReadinessStatus.Ready only measures dependency satisfaction —
         // ITaskDependencyResolver.Classify treats any non-terminal,
         // non-Running own status (including Draft) as a candidate. The
@@ -104,7 +132,7 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
             .ThenBy(x => x.Id)
             .ToList();
 
-        var candidates = readyOrdered.Take(capacity).ToList();
+        var candidates = readyOrdered.Take(remainingCapacity).ToList();
         var skippedDueToConcurrency = readyOrdered.Count - candidates.Count;
 
         if (skippedDueToConcurrency > 0)
@@ -113,8 +141,29 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
         }
 
         var definitions = await _agentDefinitions.GetAllAsync(cancellationToken);
-        var project = candidates.Count > 0 ? await _projects.GetByIdAsync(projectId, cancellationToken) : null;
+        // Phase 18.10 §18 — always loaded now (not just when there is
+        // dispatch work): the Project-completion gate below needs it every
+        // cycle, including for a Project already past Implementation with no
+        // Ready/Repairing candidates left (e.g. sitting in Testing/Reviewing).
+        var project = await _projects.GetByIdAsync(projectId, cancellationToken);
         var outcomes = new List<TaskDispatchOutcome>();
+
+        foreach (var workItem in repairCandidates)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                outcomes.Add(await DispatchRepairAsync(workItem, definitions, project, cancellationToken));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogError(ex, "SchedulerRepairDispatchFailed WorkItemId={WorkItemId}", workItem.Id);
+                _metrics.RecordSchedulerDispatchFailure();
+                outcomes.Add(new TaskDispatchOutcome(
+                    workItem.Id, false, null, TaskDispatchSkipReason.DispatchFailed, ex.Message));
+            }
+        }
 
         foreach (var workItem in candidates)
         {
@@ -132,6 +181,27 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
                 _metrics.RecordSchedulerDispatchFailure();
                 outcomes.Add(new TaskDispatchOutcome(
                     workItem.Id, false, null, TaskDispatchSkipReason.DispatchFailed, ex.Message));
+            }
+        }
+
+        // Phase 18.10 §6/§18 — the smallest deterministic integration point
+        // for Project lifecycle progression: reuses the WorkItems already
+        // loaded for this cycle, runs after WorkItem dispatch so a
+        // just-completed final WorkItem is reflected immediately, and is a
+        // no-op for any Project status this gate doesn't own (Planning,
+        // HumanReview, terminal, ...). Isolated like every other per-cycle
+        // failure mode — one Project's gate evaluation failing must never
+        // stop the rest of this cycle's WorkItem-dispatch result from
+        // returning.
+        if (project is not null)
+        {
+            try
+            {
+                await _completionGate.EvaluateAsync(project, items, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogError(ex, "ProjectCompletionGateFailed ProjectId={ProjectId}", projectId);
             }
         }
 
@@ -209,6 +279,181 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
             workItem.Id, run.Id, definition.Id);
 
         return new TaskDispatchOutcome(workItem.Id, true, run.Id, null, null);
+    }
+
+    /// <summary>
+    /// Phase 18.9 — dispatches a repair AgentRun for a WorkItem currently in
+    /// WorkItemStatus.Repairing (the only path into that status is
+    /// Testing -> Repairing on a VerificationGate.Failed result, so being
+    /// Repairing already IS the proof that a repairable verification failure
+    /// occurred — no further check is needed here). Looked up by the
+    /// dedicated RepairAgentType convention (not WorkItem.Type, unlike normal
+    /// dispatch) so a repair agent is never conflated with the implementation
+    /// agent that produced the failing code. Bounded by
+    /// ExecutionLimitsOptions.MaxRepairAttempts — the attempt counter is
+    /// incremented atomically with the Repairing -> Running claim through the
+    /// same optimistic-concurrency Version token DispatchOneAsync uses, so a
+    /// duplicate scheduler observation loses the race safely instead of
+    /// creating a second repair AgentRun.
+    /// </summary>
+    private async Task<TaskDispatchOutcome> DispatchRepairAsync(
+        WorkItem workItem, IReadOnlyList<AgentDefinition> definitions, Project? project, CancellationToken cancellationToken)
+    {
+        if (workItem.RepairAttemptCount >= _executionLimits.MaxRepairAttempts)
+        {
+            var exhaustedMessage =
+                $"Maximum repair attempts ({_executionLimits.MaxRepairAttempts}) reached. " +
+                $"Latest verification failure: {workItem.CurrentError ?? "(none recorded)"}";
+
+            workItem.CurrentError = exhaustedMessage;
+
+            try
+            {
+                workItem.TransitionTo(WorkItemStatus.Failed);
+                await _workItems.UpdateAsync(workItem, cancellationToken);
+            }
+            catch (ConcurrencyConflictException)
+            {
+                _metrics.RecordSchedulerRaceLost();
+                _logger.LogInformation("SchedulerRepairClaimLost WorkItemId={WorkItemId}", workItem.Id);
+                return new TaskDispatchOutcome(
+                    workItem.Id, false, null, TaskDispatchSkipReason.ConcurrentClaimLost,
+                    "Another scheduler cycle claimed this WorkItem first.");
+            }
+
+            _logger.LogWarning(
+                "SchedulerRepairBudgetExhausted WorkItemId={WorkItemId} RepairAttemptCount={RepairAttemptCount}",
+                workItem.Id, workItem.RepairAttemptCount);
+            return new TaskDispatchOutcome(
+                workItem.Id, false, null, TaskDispatchSkipReason.RepairBudgetExhausted, exhaustedMessage);
+        }
+
+        var definition = definitions.FirstOrDefault(x =>
+            x.Enabled && string.Equals(x.AgentType, RepairAgentType, StringComparison.OrdinalIgnoreCase));
+
+        if (definition is null)
+        {
+            _logger.LogWarning(
+                "SchedulerRepairSkipped WorkItemId={WorkItemId} Reason=NoRepairAgentDefinition", workItem.Id);
+            return new TaskDispatchOutcome(
+                workItem.Id, false, null, TaskDispatchSkipReason.NoRepairAgentDefinition,
+                $"No enabled AgentDefinition with AgentType '{RepairAgentType}'.");
+        }
+
+        // Atomic claim: attempt-counter increment + the Repairing -> Running
+        // domain transition are written together in one SaveChangesAsync
+        // call, guarded by the same Version optimistic-concurrency token as
+        // every other WorkItem claim in this scheduler — no new locking.
+        workItem.RepairAttemptCount += 1;
+        workItem.TransitionTo(WorkItemStatus.Running);
+
+        try
+        {
+            await _workItems.UpdateAsync(workItem, cancellationToken);
+        }
+        catch (ConcurrencyConflictException)
+        {
+            _metrics.RecordSchedulerRaceLost();
+            _logger.LogInformation("SchedulerRepairClaimLost WorkItemId={WorkItemId}", workItem.Id);
+            return new TaskDispatchOutcome(
+                workItem.Id, false, null, TaskDispatchSkipReason.ConcurrentClaimLost,
+                "Another scheduler cycle claimed this WorkItem first.");
+        }
+
+        var run = new AgentRun
+        {
+            AgentDefinitionId = definition.Id,
+            ProjectId = workItem.ProjectId,
+            WorkItemId = workItem.Id,
+            Input = BuildRepairObjective(workItem, project)
+        };
+
+        run = await _agentRuns.CreateAsync(run, cancellationToken);
+
+        if (run.Status == AgentRunStatus.Created)
+        {
+            run.TransitionTo(AgentRunStatus.Queued);
+            await _agentRuns.UpdateAsync(run, cancellationToken);
+        }
+
+        _metrics.RecordSchedulerTaskDispatched();
+        _logger.LogInformation(
+            "SchedulerRepairDispatched WorkItemId={WorkItemId} AgentRunId={AgentRunId} " +
+            "AgentDefinitionId={AgentDefinitionId} RepairAttemptCount={RepairAttemptCount}",
+            workItem.Id, run.Id, definition.Id, workItem.RepairAttemptCount);
+
+        return new TaskDispatchOutcome(workItem.Id, true, run.Id, null, null);
+    }
+
+    /// <summary>
+    /// Phase 18.9 §6 — the repair Objective. Same structured-JSON output
+    /// contract as BuildObjective (an "execution.status" of "completed" here
+    /// still only means the repair agent finished its work — the WorkItem
+    /// still goes through Running -> Testing -> IVerificationGate exactly
+    /// like a normal implementation attempt; nothing about this Objective
+    /// text can let the agent bypass verification). The verification command
+    /// itself is never mentioned — the LLM has no way to supply or influence
+    /// it. CurrentError (the bounded VerificationGate.Failed summary) is
+    /// truncated defensively again here even though VerificationGate already
+    /// bounds it, so this objective can never grow unbounded regardless of
+    /// what wrote CurrentError.
+    /// </summary>
+    private static string BuildRepairObjective(WorkItem workItem, Project? project)
+    {
+        const int maxFailureSummaryLength = 2000;
+
+        var failureSummary = workItem.CurrentError ?? "(no verification failure summary recorded)";
+
+        if (failureSummary.Length > maxFailureSummaryLength)
+        {
+            failureSummary = failureSummary[..maxFailureSummaryLength] + " …(truncated)";
+        }
+
+        const string executionShape =
+            """{"execution":{"version":1,"status":"completed|repair_required","summary":"<one-line summary>","artifacts":[],"tests":[],"notes":[]}}""";
+
+        return $"""
+            You are repairing one WorkItem for AI Factory whose previous
+            implementation failed independent verification. Work only on the
+            WorkItem described below — do not silently expand scope to other
+            files, features, or WorkItems, and do not modify functionality
+            unrelated to the reported failure.
+
+            Project name: {project?.Name}
+            Project description: {project?.Description}
+
+            WorkItem PlanKey: {workItem.PlanKey ?? "(none)"}
+            WorkItem type: {workItem.Type}
+            WorkItem title: {workItem.Title}
+            WorkItem description: {workItem.Description}
+
+            This is repair attempt {workItem.RepairAttemptCount} of a bounded budget.
+
+            Latest verification failure (the Factory's own deterministic
+            build/test run, not a self-report — treat this as ground truth
+            for what is currently broken):
+            {failureSummary}
+
+            Respond using the standard structured-JSON output contract (see the
+            Output contract section below), with your execution result placed
+            under the top-level "data" object as:
+
+            {executionShape}
+
+            Rules:
+            - "status" must be "completed" only if you actually addressed the
+              verification failure above; use "repair_required" if you
+              attempted it but could not complete it.
+            - Report only tests you actually executed — never fabricate test
+              results.
+            - Report only what you actually changed.
+            - Your success will be independently re-verified by the Factory's
+              own deterministic build/test gate — this report alone is never
+              sufficient proof that the repair worked, so do not claim
+              "completed" merely because code was generated.
+            - You may not specify, request, or influence which verification
+              command is run; the Factory decides that independently.
+            """;
     }
 
     /// <summary>

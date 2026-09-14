@@ -748,6 +748,9 @@ public sealed class AgentRunWorkerTests
 
         public Task<int> CountByStatusAsync(AgentRunStatus status, CancellationToken cancellationToken = default) =>
             throw new NotImplementedException();
+
+        public Task<bool> HasActiveRunsForProjectAsync(Guid projectId, CancellationToken cancellationToken = default) =>
+            throw new NotImplementedException();
     }
 
     private sealed class FakeAgentOrchestrator : IAgentOrchestrator

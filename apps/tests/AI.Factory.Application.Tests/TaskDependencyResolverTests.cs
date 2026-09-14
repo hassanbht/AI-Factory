@@ -50,6 +50,20 @@ public sealed class TaskDependencyResolverTests
     }
 
     [Fact]
+    public void Resolve_RepairingTarget_DependentStaysWaiting()
+    {
+        // Phase 18.9 §8 — a WorkItem undergoing repair (Repairing) must not
+        // satisfy a dependency either; only Completed may.
+        var aId = Guid.NewGuid();
+        var a = MakeItem(aId, status: "Repairing");
+        var b = MakeItem(Guid.NewGuid(), dependsOn: aId);
+
+        var result = _resolver.Resolve(new[] { a, b });
+
+        Assert.Equal(TaskReadinessStatus.WaitingForDependency, result[b.Id]);
+    }
+
+    [Fact]
     public void Resolve_TestingTarget_DependentStaysWaiting()
     {
         // Phase 18.8 §9 — a WorkItem undergoing deterministic verification

@@ -49,6 +49,10 @@ public sealed class AgentRunWorkItemSyncTests : IDisposable
         public Task<VerificationResult> VerifyAsync(
             Project project, WorkItem workItem, CancellationToken cancellationToken = default) =>
             Task.FromResult(new VerificationResult(_status, $"fake:{_status}", 0, TimeSpan.Zero));
+
+        public Task<VerificationResult> VerifyProjectAsync(
+            Project project, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new VerificationResult(_status, $"fake:{_status}", 0, TimeSpan.Zero));
     }
 
     private async Task<Guid> SeedRunningTaskAsync()
@@ -255,6 +259,10 @@ public sealed class AgentRunWorkItemSyncTests : IDisposable
             await _release.Task;
             return new VerificationResult(VerificationStatus.Passed, "unblocked", 0, TimeSpan.Zero);
         }
+
+        public Task<VerificationResult> VerifyProjectAsync(
+            Project project, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("VerifyProjectAsync should not be called in this test file.");
     }
 
     [Fact]

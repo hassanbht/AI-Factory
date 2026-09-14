@@ -16,7 +16,10 @@ public static class ProjectTransitions
             [ProjectStatus.Implementation] = [ProjectStatus.Testing, ProjectStatus.Paused, ProjectStatus.Failed, ProjectStatus.Cancelled],
             [ProjectStatus.Testing] = [ProjectStatus.Repairing, ProjectStatus.Reviewing, ProjectStatus.Paused, ProjectStatus.Failed, ProjectStatus.Cancelled],
             [ProjectStatus.Repairing] = [ProjectStatus.Testing, ProjectStatus.Paused, ProjectStatus.Failed, ProjectStatus.Cancelled],
-            [ProjectStatus.Reviewing] = [ProjectStatus.HumanReview, ProjectStatus.Completed, ProjectStatus.Paused, ProjectStatus.Failed, ProjectStatus.Cancelled],
+            // Phase 18.11 — HumanReview is the sole authoritative approval
+            // boundary for the new Project lifecycle: Completed is reachable
+            // only from HumanReview, never directly from Reviewing.
+            [ProjectStatus.Reviewing] = [ProjectStatus.HumanReview, ProjectStatus.Paused, ProjectStatus.Failed, ProjectStatus.Cancelled],
             [ProjectStatus.HumanReview] = [ProjectStatus.Completed, ProjectStatus.Implementation, ProjectStatus.Paused, ProjectStatus.Failed, ProjectStatus.Cancelled],
             [ProjectStatus.Paused] =
             [

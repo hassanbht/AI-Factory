@@ -26,6 +26,12 @@ public sealed class WorkItemExecutionIntegrationTests : IDisposable
 {
     private readonly SqliteConnection _connection;
     private readonly DbContextOptions<FactoryDbContext> _options;
+    // Phase 18.14 — AgentOrchestrator now resolves a real, existing Project
+    // workspace for WorkItem-backed AgentRuns; these tests exercise
+    // scheduler/orchestrator/sync wiring (not an actual dotnet build), so
+    // each seeded Project gets a real, empty temp directory rather than the
+    // non-existent default "projects/{slug}" RootPath.
+    private readonly string _workspaceRoot;
 
     public WorkItemExecutionIntegrationTests()
     {
@@ -34,9 +40,20 @@ public sealed class WorkItemExecutionIntegrationTests : IDisposable
         _options = new DbContextOptionsBuilder<FactoryDbContext>().UseSqlite(_connection).Options;
         using var db = new FactoryDbContext(_options);
         db.Database.EnsureCreated();
+
+        _workspaceRoot = Path.Combine(Path.GetTempPath(), "ai-factory-workitem-execution-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_workspaceRoot);
     }
 
-    public void Dispose() => _connection.Dispose();
+    public void Dispose()
+    {
+        _connection.Dispose();
+
+        if (Directory.Exists(_workspaceRoot))
+        {
+            Directory.Delete(_workspaceRoot, recursive: true);
+        }
+    }
 
     private const string CompletedExecutionResult = """
         {"version":1,"status":"Succeeded","summary":"done","output":"ok","data":{"execution":{"version":1,"status":"completed","summary":"implemented it"}},"warnings":[],"errors":[],"artifacts":[],"metadata":{}}
@@ -58,9 +75,11 @@ public sealed class WorkItemExecutionIntegrationTests : IDisposable
 
     private static AgentOrchestrator CreateOrchestrator(FactoryDbContext db, IAgentRuntime runtime) => new(
         new AgentRunRepository(db),
+        new ProjectRepository(db),
         new FakeAgentToolRegistry(),
         new FakeAgentMemory(),
         runtime,
+        new ProjectWorkspaceResolver(new AgentWorkspaceOptions()),
         new AgentInstructionBuilder(),
         new StructuredAgentResultParser(),
         NullLogger<AgentOrchestrator>.Instance);
@@ -68,7 +87,22 @@ public sealed class WorkItemExecutionIntegrationTests : IDisposable
     private static AgentRunWorkItemSync CreateSync(FactoryDbContext db, IVerificationGate? verificationGate = null) => new(
         new WorkItemRepository(db), new ProjectRepository(db), new WorkItemExecutionResultMapper(),
         verificationGate ?? new FakeVerificationGate(VerificationStatus.Passed),
+        new FakeWorkItemCompletionProcessor(),
         NullLogger<AgentRunWorkItemSync>.Instance);
+
+    /// <summary>
+    /// Phase 18.13 — stand-in for the real review/evaluation/learning stage;
+    /// this file exercises scheduler/orchestrator/sync wiring, not
+    /// WorkItemCompletionProcessor's own review/evaluation internals
+    /// (covered separately by WorkItemCompletionProcessorTests).
+    /// </summary>
+    private sealed class FakeWorkItemCompletionProcessor : IWorkItemCompletionProcessor
+    {
+        public Task<WorkItemCompletionDecision> ProcessAsync(
+            Project project, WorkItem workItem, AgentRun agentRun, VerificationResult verificationResult,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new WorkItemCompletionDecision(WorkItemStatus.Completed, null));
+    }
 
     /// <summary>Deterministic stand-in for the real build/test pipeline — these tests exercise
     /// scheduler/orchestrator/sync wiring, not an actual dotnet build against a seeded Project's
@@ -94,7 +128,13 @@ public sealed class WorkItemExecutionIntegrationTests : IDisposable
     private async Task<Guid> SeedProjectAsync()
     {
         await using var db = new FactoryDbContext(_options);
-        var project = await new ProjectService(new ProjectRepository(db)).CreateAsync("Execution Project", "d");
+        var repo = new ProjectRepository(db);
+        var project = await new ProjectService(repo).CreateAsync("Execution Project", "d");
+
+        project.RootPath = Path.Combine(_workspaceRoot, project.Slug);
+        Directory.CreateDirectory(project.RootPath);
+        await repo.SaveChangesAsync();
+
         return project.Id;
     }
 

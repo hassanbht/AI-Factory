@@ -34,30 +34,66 @@ public sealed class HermesAgentExecutor : IAgentExecutor
     {
         var stopwatch = Stopwatch.StartNew();
 
-        // A fresh, isolated workspace per execution — never trust or reuse a
-        // caller-supplied path for the sandboxed bind mount. Guarded again
-        // explicitly (not just "it's a Guid, so it's fine by construction")
-        // so a future change to WorkspaceRoot/this construction is caught
-        // programmatically rather than relying on the code staying correct.
+        // Phase 18.14 — request.WorkingDirectory now carries the Factory-
+        // resolved Project workspace (AgentOrchestrator -> IWorkspaceResolver
+        // -> HermesAgentRuntime), when the AgentRun is WorkItem-backed. Only
+        // when it is empty (the one remaining legitimate case: a
+        // Planner-only AgentRun with no WorkItemId) do we fall back to the
+        // original fresh, isolated scratch folder — never trust or reuse a
+        // caller-supplied path for THAT sandboxed bind mount, since nothing
+        // upstream resolved/validated it in that case.
         string workspacePath;
 
-        try
+        if (!string.IsNullOrWhiteSpace(request.WorkingDirectory))
         {
-            workspacePath = WorkspacePathGuard.EnsureWithinRoot(
-                _options.WorkspaceRoot, Guid.NewGuid().ToString("N"));
+            workspacePath = request.WorkingDirectory;
+
+            // The resolver already validated this directory exists at
+            // resolution time, but it could have vanished (or this could be
+            // a stale in-flight execution surviving a Worker restart)
+            // between resolution and this call — never silently fall back to
+            // scratch, that would defeat the whole point of a Factory-owned
+            // workspace.
+            if (!Directory.Exists(workspacePath))
+            {
+                var message = $"Resolved workspace '{workspacePath}' no longer exists or is not accessible.";
+
+                await _auditLogger.LogAsync(
+                    Guid.NewGuid(), AuditEventType.WorkflowFailed, AuditSeverity.Critical,
+                    $"Security violation: {message}", cancellationToken: cancellationToken);
+
+                _logger.LogError(
+                    "Resolved workspace missing for agent {Agent}: {WorkspacePath}", request.Agent, workspacePath);
+
+                return new AgentExecutionResult(false, null, message, 0, WorkspacePath: null);
+            }
         }
-        catch (SecurityViolationException ex)
+        else
         {
-            await _auditLogger.LogAsync(
-                Guid.NewGuid(), AuditEventType.WorkflowFailed, AuditSeverity.Critical,
-                $"Security violation: {ex.Message}", cancellationToken: cancellationToken);
+            // A fresh, isolated workspace per execution — never trust or reuse
+            // a caller-supplied path for the sandboxed bind mount. Guarded
+            // again explicitly (not just "it's a Guid, so it's fine by
+            // construction") so a future change to WorkspaceRoot/this
+            // construction is caught programmatically rather than relying on
+            // the code staying correct.
+            try
+            {
+                workspacePath = WorkspacePathGuard.EnsureWithinRoot(
+                    _options.WorkspaceRoot, Guid.NewGuid().ToString("N"));
+            }
+            catch (SecurityViolationException ex)
+            {
+                await _auditLogger.LogAsync(
+                    Guid.NewGuid(), AuditEventType.WorkflowFailed, AuditSeverity.Critical,
+                    $"Security violation: {ex.Message}", cancellationToken: cancellationToken);
 
-            _logger.LogError(ex, "Workspace path security violation for agent {Agent}", request.Agent);
+                _logger.LogError(ex, "Workspace path security violation for agent {Agent}", request.Agent);
 
-            return new AgentExecutionResult(false, null, ex.Message, 0);
+                return new AgentExecutionResult(false, null, ex.Message, 0);
+            }
+
+            Directory.CreateDirectory(workspacePath);
         }
-
-        Directory.CreateDirectory(workspacePath);
 
         var arguments = new List<string>
         {

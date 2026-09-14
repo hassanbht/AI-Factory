@@ -1,6 +1,8 @@
 using System.Text.Json;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Agents;
+using AI.Factory.Application.Configuration;
+using AI.Factory.Application.Orchestration;
 using AI.Factory.Domain.Entities;
 using AI.Factory.Domain.Enums;
 using AI.Factory.Infrastructure.Persistence;
@@ -54,12 +56,17 @@ public sealed class AgentOrchestratorTests : IDisposable
     }
 
     private async Task<AgentRun> SeedAgentRunAsync(
-        Guid agentDefinitionId, AgentRunStatus status, Guid? projectId = null, string? input = "do the thing")
+        Guid agentDefinitionId,
+        AgentRunStatus status,
+        Guid? projectId = null,
+        string? input = "do the thing",
+        Guid? workItemId = null)
     {
         var run = new AgentRun
         {
             AgentDefinitionId = agentDefinitionId,
             ProjectId = projectId,
+            WorkItemId = workItemId,
             Input = input
         };
 
@@ -88,6 +95,22 @@ public sealed class AgentOrchestratorTests : IDisposable
         }
     }
 
+    private async Task<Project> SeedProjectAsync(string rootPath)
+    {
+        var project = new Project
+        {
+            Name = "Workspace Test Project",
+            Slug = $"workspace-test-{Guid.NewGuid():N}",
+            RootPath = rootPath
+        };
+
+        await using var db = new FactoryDbContext(_options);
+        var repo = new ProjectRepository(db);
+        await repo.AddAsync(project);
+        await repo.SaveChangesAsync();
+        return project;
+    }
+
     private static IEnumerable<AgentRunStatus> TransitionPath(AgentRunStatus target) => target switch
     {
         AgentRunStatus.Queued => [AgentRunStatus.Queued],
@@ -99,13 +122,19 @@ public sealed class AgentOrchestratorTests : IDisposable
     };
 
     private static AgentOrchestrator CreateOrchestrator(
-        FactoryDbContext db, IAgentRuntime runtime, FakeAgentToolRegistry? tools = null, FakeAgentMemory? memory = null)
+        FactoryDbContext db,
+        IAgentRuntime runtime,
+        FakeAgentToolRegistry? tools = null,
+        FakeAgentMemory? memory = null,
+        IWorkspaceResolver? workspaceResolver = null)
     {
         return new AgentOrchestrator(
             new AgentRunRepository(db),
+            new ProjectRepository(db),
             tools ?? new FakeAgentToolRegistry("ReadArtifact"),
             memory ?? new FakeAgentMemory(),
             runtime,
+            workspaceResolver ?? new ProjectWorkspaceResolver(new AgentWorkspaceOptions()),
             new AgentInstructionBuilder(),
             new StructuredAgentResultParser(),
             NullLogger<AgentOrchestrator>.Instance);
@@ -499,5 +528,155 @@ public sealed class AgentOrchestratorTests : IDisposable
         Assert.NotNull(runtime.LastAgentRun);
         Assert.Contains("summarize this", runtime.LastAgentRun!.Input);
         Assert.Contains("\"version\":1", runtime.LastAgentRun.Input);
+    }
+
+    // --- Phase 18.14: deterministic agent workspace & execution context ---
+
+    [Fact]
+    public async Task ExecuteAsync_WorkItemBackedRun_WithValidProject_ResolvesWorkspace_AndRuntimeReceivesIt()
+    {
+        var workspaceDir = Path.Combine(Path.GetTempPath(), "ai-factory-orchestrator-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspaceDir);
+
+        try
+        {
+            var project = await SeedProjectAsync(workspaceDir);
+            var definition = await SeedAgentDefinitionAsync();
+            var run = await SeedAgentRunAsync(
+                definition.Id, AgentRunStatus.Queued, projectId: project.Id, workItemId: Guid.NewGuid());
+            var runtime = new FakeAgentRuntime(FakeAgentRuntime.Mode.Success);
+
+            await using var db = new FactoryDbContext(_options);
+            var orchestrator = CreateOrchestrator(db, runtime);
+
+            var result = await orchestrator.ExecuteAsync(run.Id);
+
+            Assert.True(result.Executed);
+            Assert.True(result.Success);
+            Assert.Equal(1, runtime.CallCount);
+            Assert.Equal(Path.GetFullPath(workspaceDir), runtime.LastAgentRun!.WorkspacePath);
+        }
+        finally
+        {
+            Directory.Delete(workspaceDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WorkItemBackedRun_WithInvalidProjectWorkspace_FailsDeterministically_WithoutInvokingRuntime()
+    {
+        var nonexistentRoot = Path.Combine(Path.GetTempPath(), "ai-factory-orchestrator-tests", $"missing-{Guid.NewGuid():N}");
+        var project = await SeedProjectAsync(nonexistentRoot);
+        var definition = await SeedAgentDefinitionAsync();
+        var run = await SeedAgentRunAsync(
+            definition.Id, AgentRunStatus.Queued, projectId: project.Id, workItemId: Guid.NewGuid());
+        var runtime = new FakeAgentRuntime(FakeAgentRuntime.Mode.Success);
+
+        await using var db = new FactoryDbContext(_options);
+        var orchestrator = CreateOrchestrator(db, runtime);
+
+        var result = await orchestrator.ExecuteAsync(run.Id);
+
+        Assert.True(result.Executed);
+        Assert.False(result.Success);
+        Assert.Equal(AgentRunStatus.Failed, result.FinalStatus);
+        Assert.Equal(0, runtime.CallCount);
+
+        await using var verifyDb = new FactoryDbContext(_options);
+        var reloaded = await new AgentRunRepository(verifyDb).GetByIdAsync(run.Id);
+        Assert.Equal(AgentRunStatus.Failed, reloaded!.Status);
+        Assert.Equal(FailureCategory.Validation, reloaded.FailureCategory);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WorkItemBackedRun_WithNoProjectId_FailsDeterministically_WithoutInvokingRuntime()
+    {
+        var definition = await SeedAgentDefinitionAsync();
+        // WorkItemId set but ProjectId left null — the defensive case that
+        // should never occur via TaskDispatchScheduler (it always sets both),
+        // but must still fail safely rather than crash or silently skip
+        // resolution.
+        var run = await SeedAgentRunAsync(
+            definition.Id, AgentRunStatus.Queued, projectId: null, workItemId: Guid.NewGuid());
+        var runtime = new FakeAgentRuntime(FakeAgentRuntime.Mode.Success);
+
+        await using var db = new FactoryDbContext(_options);
+        var orchestrator = CreateOrchestrator(db, runtime);
+
+        var result = await orchestrator.ExecuteAsync(run.Id);
+
+        Assert.False(result.Success);
+        Assert.Equal(AgentRunStatus.Failed, result.FinalStatus);
+        Assert.Equal(0, runtime.CallCount);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_PlannerOnlyRun_WithoutWorkItemId_DoesNotRequireWorkspace_AndStillExecutes()
+    {
+        // Planner-only AgentRuns (WorkItemId == null) are explicitly out of
+        // Phase 18.14's scope — this proves that behavior is untouched even
+        // though a ProjectId is present (which, for a WorkItem-backed run,
+        // would otherwise trigger resolution).
+        var project = await SeedProjectAsync(
+            Path.Combine(Path.GetTempPath(), "ai-factory-orchestrator-tests-does-not-exist"));
+        var definition = await SeedAgentDefinitionAsync();
+        var run = await SeedAgentRunAsync(
+            definition.Id, AgentRunStatus.Queued, projectId: project.Id, workItemId: null);
+        var runtime = new FakeAgentRuntime(FakeAgentRuntime.Mode.Success);
+
+        await using var db = new FactoryDbContext(_options);
+        var orchestrator = CreateOrchestrator(db, runtime);
+
+        var result = await orchestrator.ExecuteAsync(run.Id);
+
+        Assert.True(result.Executed);
+        Assert.True(result.Success);
+        Assert.Equal(1, runtime.CallCount);
+        Assert.Null(runtime.LastAgentRun!.WorkspacePath);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RecoveredAgentRun_ResolvesSameWorkspace_FromPersistedStateAlone()
+    {
+        // Simulates loading a WorkItem-backed AgentRun in two completely
+        // separate AgentOrchestrator instances/scopes (as would happen across
+        // a Worker restart) and proves workspace resolution depends only on
+        // AgentRun.ProjectId -> Project.RootPath, never on in-memory state.
+        var workspaceDir = Path.Combine(Path.GetTempPath(), "ai-factory-orchestrator-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspaceDir);
+
+        try
+        {
+            var project = await SeedProjectAsync(workspaceDir);
+            var definition = await SeedAgentDefinitionAsync();
+            var run = await SeedAgentRunAsync(
+                definition.Id, AgentRunStatus.Queued, projectId: project.Id, workItemId: Guid.NewGuid());
+
+            var firstRuntime = new FakeAgentRuntime(FakeAgentRuntime.Mode.Success);
+            await using (var firstScopeDb = new FactoryDbContext(_options))
+            {
+                var firstOrchestrator = CreateOrchestrator(firstScopeDb, firstRuntime);
+                await firstOrchestrator.ExecuteAsync(run.Id);
+            }
+
+            // A second AgentRun against the same Project, resolved by a brand
+            // new AgentOrchestrator instance/DbContext — nothing shared with
+            // the first except persisted state.
+            var secondRun = await SeedAgentRunAsync(
+                definition.Id, AgentRunStatus.Queued, projectId: project.Id, workItemId: Guid.NewGuid());
+            var secondRuntime = new FakeAgentRuntime(FakeAgentRuntime.Mode.Success);
+            await using (var secondScopeDb = new FactoryDbContext(_options))
+            {
+                var secondOrchestrator = CreateOrchestrator(secondScopeDb, secondRuntime);
+                await secondOrchestrator.ExecuteAsync(secondRun.Id);
+            }
+
+            Assert.Equal(firstRuntime.LastAgentRun!.WorkspacePath, secondRuntime.LastAgentRun!.WorkspacePath);
+            Assert.Equal(Path.GetFullPath(workspaceDir), secondRuntime.LastAgentRun.WorkspacePath);
+        }
+        finally
+        {
+            Directory.Delete(workspaceDir, recursive: true);
+        }
     }
 }

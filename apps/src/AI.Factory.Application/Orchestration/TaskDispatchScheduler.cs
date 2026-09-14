@@ -209,6 +209,29 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
             projectId, startedAtUtc, DateTime.UtcNow, readyOrdered.Count, skippedDueToConcurrency, outcomes);
     }
 
+    public async Task<TaskDispatchOutcome> DispatchWorkItemAsync(Guid workItemId, CancellationToken cancellationToken = default)
+    {
+        var workItem = await _workItems.GetByIdAsync(workItemId, cancellationToken);
+
+        if (workItem is null)
+        {
+            return new TaskDispatchOutcome(workItemId, false, null, TaskDispatchSkipReason.WorkItemNotFound,
+                $"WorkItem '{workItemId}' was not found.");
+        }
+
+        if (workItem.Status != WorkItemStatus.Ready.ToString())
+        {
+            return new TaskDispatchOutcome(workItemId, false, null, TaskDispatchSkipReason.NotReady,
+                $"WorkItem '{workItemId}' is not Ready (current status '{workItem.Status}'); manual execution can only target a Ready WorkItem.");
+        }
+
+        var definitions = await _agentDefinitions.GetAllAsync(cancellationToken);
+        var project = await _projects.GetByIdAsync(workItem.ProjectId, cancellationToken);
+        var allProjectItems = await _workItems.GetByProjectIdAsync(workItem.ProjectId, cancellationToken);
+
+        return await DispatchOneAsync(workItem, definitions, project, allProjectItems, cancellationToken);
+    }
+
     private async Task<TaskDispatchOutcome> DispatchOneAsync(
         WorkItem workItem,
         IReadOnlyList<AgentDefinition> definitions,

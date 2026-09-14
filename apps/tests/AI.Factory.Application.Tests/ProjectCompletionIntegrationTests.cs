@@ -28,6 +28,11 @@ public sealed class ProjectCompletionIntegrationTests : IDisposable
 {
     private readonly SqliteConnection _connection;
     private readonly DbContextOptions<FactoryDbContext> _options;
+    // Phase 18.14 — see WorkItemExecutionIntegrationTests: AgentOrchestrator
+    // now resolves a real, existing Project workspace for WorkItem-backed
+    // AgentRuns, so the seeded Project needs a real temp directory rather
+    // than the non-existent default RootPath.
+    private readonly string _workspaceRoot;
 
     public ProjectCompletionIntegrationTests()
     {
@@ -36,9 +41,20 @@ public sealed class ProjectCompletionIntegrationTests : IDisposable
         _options = new DbContextOptionsBuilder<FactoryDbContext>().UseSqlite(_connection).Options;
         using var db = new FactoryDbContext(_options);
         db.Database.EnsureCreated();
+
+        _workspaceRoot = Path.Combine(Path.GetTempPath(), "ai-factory-project-completion-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_workspaceRoot);
     }
 
-    public void Dispose() => _connection.Dispose();
+    public void Dispose()
+    {
+        _connection.Dispose();
+
+        if (Directory.Exists(_workspaceRoot))
+        {
+            Directory.Delete(_workspaceRoot, recursive: true);
+        }
+    }
 
     private const string CompletedExecutionResult = """
         {"version":1,"status":"Succeeded","summary":"done","output":"ok","data":{"execution":{"version":1,"status":"completed","summary":"implemented it"}},"warnings":[],"errors":[],"artifacts":[],"metadata":{}}
@@ -81,22 +97,39 @@ public sealed class ProjectCompletionIntegrationTests : IDisposable
 
     private static AgentOrchestrator CreateOrchestrator(FactoryDbContext db, IAgentRuntime runtime) => new(
         new AgentRunRepository(db),
+        new ProjectRepository(db),
         new FakeAgentToolRegistry(),
         new FakeAgentMemory(),
         runtime,
+        new ProjectWorkspaceResolver(new AgentWorkspaceOptions()),
         new AgentInstructionBuilder(),
         new StructuredAgentResultParser(),
         NullLogger<AgentOrchestrator>.Instance);
 
     private static AgentRunWorkItemSync CreateSync(FactoryDbContext db, IVerificationGate workItemVerificationGate) => new(
         new WorkItemRepository(db), new ProjectRepository(db), new WorkItemExecutionResultMapper(),
-        workItemVerificationGate, NullLogger<AgentRunWorkItemSync>.Instance);
+        workItemVerificationGate, new FakeWorkItemCompletionProcessor(), NullLogger<AgentRunWorkItemSync>.Instance);
+
+    /// <summary>Phase 18.13 — stand-in for the real review/evaluation/learning stage; out of scope for this file's Project-completion-gate integration coverage.</summary>
+    private sealed class FakeWorkItemCompletionProcessor : IWorkItemCompletionProcessor
+    {
+        public Task<WorkItemCompletionDecision> ProcessAsync(
+            Project project, WorkItem workItem, AgentRun agentRun, VerificationResult verificationResult,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new WorkItemCompletionDecision(WorkItemStatus.Completed, null));
+    }
 
     private async Task<Guid> SeedProjectInImplementationAsync()
     {
         await using var db = new FactoryDbContext(_options);
-        var service = new ProjectService(new ProjectRepository(db));
+        var repo = new ProjectRepository(db);
+        var service = new ProjectService(repo);
         var project = await service.CreateAsync("Completion Project", "d");
+
+        project.RootPath = Path.Combine(_workspaceRoot, project.Slug);
+        Directory.CreateDirectory(project.RootPath);
+        await repo.SaveChangesAsync();
+
         await service.TransitionStatusAsync(project.Id, ProjectStatus.Analyzing);
         await service.TransitionStatusAsync(project.Id, ProjectStatus.Specification);
         await service.TransitionStatusAsync(project.Id, ProjectStatus.Architecture);

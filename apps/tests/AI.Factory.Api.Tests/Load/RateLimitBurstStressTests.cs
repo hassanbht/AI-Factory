@@ -103,7 +103,7 @@ public sealed class RateLimitBurstStressTests : IClassFixture<RateLimitBurstStre
         await Task.Delay(TimeSpan.FromSeconds(RateLimitBurstStressFactory.WindowSeconds + 1));
         var client = _factory.CreateClient();
 
-        var tasks = Enumerable.Range(0, 30).Select(_ => client.GetAsync("/api/approvals/pending"));
+        var tasks = Enumerable.Range(0, 30).Select(_ => client.GetAsync("/api/projects"));
         var responses = await Task.WhenAll(tasks);
 
         var okCount = responses.Count(r => r.StatusCode == HttpStatusCode.OK);
@@ -132,7 +132,7 @@ public sealed class RateLimitBurstStressTests : IClassFixture<RateLimitBurstStre
         var client = _factory.CreateClient();
 
         // Exhaust the GeneralApi window.
-        var burst = await Task.WhenAll(Enumerable.Range(0, 20).Select(_ => client.GetAsync("/api/approvals/pending")));
+        var burst = await Task.WhenAll(Enumerable.Range(0, 20).Select(_ => client.GetAsync("/api/projects")));
         Assert.Contains(burst, r => r.StatusCode == HttpStatusCode.TooManyRequests);
 
         var healthChecks = new ConcurrentBag<HttpStatusCode>();
@@ -145,7 +145,7 @@ public sealed class RateLimitBurstStressTests : IClassFixture<RateLimitBurstStre
             }
             else
             {
-                await client.GetAsync("/api/approvals/pending");
+                await client.GetAsync("/api/projects");
             }
         });
         await Task.WhenAll(interleaved);
@@ -161,11 +161,11 @@ public sealed class RateLimitBurstStressTests : IClassFixture<RateLimitBurstStre
 
         // Exhaust the window.
         await Task.WhenAll(Enumerable.Range(0, RateLimitBurstStressFactory.PermitLimit + 5)
-            .Select(_ => client.GetAsync("/api/approvals/pending")));
+            .Select(_ => client.GetAsync("/api/projects")));
 
         await Task.Delay(TimeSpan.FromSeconds(RateLimitBurstStressFactory.WindowSeconds + 1));
 
-        var afterRecovery = await client.GetAsync("/api/approvals/pending");
+        var afterRecovery = await client.GetAsync("/api/projects");
         Assert.Equal(HttpStatusCode.OK, afterRecovery.StatusCode);
     }
 
@@ -178,7 +178,7 @@ public sealed class RateLimitBurstStressTests : IClassFixture<RateLimitBurstStre
         await Task.Delay(TimeSpan.FromSeconds(RateLimitBurstStressFactory.WindowSeconds + 1));
 
         var responses = await Task.WhenAll(Enumerable.Range(0, RateLimitBurstStressFactory.PermitLimit + 1)
-            .Select(_ => client.GetAsync("/api/approvals/pending")));
+            .Select(_ => client.GetAsync("/api/projects")));
 
         var okCount = responses.Count(r => r.StatusCode == HttpStatusCode.OK);
         var throttledCount = responses.Count(r => r.StatusCode == HttpStatusCode.TooManyRequests);

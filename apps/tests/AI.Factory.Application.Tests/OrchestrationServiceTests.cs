@@ -57,6 +57,7 @@ public sealed class OrchestrationServiceTests : IDisposable
         new ProjectRepository(db),
         new WorkItemRepository(db),
         new OrchestrationRunRepository(db),
+        new AgentRunRepository(db),
         new OrchestrationOptions { WorkspaceRoot = Path.GetTempPath(), MaxAttempts = 3 });
 
     [Fact]
@@ -121,5 +122,136 @@ public sealed class OrchestrationServiceTests : IDisposable
         await db.SaveChangesAsync();
 
         await Assert.ThrowsAsync<ConflictException>(() => service.RequestCancellationAsync(result.RunId));
+    }
+
+    // ---------------- Phase 18.13 — WorkItem-based cancellation semantics ----------------
+
+    [Theory]
+    [InlineData(nameof(WorkItemStatus.Ready))]
+    [InlineData(nameof(WorkItemStatus.Running))]
+    [InlineData(nameof(WorkItemStatus.Repairing))]
+    public async Task RequestCancellationAsync_TransitionsWorkItem_ToCancelled_FromAnyNonTerminalStatus(string status)
+    {
+        await using (var db = new FactoryDbContext(_options))
+        {
+            var workItem = await db.WorkItems.SingleAsync(x => x.Id == _workItemId);
+            workItem.Status = status;
+            await db.SaveChangesAsync();
+        }
+
+        await using var serviceDb = new FactoryDbContext(_options);
+        var service = MakeService(serviceDb);
+        var result = await service.StartAsync(new StartOrchestrationCommand(_projectId, _workItemId));
+
+        await service.RequestCancellationAsync(result.RunId);
+
+        await using var verifyDb = new FactoryDbContext(_options);
+        var cancelled = await verifyDb.WorkItems.SingleAsync(x => x.Id == _workItemId);
+        Assert.Equal(WorkItemStatus.Cancelled.ToString(), cancelled.Status);
+    }
+
+    [Fact]
+    public async Task RequestCancellationAsync_IsIdempotent_WhenCalledTwice()
+    {
+        await using (var db = new FactoryDbContext(_options))
+        {
+            var workItem = await db.WorkItems.SingleAsync(x => x.Id == _workItemId);
+            workItem.Status = WorkItemStatus.Ready.ToString();
+            await db.SaveChangesAsync();
+        }
+
+        await using var serviceDb = new FactoryDbContext(_options);
+        var service = MakeService(serviceDb);
+        var result = await service.StartAsync(new StartOrchestrationCommand(_projectId, _workItemId));
+
+        await service.RequestCancellationAsync(result.RunId);
+        // Second call must not throw and must not resurrect/alter the already-cancelled WorkItem.
+        await service.RequestCancellationAsync(result.RunId);
+
+        await using var verifyDb = new FactoryDbContext(_options);
+        var workItemAfter = await verifyDb.WorkItems.SingleAsync(x => x.Id == _workItemId);
+        Assert.Equal(WorkItemStatus.Cancelled.ToString(), workItemAfter.Status);
+    }
+
+    private async Task<Guid> SeedAgentDefinitionAsync(FactoryDbContext db)
+    {
+        var definition = new AgentDefinition { Name = "Impl", AgentType = "Implementation", SystemPrompt = "x" };
+        db.AgentDefinitions.Add(definition);
+        await db.SaveChangesAsync();
+        return definition.Id;
+    }
+
+    [Fact]
+    public async Task RequestCancellationAsync_Throws_AndDoesNotResurrectWorkItem_WhenAgentRunAlreadyCompletedIt()
+    {
+        await using var db = new FactoryDbContext(_options);
+        var service = MakeService(db);
+        var result = await service.StartAsync(new StartOrchestrationCommand(_projectId, _workItemId));
+        var agentDefinitionId = await SeedAgentDefinitionAsync(db);
+
+        // Simulate the race: the AgentRun pipeline finished and completed the
+        // WorkItem before the cancel request is processed.
+        var agentRun = new AgentRun
+        {
+            Id = Guid.NewGuid(),
+            AgentDefinitionId = agentDefinitionId,
+            WorkItemId = _workItemId,
+            ProjectId = _projectId,
+            Status = AgentRunStatus.Succeeded
+        };
+        db.AgentRuns.Add(agentRun);
+
+        var run = await db.OrchestrationRuns.SingleAsync(x => x.Id == result.RunId);
+        run.AgentRunId = agentRun.Id;
+
+        var workItem = await db.WorkItems.SingleAsync(x => x.Id == _workItemId);
+        workItem.Status = WorkItemStatus.Completed.ToString();
+
+        await db.SaveChangesAsync();
+
+        await Assert.ThrowsAsync<ConflictException>(() => service.RequestCancellationAsync(result.RunId));
+
+        await using var verifyDb = new FactoryDbContext(_options);
+        var untouched = await verifyDb.WorkItems.SingleAsync(x => x.Id == _workItemId);
+        Assert.Equal(WorkItemStatus.Completed.ToString(), untouched.Status);
+    }
+
+    [Fact]
+    public async Task GetAsync_ProjectsCompletedWorkItemStatus_OntoDispatchedRun()
+    {
+        await using var db = new FactoryDbContext(_options);
+        var service = MakeService(db);
+        var result = await service.StartAsync(new StartOrchestrationCommand(_projectId, _workItemId));
+        var agentDefinitionId = await SeedAgentDefinitionAsync(db);
+
+        var agentRun = new AgentRun
+        {
+            Id = Guid.NewGuid(),
+            AgentDefinitionId = agentDefinitionId,
+            WorkItemId = _workItemId,
+            ProjectId = _projectId,
+            Status = AgentRunStatus.Succeeded
+        };
+        db.AgentRuns.Add(agentRun);
+
+        var run = await db.OrchestrationRuns.SingleAsync(x => x.Id == result.RunId);
+        run.AgentRunId = agentRun.Id;
+        run.Status = OrchestrationRunStatus.Executing;
+
+        var workItem = await db.WorkItems.SingleAsync(x => x.Id == _workItemId);
+        workItem.Status = WorkItemStatus.Completed.ToString();
+
+        await db.SaveChangesAsync();
+
+        await using var readDb = new FactoryDbContext(_options);
+        var readService = MakeService(readDb);
+        var projected = await readService.GetAsync(result.RunId);
+
+        Assert.Equal(OrchestrationRunStatus.Completed, projected!.Status);
+
+        // Read-time projection must never persist — the stored row stays Executing.
+        await using var verifyDb = new FactoryDbContext(_options);
+        var stored = await verifyDb.OrchestrationRuns.SingleAsync(x => x.Id == result.RunId);
+        Assert.Equal(OrchestrationRunStatus.Executing, stored.Status);
     }
 }

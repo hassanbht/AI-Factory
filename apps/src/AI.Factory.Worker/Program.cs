@@ -1,6 +1,5 @@
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Agents;
-using AI.Factory.Application.Approvals;
 using AI.Factory.Application.Configuration;
 using AI.Factory.Application.Learning;
 using AI.Factory.Application.Orchestration;
@@ -96,14 +95,9 @@ builder.Services.AddSingleton(recoveryOptions);
 
 builder.Services.AddScoped<IProjectRepository, ProjectRepository>();
 
-builder.Services.AddScoped<IWorkflowStateStore, WorkflowStateStore>();
-builder.Services.AddSingleton<IWorkflowTransitionValidator, WorkflowTransitionValidator>();
-builder.Services.AddScoped<IWorkflowEngine, WorkflowEngine>();
-
 builder.Services.AddScoped<IWorkItemRepository, WorkItemRepository>();
 builder.Services.AddSingleton<ITaskDependencyResolver, TaskDependencyResolver>();
 builder.Services.AddScoped<ITaskStateManager, TaskStateManager>();
-builder.Services.AddScoped<ITaskScheduler, WorkItemTaskScheduler>();
 
 // Phase 18.3 — Deterministic Task Scheduler & Dispatch Engine.
 var taskSchedulerOptions = new TaskSchedulerOptions();
@@ -289,14 +283,12 @@ else
     builder.Services.AddScoped<IContextProvider, LocalContextProvider>();
 }
 
-builder.Services.AddScoped<IHermesExecutionRepository, HermesExecutionRepository>();
 builder.Services.AddScoped<IAgentDefinitionRepository, AgentDefinitionRepository>();
 builder.Services.AddScoped<IAgentRunRepository, AgentRunRepository>();
 builder.Services.AddScoped<IArtifactRecorder, FileSystemArtifactRecorder>();
 
 builder.Services.AddScoped<IBuildExecutor, DotNetBuildExecutor>();
 builder.Services.AddScoped<ITestExecutor, DotNetTestExecutor>();
-builder.Services.AddScoped<IValidationEngine, ValidationEngine>();
 builder.Services.AddScoped<IValidationRunRepository, ValidationRunRepository>();
 
 var repairOptions = new RepairOptions();
@@ -310,6 +302,15 @@ builder.Services.AddScoped<IArtifactRepository, ArtifactRepository>();
 builder.Services.AddScoped<IAgentTool, ReadArtifactTool>();
 builder.Services.AddScoped<IAgentToolRegistry, AgentToolRegistry>();
 builder.Services.AddScoped<IAgentMemory, LocalAgentMemoryProvider>();
+
+// Phase 18.14 — Deterministic Agent Workspace & Execution Context. Unset
+// AllowedRoot (default) preserves the prior implicit trust model for
+// Project.RootPath; when configured, ProjectWorkspaceResolver enforces it via
+// the existing WorkspacePathGuard.
+var agentWorkspaceOptions = new AgentWorkspaceOptions();
+builder.Configuration.GetSection("AgentWorkspace").Bind(agentWorkspaceOptions);
+builder.Services.AddSingleton(agentWorkspaceOptions);
+builder.Services.AddScoped<IWorkspaceResolver, ProjectWorkspaceResolver>();
 
 // Phase 18.1.5 — Agent Orchestration Service + Worker.
 builder.Services.AddScoped<IAgentInstructionBuilder, AgentInstructionBuilder>();
@@ -330,12 +331,12 @@ builder.Configuration.GetSection("Review").Bind(reviewOptions);
 builder.Services.AddSingleton(reviewOptions);
 
 builder.Services.AddScoped<IApprovalRepository, ApprovalRepository>();
-builder.Services.AddScoped<ApprovalService>();
 
 builder.Services.AddScoped<IEvaluationEngine, EvaluationEngine>();
 builder.Services.AddScoped<IEvaluationRunRepository, EvaluationRunRepository>();
 builder.Services.AddScoped<ILearningStore, LearningStore>();
 builder.Services.AddScoped<LearningService>();
+builder.Services.AddScoped<IWorkItemCompletionProcessor, WorkItemCompletionProcessor>();
 
 var taskPlannerOptions = new ModelTaskPlannerOptions();
 builder.Configuration.GetSection("TaskPlanner").Bind(taskPlannerOptions);
@@ -376,7 +377,6 @@ builder.Services.AddSingleton(orchestrationOptions);
 builder.Services.AddScoped<IOrchestrationRunRepository, OrchestrationRunRepository>();
 builder.Services.AddScoped<IOrchestrationProgressReporter, OrchestrationProgressReporter>();
 builder.Services.AddScoped<IOrchestrationRunTraceService, OrchestrationRunTraceService>();
-builder.Services.AddScoped<IAutonomousCodingOrchestrator, AutonomousCodingOrchestrator>();
 builder.Services.AddScoped<OrchestrationRunExecutionEngine>();
 
         builder.Services.AddHostedService<WorkflowRecoveryHostedService>();

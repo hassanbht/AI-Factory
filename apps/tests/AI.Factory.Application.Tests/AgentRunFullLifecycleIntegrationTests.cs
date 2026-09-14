@@ -1,5 +1,7 @@
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Agents;
+using AI.Factory.Application.Configuration;
+using AI.Factory.Application.Orchestration;
 using AI.Factory.Domain.Entities;
 using AI.Factory.Domain.Enums;
 using AI.Factory.Infrastructure.Persistence;
@@ -84,9 +86,11 @@ public sealed class AgentRunFullLifecycleIntegrationTests : IDisposable
         {
             var orchestrator = new AgentOrchestrator(
                 new AgentRunRepository(db),
+                new ProjectRepository(db),
                 new FakeAgentToolRegistry("ReadArtifact"),
                 new FakeAgentMemory(),
                 new FakeAgentRuntime(FakeAgentRuntime.Mode.Success),
+                new ProjectWorkspaceResolver(new AgentWorkspaceOptions()),
                 new AgentInstructionBuilder(),
                 new StructuredAgentResultParser(),
                 NullLogger<AgentOrchestrator>.Instance);

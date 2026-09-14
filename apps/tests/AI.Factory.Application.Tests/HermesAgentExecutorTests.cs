@@ -63,7 +63,7 @@ public sealed class HermesAgentExecutorTests
         var options = MakeOptions();
         var executor = new HermesAgentExecutor(options, runner, NullLogger<HermesAgentExecutor>.Instance);
 
-        await executor.ExecuteAsync(new AgentExecutionRequest("coder", null, "do the task", "/ignored"));
+        await executor.ExecuteAsync(new AgentExecutionRequest("coder", null, "do the task", string.Empty));
 
         Assert.NotNull(runner.LastRequest);
         Assert.Contains("--network", runner.LastRequest!.Arguments);
@@ -85,7 +85,7 @@ public sealed class HermesAgentExecutorTests
             MakeOptions(), runner, NullLogger<HermesAgentExecutor>.Instance);
 
         var result = await executor.ExecuteAsync(
-            new AgentExecutionRequest("coder", null, "do the task", "/ignored"));
+            new AgentExecutionRequest("coder", null, "do the task", string.Empty));
 
         Assert.True(result.Success);
         Assert.Equal("all good", result.Output);
@@ -102,7 +102,7 @@ public sealed class HermesAgentExecutorTests
             MakeOptions(), runner, NullLogger<HermesAgentExecutor>.Instance);
 
         var result = await executor.ExecuteAsync(
-            new AgentExecutionRequest("coder", null, "do the task", "/ignored"));
+            new AgentExecutionRequest("coder", null, "do the task", string.Empty));
 
         Assert.False(result.Success);
         Assert.Equal("boom", result.Error);
@@ -118,7 +118,7 @@ public sealed class HermesAgentExecutorTests
             MakeOptions(), runner, NullLogger<HermesAgentExecutor>.Instance);
 
         var result = await executor.ExecuteAsync(
-            new AgentExecutionRequest("coder", null, "do the task", "/ignored"));
+            new AgentExecutionRequest("coder", null, "do the task", string.Empty));
 
         Assert.False(result.Success);
         Assert.Contains("timed out", result.Error, StringComparison.OrdinalIgnoreCase);
@@ -134,7 +134,7 @@ public sealed class HermesAgentExecutorTests
             MakeOptions(), runner, NullLogger<HermesAgentExecutor>.Instance);
 
         var result = await executor.ExecuteAsync(
-            new AgentExecutionRequest("coder", null, "do the task", "/ignored"));
+            new AgentExecutionRequest("coder", null, "do the task", string.Empty));
 
         Assert.False(result.Success);
         Assert.Contains("docker not found", result.Error, StringComparison.OrdinalIgnoreCase);
@@ -152,7 +152,7 @@ public sealed class HermesAgentExecutorTests
             MakeOptions(maxOutputLength: 100), runner, NullLogger<HermesAgentExecutor>.Instance);
 
         var result = await executor.ExecuteAsync(
-            new AgentExecutionRequest("coder", null, "do the task", "/ignored"));
+            new AgentExecutionRequest("coder", null, "do the task", string.Empty));
 
         Assert.True(result.Success);
         Assert.NotNull(result.Output);
@@ -174,7 +174,7 @@ public sealed class HermesAgentExecutorTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             executor.ExecuteAsync(
-                new AgentExecutionRequest("coder", null, "do the task", "/ignored"),
+                new AgentExecutionRequest("coder", null, "do the task", string.Empty),
                 cts.Token));
     }
 
@@ -188,9 +188,78 @@ public sealed class HermesAgentExecutorTests
             MakeOptions(), runner, NullLogger<HermesAgentExecutor>.Instance);
 
         await executor.ExecuteAsync(
-            new AgentExecutionRequest("coder", null, "some prompt; rm -rf /", "/ignored"));
+            new AgentExecutionRequest("coder", null, "some prompt; rm -rf /", string.Empty));
 
         Assert.Equal("docker", runner.LastRequest!.FileName);
         Assert.Contains("some prompt; rm -rf /", runner.LastRequest.Arguments);
+    }
+
+    // --- Phase 18.14: deterministic agent workspace & execution context ---
+
+    [Fact]
+    public async Task ExecuteAsync_NonEmptyWorkingDirectory_IsUsedDirectlyAsBindMountSource_NotAFreshScratchFolder()
+    {
+        var resolvedWorkspace = Path.Combine(Path.GetTempPath(), "ai-factory-hermes-tests-resolved", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(resolvedWorkspace);
+
+        try
+        {
+            var runner = new FakeProcessRunner(_ =>
+                new ProcessRunResult(0, "ok", string.Empty, TimedOut: false));
+
+            var executor = new HermesAgentExecutor(MakeOptions(), runner, NullLogger<HermesAgentExecutor>.Instance);
+
+            var result = await executor.ExecuteAsync(
+                new AgentExecutionRequest("coder", null, "do the task", resolvedWorkspace));
+
+            Assert.True(result.Success);
+            Assert.Equal(resolvedWorkspace, runner.LastRequest!.WorkingDirectory);
+            Assert.Contains($"{resolvedWorkspace}:/workspace", runner.LastRequest.Arguments);
+            Assert.Equal(resolvedWorkspace, result.WorkspacePath);
+        }
+        finally
+        {
+            Directory.Delete(resolvedWorkspace, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_EmptyWorkingDirectory_StillCreatesFreshScratchFolder_UnderWorkspaceRoot()
+    {
+        var runner = new FakeProcessRunner(_ =>
+            new ProcessRunResult(0, "ok", string.Empty, TimedOut: false));
+
+        var options = MakeOptions();
+        var executor = new HermesAgentExecutor(options, runner, NullLogger<HermesAgentExecutor>.Instance);
+
+        var result = await executor.ExecuteAsync(
+            new AgentExecutionRequest("coder", null, "do the task", string.Empty));
+
+        Assert.True(result.Success);
+        Assert.NotNull(runner.LastRequest!.WorkingDirectory);
+        Assert.StartsWith(Path.GetFullPath(options.WorkspaceRoot), runner.LastRequest.WorkingDirectory!);
+        Assert.True(Directory.Exists(runner.LastRequest.WorkingDirectory));
+
+        Directory.Delete(runner.LastRequest.WorkingDirectory!, recursive: true);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NonexistentWorkingDirectory_FailsDeterministically_WithoutFallingBackToScratch()
+    {
+        var missingWorkspace = Path.Combine(
+            Path.GetTempPath(), "ai-factory-hermes-tests-missing", Guid.NewGuid().ToString("N"));
+
+        var runner = new FakeProcessRunner(_ =>
+            new ProcessRunResult(0, "should not run", string.Empty, TimedOut: false));
+
+        var executor = new HermesAgentExecutor(MakeOptions(), runner, NullLogger<HermesAgentExecutor>.Instance);
+
+        var result = await executor.ExecuteAsync(
+            new AgentExecutionRequest("coder", null, "do the task", missingWorkspace));
+
+        Assert.False(result.Success);
+        Assert.Contains("no longer exists", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(runner.LastRequest);
+        Assert.Null(result.WorkspacePath);
     }
 }

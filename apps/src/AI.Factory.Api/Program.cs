@@ -2,7 +2,6 @@ using System.Text.Json;
 using System.Threading.RateLimiting;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Agents;
-using AI.Factory.Application.Approvals;
 using AI.Factory.Application.Configuration;
 using AI.Factory.Application.Exceptions;
 using AI.Factory.Application.Learning;
@@ -97,14 +96,9 @@ builder.Services.AddDbContext<FactoryDbContext>(options =>
 builder.Services.AddScoped<IProjectRepository, ProjectRepository>();
 builder.Services.AddScoped<ProjectService>();
 
-builder.Services.AddScoped<IWorkflowStateStore, WorkflowStateStore>();
-builder.Services.AddSingleton<IWorkflowTransitionValidator, WorkflowTransitionValidator>();
-builder.Services.AddScoped<IWorkflowEngine, WorkflowEngine>();
-
 builder.Services.AddScoped<IWorkItemRepository, WorkItemRepository>();
 builder.Services.AddSingleton<ITaskDependencyResolver, TaskDependencyResolver>();
 builder.Services.AddScoped<ITaskStateManager, TaskStateManager>();
-builder.Services.AddScoped<ITaskScheduler, WorkItemTaskScheduler>();
 
 // Phase 18.3 — Deterministic Task Scheduler & Dispatch Engine. The scheduling
 // loop itself runs in the Worker process (TaskSchedulerHostedService); these
@@ -292,15 +286,21 @@ else
     builder.Services.AddScoped<IContextProvider, LocalContextProvider>();
 }
 
-builder.Services.AddScoped<IHermesExecutionRepository, HermesExecutionRepository>();
 builder.Services.AddScoped<IAgentDefinitionRepository, AgentDefinitionRepository>();
 builder.Services.AddScoped<IAgentRunRepository, AgentRunRepository>();
 builder.Services.AddScoped<IArtifactRecorder, FileSystemArtifactRecorder>();
 
 builder.Services.AddScoped<IBuildExecutor, DotNetBuildExecutor>();
 builder.Services.AddScoped<ITestExecutor, DotNetTestExecutor>();
-builder.Services.AddScoped<IValidationEngine, ValidationEngine>();
 builder.Services.AddScoped<IValidationRunRepository, ValidationRunRepository>();
+
+// Phase 18.13 — IVerificationGate/IProjectCompletionGate/ITaskDispatchScheduler
+// are registered here too (not just in the Worker) so CriticalServicesHealthCheck
+// can resolve the new authoritative dispatch service; the Worker process still
+// owns the actual scheduling loop (TaskSchedulerHostedService).
+builder.Services.AddScoped<IVerificationGate, VerificationGate>();
+builder.Services.AddScoped<IProjectCompletionGate, ProjectCompletionGate>();
+builder.Services.AddScoped<ITaskDispatchScheduler, TaskDispatchScheduler>();
 
 var repairOptions = new RepairOptions();
 builder.Configuration.GetSection("Repair").Bind(repairOptions);
@@ -313,6 +313,15 @@ builder.Services.AddScoped<IArtifactRepository, ArtifactRepository>();
 builder.Services.AddScoped<IAgentTool, ReadArtifactTool>();
 builder.Services.AddScoped<IAgentToolRegistry, AgentToolRegistry>();
 builder.Services.AddScoped<IAgentMemory, LocalAgentMemoryProvider>();
+
+// Phase 18.14 — Deterministic Agent Workspace & Execution Context. Unset
+// AllowedRoot (default) preserves the prior implicit trust model for
+// Project.RootPath; when configured, ProjectWorkspaceResolver enforces it via
+// the existing WorkspacePathGuard.
+var agentWorkspaceOptions = new AgentWorkspaceOptions();
+builder.Configuration.GetSection("AgentWorkspace").Bind(agentWorkspaceOptions);
+builder.Services.AddSingleton(agentWorkspaceOptions);
+builder.Services.AddScoped<IWorkspaceResolver, ProjectWorkspaceResolver>();
 
 // Phase 18.1.5 — Agent Orchestration Service. The Worker hosts the actual
 // AgentRunWorker background loop; the API only needs IAgentOrchestrator
@@ -334,12 +343,12 @@ builder.Configuration.GetSection("Review").Bind(reviewOptions);
 builder.Services.AddSingleton(reviewOptions);
 
 builder.Services.AddScoped<IApprovalRepository, ApprovalRepository>();
-builder.Services.AddScoped<ApprovalService>();
 
 builder.Services.AddScoped<IEvaluationEngine, EvaluationEngine>();
 builder.Services.AddScoped<IEvaluationRunRepository, EvaluationRunRepository>();
 builder.Services.AddScoped<ILearningStore, LearningStore>();
 builder.Services.AddScoped<LearningService>();
+builder.Services.AddScoped<IWorkItemCompletionProcessor, WorkItemCompletionProcessor>();
 
 var taskPlannerOptions = new ModelTaskPlannerOptions();
 builder.Configuration.GetSection("TaskPlanner").Bind(taskPlannerOptions);
@@ -388,8 +397,6 @@ builder.Services.AddScoped<IOrchestrationRunRepository, OrchestrationRunReposito
 builder.Services.AddScoped<IOrchestrationProgressReporter, OrchestrationProgressReporter>();
 builder.Services.AddScoped<IOrchestrationRunTraceService, OrchestrationRunTraceService>();
 builder.Services.AddScoped<IOrchestrationService, OrchestrationService>();
-
-builder.Services.AddScoped<IAutonomousCodingOrchestrator, AutonomousCodingOrchestrator>();
 
 // ------------------------------------------------------------
 // Built-in Rate Limiting (Phase 17.4.5)
@@ -1099,54 +1106,11 @@ static object ToWorkItemDto(WorkItem workItem) => new
 // ------------------------------------------------------------
 // Human Approval
 // ------------------------------------------------------------
-
-app.MapGet("/api/approvals/pending", async (
-    ApprovalService service,
-    CancellationToken cancellationToken) =>
-{
-    var pending = await service.GetPendingAsync(cancellationToken);
-    return Results.Ok(pending);
-}).RequireRateLimiting("GeneralApi");
-
-app.MapPost("/api/approvals/{id}/approve", async (
-    string id,
-    ApprovalDecisionRequest? request,
-    ApprovalService service,
-    CancellationToken cancellationToken) =>
-{
-    if (!Guid.TryParse(id, out var parsedId) || parsedId == Guid.Empty)
-    {
-        throw new ValidationException("Invalid approval identifier.");
-    }
-
-    if (request?.Comment?.Length > 2000)
-    {
-        throw new ValidationException("Comment cannot exceed 2000 characters.");
-    }
-
-    var approval = await service.ApproveAsync(parsedId, request?.Comment, cancellationToken);
-    return Results.Ok(approval);
-}).RequireRateLimiting("GeneralApi");
-
-app.MapPost("/api/approvals/{id}/reject", async (
-    string id,
-    ApprovalDecisionRequest? request,
-    ApprovalService service,
-    CancellationToken cancellationToken) =>
-{
-    if (!Guid.TryParse(id, out var parsedId) || parsedId == Guid.Empty)
-    {
-        throw new ValidationException("Invalid approval identifier.");
-    }
-
-    if (request?.Comment?.Length > 2000)
-    {
-        throw new ValidationException("Comment cannot exceed 2000 characters.");
-    }
-
-    var approval = await service.RejectAsync(parsedId, request?.Comment, cancellationToken);
-    return Results.Ok(approval);
-}).RequireRateLimiting("GeneralApi");
+// Phase 18.12 — the legacy /api/approvals/* endpoints (backed by
+// ApprovalService/IWorkflowEngine, a second independent Project-transition
+// authority) were retired. The single authoritative human-approval boundary
+// is now POST /api/projects/{id}/approve -> ProjectService.ApproveAsync
+// (Phase 18.11), reachable only from HumanReview.
 
 // ------------------------------------------------------------
 // Execution Audit Trail
@@ -1763,9 +1727,6 @@ public sealed record PlanTaskRequestDto(
 public sealed record CreatePlanRequest(
     string? Summary,
     List<PlanTaskRequestDto> Tasks);
-
-public sealed record ApprovalDecisionRequest(
-    string? Comment);
 
 public sealed record StartOrchestrationRunRequest(
     Guid ProjectId,

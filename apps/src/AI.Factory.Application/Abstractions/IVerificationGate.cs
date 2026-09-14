@@ -5,7 +5,7 @@ namespace AI.Factory.Application.Abstractions;
 /// <summary>
 /// Phase 18.8 — deterministic verification of a WorkItem's implementation.
 /// Never trusts an agent's self-reported "completed" status: runs the
-/// Factory's own trusted build/test commands (via <see cref="IValidationEngine"/>,
+/// Factory's own trusted build/test commands (via IBuildExecutor/ITestExecutor,
 /// itself bounded by IProcessRunner's command allow-list) and reports a
 /// deterministic outcome derived only from process exit signals.
 /// </summary>

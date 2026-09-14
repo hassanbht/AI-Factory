@@ -24,6 +24,11 @@ public sealed class RepairVerificationLoopTests : IDisposable
 {
     private readonly SqliteConnection _connection;
     private readonly DbContextOptions<FactoryDbContext> _options;
+    // Phase 18.14 — see WorkItemExecutionIntegrationTests: AgentOrchestrator
+    // now resolves a real, existing Project workspace for WorkItem-backed
+    // AgentRuns (including repair dispatch), so each seeded Project needs a
+    // real temp directory rather than the non-existent default RootPath.
+    private readonly string _workspaceRoot;
 
     public RepairVerificationLoopTests()
     {
@@ -32,9 +37,20 @@ public sealed class RepairVerificationLoopTests : IDisposable
         _options = new DbContextOptionsBuilder<FactoryDbContext>().UseSqlite(_connection).Options;
         using var db = new FactoryDbContext(_options);
         db.Database.EnsureCreated();
+
+        _workspaceRoot = Path.Combine(Path.GetTempPath(), "ai-factory-repair-loop-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_workspaceRoot);
     }
 
-    public void Dispose() => _connection.Dispose();
+    public void Dispose()
+    {
+        _connection.Dispose();
+
+        if (Directory.Exists(_workspaceRoot))
+        {
+            Directory.Delete(_workspaceRoot, recursive: true);
+        }
+    }
 
     private const string CompletedExecutionResult = """
         {"version":1,"status":"Succeeded","summary":"done","output":"ok","data":{"execution":{"version":1,"status":"completed","summary":"implemented it"}},"warnings":[],"errors":[],"artifacts":[],"metadata":{}}
@@ -102,21 +118,38 @@ public sealed class RepairVerificationLoopTests : IDisposable
 
     private static AgentOrchestrator CreateOrchestrator(FactoryDbContext db, IAgentRuntime runtime) => new(
         new AgentRunRepository(db),
+        new ProjectRepository(db),
         new FakeAgentToolRegistry(),
         new FakeAgentMemory(),
         runtime,
+        new ProjectWorkspaceResolver(new AgentWorkspaceOptions()),
         new AgentInstructionBuilder(),
         new StructuredAgentResultParser(),
         NullLogger<AgentOrchestrator>.Instance);
 
     private static AgentRunWorkItemSync CreateSync(FactoryDbContext db, IVerificationGate verificationGate) => new(
         new WorkItemRepository(db), new ProjectRepository(db), new WorkItemExecutionResultMapper(),
-        verificationGate, NullLogger<AgentRunWorkItemSync>.Instance);
+        verificationGate, new FakeWorkItemCompletionProcessor(), NullLogger<AgentRunWorkItemSync>.Instance);
+
+    /// <summary>Phase 18.13 — stand-in for the real review/evaluation/learning stage; out of scope for this file's repair/verification loop coverage.</summary>
+    private sealed class FakeWorkItemCompletionProcessor : IWorkItemCompletionProcessor
+    {
+        public Task<WorkItemCompletionDecision> ProcessAsync(
+            Project project, WorkItem workItem, AgentRun agentRun, VerificationResult verificationResult,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new WorkItemCompletionDecision(WorkItemStatus.Completed, null));
+    }
 
     private async Task<Guid> SeedProjectAsync()
     {
         await using var db = new FactoryDbContext(_options);
-        var project = await new ProjectService(new ProjectRepository(db)).CreateAsync("Repair Loop Project", "d");
+        var repo = new ProjectRepository(db);
+        var project = await new ProjectService(repo).CreateAsync("Repair Loop Project", "d");
+
+        project.RootPath = Path.Combine(_workspaceRoot, project.Slug);
+        Directory.CreateDirectory(project.RootPath);
+        await repo.SaveChangesAsync();
+
         return project.Id;
     }
 

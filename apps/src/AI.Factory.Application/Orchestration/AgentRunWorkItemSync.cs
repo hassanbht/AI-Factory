@@ -25,6 +25,7 @@ public sealed class AgentRunWorkItemSync : IAgentRunWorkItemSync
     private readonly IProjectRepository _projects;
     private readonly IWorkItemExecutionResultMapper _executionResultMapper;
     private readonly IVerificationGate _verificationGate;
+    private readonly IWorkItemCompletionProcessor _completionProcessor;
     private readonly ILogger<AgentRunWorkItemSync> _logger;
 
     public AgentRunWorkItemSync(
@@ -32,12 +33,14 @@ public sealed class AgentRunWorkItemSync : IAgentRunWorkItemSync
         IProjectRepository projects,
         IWorkItemExecutionResultMapper executionResultMapper,
         IVerificationGate verificationGate,
+        IWorkItemCompletionProcessor completionProcessor,
         ILogger<AgentRunWorkItemSync> logger)
     {
         _workItems = workItems;
         _projects = projects;
         _executionResultMapper = executionResultMapper;
         _verificationGate = verificationGate;
+        _completionProcessor = completionProcessor;
         _logger = logger;
     }
 
@@ -112,7 +115,7 @@ public sealed class AgentRunWorkItemSync : IAgentRunWorkItemSync
 
         if (target == WorkItemStatus.Testing)
         {
-            await RunVerificationGateAsync(workItem, cancellationToken);
+            await RunVerificationGateAsync(workItem, agentRun, cancellationToken);
         }
     }
 
@@ -127,7 +130,7 @@ public sealed class AgentRunWorkItemSync : IAgentRunWorkItemSync
     /// blocked for the entire duration of this call — exactly the "Testing
     /// does not satisfy dependencies" requirement (§9).
     /// </summary>
-    private async Task RunVerificationGateAsync(WorkItem workItem, CancellationToken cancellationToken)
+    private async Task RunVerificationGateAsync(WorkItem workItem, AgentRun agentRun, CancellationToken cancellationToken)
     {
         var project = await _projects.GetByIdAsync(workItem.ProjectId, cancellationToken);
 
@@ -147,13 +150,21 @@ public sealed class AgentRunWorkItemSync : IAgentRunWorkItemSync
             "VerificationGateCompleted WorkItemId={WorkItemId} Status={Status} DurationMs={DurationMs}",
             workItem.Id, result.Status, result.Duration.TotalMilliseconds);
 
-        // Phase 18.8 §13 — Verification Failure Policy: Passed -> Completed;
-        // a genuine build/test Failed -> Repairing (recoverable, not
-        // terminal); InfrastructureError/TimedOut -> Failed (deterministic,
-        // not a repairable code defect); Cancelled -> Cancelled.
+        // Phase 18.8 §13 — Verification Failure Policy: Passed delegates to
+        // IWorkItemCompletionProcessor (Phase 18.13 — independent review,
+        // then evaluation/learning on a review pass) instead of assuming
+        // Completed outright; a genuine build/test Failed -> Repairing
+        // (recoverable, not terminal); InfrastructureError/TimedOut -> Failed
+        // (deterministic, not a repairable code defect); Cancelled -> Cancelled.
+        if (result.Status == VerificationStatus.Passed)
+        {
+            var decision = await _completionProcessor.ProcessAsync(project, workItem, agentRun, result, cancellationToken);
+            await FinalizeVerificationAsync(workItem, decision.Target, decision.ErrorMessage, cancellationToken);
+            return;
+        }
+
         var (target, message) = result.Status switch
         {
-            VerificationStatus.Passed => (WorkItemStatus.Completed, (string?)null),
             VerificationStatus.Failed => (WorkItemStatus.Repairing, result.Summary),
             VerificationStatus.InfrastructureError => (WorkItemStatus.Failed, result.Summary),
             VerificationStatus.TimedOut => (WorkItemStatus.Failed, result.Summary),

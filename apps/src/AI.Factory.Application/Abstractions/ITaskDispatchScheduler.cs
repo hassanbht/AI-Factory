@@ -18,6 +18,17 @@ public interface ITaskDispatchScheduler
     Task<SchedulingCycleResult> RunCycleAsync(
         Guid projectId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Phase 18.13 — dispatches exactly one specific WorkItem out-of-cycle,
+    /// bypassing readiness ordering and concurrency-headroom capacity (an
+    /// explicit manual request targets one named task, not "whatever's next").
+    /// The WorkItem must currently be WorkItemStatus.Ready — the same domain
+    /// rule every other dispatch path enforces; anything else is reported as a
+    /// skip, never forced. Reuses the exact same atomic claim + AgentRun
+    /// creation as RunCycleAsync's own dispatch path — no second claim mechanism.
+    /// </summary>
+    Task<TaskDispatchOutcome> DispatchWorkItemAsync(Guid workItemId, CancellationToken cancellationToken = default);
 }
 
 public enum TaskDispatchSkipReason
@@ -26,7 +37,9 @@ public enum TaskDispatchSkipReason
     NoAgentDefinition,
     DispatchFailed,
     NoRepairAgentDefinition,
-    RepairBudgetExhausted
+    RepairBudgetExhausted,
+    WorkItemNotFound,
+    NotReady
 }
 
 public sealed record TaskDispatchOutcome(

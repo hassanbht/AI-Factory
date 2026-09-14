@@ -73,9 +73,11 @@ public sealed class ProjectPlannerServiceTests : IDisposable
 
     private static AgentOrchestrator CreateOrchestrator(FactoryDbContext db, IAgentRuntime runtime) => new(
         new AgentRunRepository(db),
+        new ProjectRepository(db),
         new FakeAgentToolRegistry(),
         new FakeAgentMemory(),
         runtime,
+        new ProjectWorkspaceResolver(new AgentWorkspaceOptions()),
         new AgentInstructionBuilder(),
         new StructuredAgentResultParser(),
         NullLogger<AgentOrchestrator>.Instance);

@@ -589,6 +589,9 @@ namespace AI.Factory.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
+                    b.Property<Guid?>("AgentRunId")
+                        .HasColumnType("TEXT");
+
                     b.Property<int>("Attempt")
                         .HasColumnType("INTEGER");
 

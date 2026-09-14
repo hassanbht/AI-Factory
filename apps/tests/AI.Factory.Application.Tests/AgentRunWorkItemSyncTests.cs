@@ -31,10 +31,37 @@ public sealed class AgentRunWorkItemSyncTests : IDisposable
 
     public void Dispose() => _connection.Dispose();
 
-    private static AgentRunWorkItemSync CreateSync(FactoryDbContext db, IVerificationGate? verificationGate = null) => new(
+    private static AgentRunWorkItemSync CreateSync(
+        FactoryDbContext db,
+        IVerificationGate? verificationGate = null,
+        IWorkItemCompletionProcessor? completionProcessor = null) => new(
         new WorkItemRepository(db), new ProjectRepository(db), new WorkItemExecutionResultMapper(),
         verificationGate ?? new FakeVerificationGate(VerificationStatus.Passed),
+        completionProcessor ?? new FakeWorkItemCompletionProcessor(WorkItemStatus.Completed, null),
         NullLogger<AgentRunWorkItemSync>.Instance);
+
+    /// <summary>
+    /// Phase 18.13 — stand-in for the real review/evaluation/learning stage;
+    /// these tests care only about AgentRunWorkItemSync's own delegation and
+    /// transition-application behavior, not WorkItemCompletionProcessor's
+    /// internals (covered separately by WorkItemCompletionProcessorTests).
+    /// </summary>
+    private sealed class FakeWorkItemCompletionProcessor : IWorkItemCompletionProcessor
+    {
+        private readonly WorkItemStatus _target;
+        private readonly string? _errorMessage;
+
+        public FakeWorkItemCompletionProcessor(WorkItemStatus target, string? errorMessage)
+        {
+            _target = target;
+            _errorMessage = errorMessage;
+        }
+
+        public Task<WorkItemCompletionDecision> ProcessAsync(
+            Project project, WorkItem workItem, AgentRun agentRun, VerificationResult verificationResult,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new WorkItemCompletionDecision(_target, _errorMessage));
+    }
 
     /// <summary>Phase 18.8 — deterministic stand-in for the real build/test pipeline.</summary>
     private sealed class FakeVerificationGate : IVerificationGate
@@ -283,6 +310,38 @@ public sealed class AgentRunWorkItemSyncTests : IDisposable
 
         var workItem = await new WorkItemRepository(syncDb).GetByIdAsync(taskId);
         Assert.Equal(WorkItemStatus.Completed.ToString(), workItem!.Status);
+    }
+
+    [Fact]
+    public async Task SyncAsync_AlreadyCancelledWorkItem_NotResurrectedByLateFinishingAgentRun()
+    {
+        // Phase 18.13 — a WorkItem cancelled via OrchestrationService's
+        // cooperative cancellation must never be resurrected by an AgentRun
+        // that was already in flight and only finishes afterward. This is
+        // the existing idempotency guard (WorkItem must still be Running),
+        // exercised specifically against a Cancelled-not-Completed terminal
+        // status.
+        var taskId = await SeedRunningTaskAsync();
+
+        await using (var db = new FactoryDbContext(_options))
+        {
+            var workItem = await new WorkItemRepository(db).GetByIdAsync(taskId);
+            workItem!.TransitionTo(WorkItemStatus.Cancelled);
+            await new WorkItemRepository(db).UpdateAsync(workItem);
+        }
+
+        var run = new AgentRun
+        {
+            WorkItemId = taskId,
+            Status = AgentRunStatus.Succeeded,
+            StructuredResult = SucceededStructuredResult("completed")
+        };
+
+        await using var syncDb = new FactoryDbContext(_options);
+        await CreateSync(syncDb).SyncAsync(run);
+
+        var workItem2 = await new WorkItemRepository(syncDb).GetByIdAsync(taskId);
+        Assert.Equal(WorkItemStatus.Cancelled.ToString(), workItem2!.Status);
     }
 
     [Fact]

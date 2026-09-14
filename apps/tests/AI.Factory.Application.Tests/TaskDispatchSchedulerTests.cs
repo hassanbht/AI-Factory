@@ -307,6 +307,110 @@ public sealed class TaskDispatchSchedulerTests : IDisposable
         Assert.Equal(WorkItemStatus.Ready.ToString(), untouched!.Status);
     }
 
+    // ---------------- Phase 18.13 — manual single-WorkItem dispatch ----------------
+
+    [Fact]
+    public async Task DispatchWorkItemAsync_ReadyWorkItem_CreatesAgentRun_AndTransitionsWorkItemToRunning()
+    {
+        var projectId = await SeedProjectAsync();
+        var agentDefinitionId = await SeedAgentDefinitionAsync();
+        var taskId = await SeedReadyTaskAsync(projectId, "A");
+
+        await using var db = new FactoryDbContext(_options);
+        var outcome = await CreateScheduler(db).DispatchWorkItemAsync(taskId);
+
+        Assert.True(outcome.Dispatched);
+        Assert.NotNull(outcome.AgentRunId);
+        Assert.Null(outcome.SkipReason);
+
+        await using var verifyDb = new FactoryDbContext(_options);
+        var run = await verifyDb.AgentRuns.SingleAsync(x => x.WorkItemId == taskId);
+        Assert.Equal(AgentRunStatus.Queued, run.Status);
+        Assert.Equal(agentDefinitionId, run.AgentDefinitionId);
+
+        var workItem = await new WorkItemRepository(verifyDb).GetByIdAsync(taskId);
+        Assert.Equal(WorkItemStatus.Running.ToString(), workItem!.Status);
+    }
+
+    [Fact]
+    public async Task DispatchWorkItemAsync_NotReadyWorkItem_SkipsWithNotReadyReason_NoAgentRunCreated()
+    {
+        var projectId = await SeedProjectAsync();
+        await SeedAgentDefinitionAsync();
+
+        await using var db = new FactoryDbContext(_options);
+        var workItems = new WorkItemService(new WorkItemRepository(db), new ProjectRepository(db));
+        var item = await workItems.CreateAsync(projectId, WorkItemType.Implementation, "Draft item", null, "Normal");
+
+        var outcome = await CreateScheduler(db).DispatchWorkItemAsync(item.Id);
+
+        Assert.False(outcome.Dispatched);
+        Assert.Equal(TaskDispatchSkipReason.NotReady, outcome.SkipReason);
+        Assert.Null(outcome.AgentRunId);
+
+        await using var verifyDb = new FactoryDbContext(_options);
+        Assert.Equal(0, await verifyDb.AgentRuns.CountAsync(x => x.WorkItemId == item.Id));
+    }
+
+    [Fact]
+    public async Task DispatchWorkItemAsync_WorkItemNotFound_ReturnsWorkItemNotFoundReason()
+    {
+        await using var db = new FactoryDbContext(_options);
+        var missingId = Guid.NewGuid();
+
+        var outcome = await CreateScheduler(db).DispatchWorkItemAsync(missingId);
+
+        Assert.False(outcome.Dispatched);
+        Assert.Equal(TaskDispatchSkipReason.WorkItemNotFound, outcome.SkipReason);
+        Assert.Equal(missingId, outcome.WorkItemId);
+    }
+
+    [Fact]
+    public async Task DispatchWorkItemAsync_NoMatchingAgentDefinition_SkipsWithoutClaimingWorkItem()
+    {
+        var projectId = await SeedProjectAsync();
+        var taskId = await SeedReadyTaskWithoutAgentAsync(projectId);
+
+        await using var db = new FactoryDbContext(_options);
+        var outcome = await CreateScheduler(db).DispatchWorkItemAsync(taskId);
+
+        Assert.False(outcome.Dispatched);
+        Assert.Equal(TaskDispatchSkipReason.NoAgentDefinition, outcome.SkipReason);
+
+        var untouched = await new WorkItemRepository(db).GetByIdAsync(taskId);
+        Assert.Equal(WorkItemStatus.Ready.ToString(), untouched!.Status);
+    }
+
+    [Fact]
+    public async Task RunCycleAsync_CancelledWorkItem_IsNeverRedispatched()
+    {
+        // Phase 18.13 — cancellation's authority is WorkItemTransitions: a
+        // Cancelled WorkItem is excluded by the scheduler's existing
+        // Ready/Repairing status filters (RunCycleAsync only ever selects
+        // WorkItemStatus.Ready or WorkItemStatus.Repairing candidates), so no
+        // scheduler change is needed — this proves that existing filter
+        // already covers Cancelled.
+        var projectId = await SeedProjectAsync();
+        await SeedAgentDefinitionAsync();
+        var cancelledTaskId = await SeedReadyTaskAsync(projectId, "Cancelled one");
+        var readyTaskId = await SeedReadyTaskAsync(projectId, "Still ready");
+
+        await using (var db = new FactoryDbContext(_options))
+        {
+            var workItem = await new WorkItemRepository(db).GetByIdAsync(cancelledTaskId);
+            workItem!.TransitionTo(WorkItemStatus.Cancelled);
+            await new WorkItemRepository(db).UpdateAsync(workItem);
+        }
+
+        await using var runDb = new FactoryDbContext(_options);
+        var result = await CreateScheduler(runDb, options: new TaskSchedulerOptions { MaxConcurrentTasks = 2 })
+            .RunCycleAsync(projectId);
+
+        Assert.Single(result.Outcomes);
+        Assert.Equal(readyTaskId, result.Outcomes.Single().WorkItemId);
+        Assert.DoesNotContain(result.Outcomes, x => x.WorkItemId == cancelledTaskId);
+    }
+
     private sealed class TestOperationalMetrics : IOperationalMetrics
     {
         public void RecordOperationStarted() { }

@@ -25,7 +25,7 @@ public sealed class CriticalServicesHealthCheck : IHealthCheck
         CheckResolvable<ITaskStateManager>(missing);
         CheckResolvable<IAgentExecutor>(missing);
         CheckResolvable<IModelRouter>(missing);
-        CheckResolvable<IAutonomousCodingOrchestrator>(missing);
+        CheckResolvable<ITaskDispatchScheduler>(missing);
 
         return Task.FromResult(missing.Count == 0
             ? HealthCheckResult.Healthy("All critical services are registered.")

@@ -1,5 +1,4 @@
 using AI.Factory.Application.Abstractions;
-using AI.Factory.Application.Approvals;
 using AI.Factory.Application.Learning;
 using AI.Factory.Application.Orchestration;
 using AI.Factory.Infrastructure.Persistence;
@@ -83,24 +82,23 @@ public sealed class WorkerCompositionRootTests : IDisposable
 
     [Theory]
     [InlineData(typeof(IProjectRepository))]
-    [InlineData(typeof(IWorkflowEngine))]
     [InlineData(typeof(ITaskStateManager))]
-    [InlineData(typeof(ITaskScheduler))]
     [InlineData(typeof(IAgentExecutor))]
     [InlineData(typeof(IModelRouter))]
     [InlineData(typeof(IContextProvider))]
     [InlineData(typeof(IBuildExecutor))]
     [InlineData(typeof(ITestExecutor))]
-    [InlineData(typeof(IValidationEngine))]
     [InlineData(typeof(ICodeReviewer))]
     [InlineData(typeof(IEvaluationEngine))]
     [InlineData(typeof(ITaskPlanner))]
     [InlineData(typeof(IAuditLogger))]
     [InlineData(typeof(IOrchestrationRunRepository))]
     [InlineData(typeof(IOrchestrationProgressReporter))]
-    [InlineData(typeof(IAutonomousCodingOrchestrator))]
+    [InlineData(typeof(ITaskDispatchScheduler))]
+    [InlineData(typeof(IProjectCompletionGate))]
+    [InlineData(typeof(IVerificationGate))]
+    [InlineData(typeof(IWorkItemCompletionProcessor))]
     [InlineData(typeof(OrchestrationRunExecutionEngine))]
-    [InlineData(typeof(ApprovalService))]
     [InlineData(typeof(LearningService))]
     [InlineData(typeof(IOperationContextAccessor))]
     [InlineData(typeof(IOperationScopeFactory))]

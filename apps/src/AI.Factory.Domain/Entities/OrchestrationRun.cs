@@ -36,6 +36,15 @@ public sealed class OrchestrationRun : IVersionedEntity
 
     public string? WorkspacePath { get; set; }
 
+    /// <summary>
+    /// Phase 18.13 — the authoritative AgentRun this OrchestrationRun handed
+    /// execution off to. Null until dispatched. Once set, OrchestrationRun's
+    /// own Status/CurrentStage/ErrorMessage are a read-time PROJECTION of the
+    /// referenced AgentRun/WorkItem state (see OrchestrationService) — this
+    /// entity no longer executes the WorkItem itself.
+    /// </summary>
+    public Guid? AgentRunId { get; set; }
+
     public string? ErrorMessage { get; set; }
 
     public OrchestrationFailureCategory? FailureCategory { get; set; }

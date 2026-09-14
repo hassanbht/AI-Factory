@@ -57,7 +57,7 @@ public sealed class SecurityHeadersTests : IClassFixture<ApiTestFactory>
     [Fact]
     public async Task ContentSecurityPolicy_IsPresentOnApiRoutes()
     {
-        var response = await _client.GetAsync("/api/approvals/pending");
+        var response = await _client.GetAsync("/api/projects");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.True(response.Headers.Contains("Content-Security-Policy"));

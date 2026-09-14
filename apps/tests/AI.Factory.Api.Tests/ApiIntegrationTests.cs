@@ -188,6 +188,78 @@ public sealed class ApiIntegrationTests : IClassFixture<ApiTestFactory>
     }
 
     [Fact]
+    public async Task PostOrchestrationRunCancel_TransitionsWorkItemToCancelled()
+    {
+        // Phase 18.13 — cancellation's single authority is the WorkItem, not
+        // a second OrchestrationRun-only status field.
+        var (projectId, taskId) = await SeedProjectAndTaskAsync();
+
+        var created = await _client.PostAsJsonAsync(
+            "/api/orchestration-runs", new { ProjectId = projectId, TaskId = taskId, MaxAttempts = 3 });
+        var createdBody = await created.Content.ReadFromJsonAsync<JsonElement>();
+        var runId = createdBody.GetProperty("runId").GetGuid();
+
+        var cancelResponse = await _client.PostAsync($"/api/orchestration-runs/{runId}/cancel", content: null);
+        Assert.Equal(HttpStatusCode.Accepted, cancelResponse.StatusCode);
+
+        // Repeated cancellation must be idempotent, not an error.
+        var secondCancelResponse = await _client.PostAsync($"/api/orchestration-runs/{runId}/cancel", content: null);
+        Assert.Equal(HttpStatusCode.Accepted, secondCancelResponse.StatusCode);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<FactoryDbContext>();
+        var workItem = await db.WorkItems.SingleAsync(x => x.Id == taskId);
+
+        Assert.Equal(WorkItemStatus.Cancelled.ToString(), workItem.Status);
+    }
+
+    [Fact]
+    public async Task PostOrchestrationRunCancel_Returns409_AndDoesNotResurrectWorkItem_WhenAgentRunAlreadyCompletedIt()
+    {
+        var (projectId, taskId) = await SeedProjectAndTaskAsync();
+
+        var created = await _client.PostAsJsonAsync(
+            "/api/orchestration-runs", new { ProjectId = projectId, TaskId = taskId, MaxAttempts = 3 });
+        var createdBody = await created.Content.ReadFromJsonAsync<JsonElement>();
+        var runId = createdBody.GetProperty("runId").GetGuid();
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<FactoryDbContext>();
+
+            var definition = new AgentDefinition { Name = "Impl", AgentType = "Implementation", SystemPrompt = "x" };
+            db.AgentDefinitions.Add(definition);
+
+            var agentRun = new AgentRun
+            {
+                Id = Guid.NewGuid(),
+                AgentDefinitionId = definition.Id,
+                WorkItemId = taskId,
+                ProjectId = projectId,
+                Status = AgentRunStatus.Succeeded
+            };
+            db.AgentRuns.Add(agentRun);
+
+            var run = await db.OrchestrationRuns.SingleAsync(x => x.Id == runId);
+            run.AgentRunId = agentRun.Id;
+
+            var workItem = await db.WorkItems.SingleAsync(x => x.Id == taskId);
+            workItem.Status = WorkItemStatus.Completed.ToString();
+
+            await db.SaveChangesAsync();
+        }
+
+        var cancelResponse = await _client.PostAsync($"/api/orchestration-runs/{runId}/cancel", content: null);
+        Assert.Equal(HttpStatusCode.Conflict, cancelResponse.StatusCode);
+
+        using var verifyScope = _factory.Services.CreateScope();
+        var verifyDb = verifyScope.ServiceProvider.GetRequiredService<FactoryDbContext>();
+        var untouched = await verifyDb.WorkItems.SingleAsync(x => x.Id == taskId);
+
+        Assert.Equal(WorkItemStatus.Completed.ToString(), untouched.Status);
+    }
+
+    [Fact]
     public async Task GetOrchestrationRun_ReturnsOrderedTrace_WithFailureAndMetadata()
     {
         var (projectId, taskId) = await SeedProjectAndTaskAsync();
@@ -308,97 +380,22 @@ public sealed class ApiIntegrationTests : IClassFixture<ApiTestFactory>
         Assert.Equal(10, body.GetProperty("pageSize").GetInt32());
     }
 
-    private async Task<Guid> SeedPendingApprovalAsync()
-    {
-        using var scope = _factory.Services.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<FactoryDbContext>();
-
-        var projectId = Guid.NewGuid();
-        db.Projects.Add(new Project
-        {
-            Id = projectId,
-            Name = $"Approval Test {Guid.NewGuid():N}",
-            Slug = $"approval-test-{Guid.NewGuid():N}",
-            RootPath = string.Empty,
-            Status = ProjectStatus.HumanReview,
-            CreatedAtUtc = DateTime.UtcNow,
-            UpdatedAtUtc = DateTime.UtcNow
-        });
-
-        var approvalId = Guid.NewGuid();
-        db.ApprovalRequests.Add(new ApprovalRequest
-        {
-            Id = approvalId,
-            ProjectId = projectId,
-            Workflow = ProjectStatus.Implementation,
-            Reason = "Need human signoff",
-            RequestedBy = "System",
-            RequestedAtUtc = DateTime.UtcNow,
-            Decision = ApprovalDecision.PendingApproval
-        });
-
-        await db.SaveChangesAsync();
-        return approvalId;
-    }
-
+    /// <summary>
+    /// Phase 18.12 §10/§13 — the legacy /api/approvals/* endpoints (backed by
+    /// ApprovalService/IWorkflowEngine, a second independent Project-transition
+    /// authority) were retired in favor of the sole authoritative boundary,
+    /// POST /api/projects/{id}/approve (Phase 18.11). The three tests that
+    /// previously exercised /api/approvals/{id}/approve|reject were removed
+    /// along with their SeedPendingApprovalAsync helper; this test proves the
+    /// retirement instead of merely documenting it.
+    /// </summary>
     [Fact]
-    public async Task ApproveUnknownApproval_Returns404_WithProblemDetails()
+    public async Task LegacyApprovalsEndpoint_NoLongerExists_Returns404()
     {
-        var response = await _client.PostAsJsonAsync(
-            $"/api/approvals/{Guid.NewGuid()}/approve", new { Comment = (string?)null });
+        var response = await _client.PostAsync(
+            $"/api/approvals/{Guid.NewGuid()}/approve", content: null);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal("Resource not found", body.GetProperty("title").GetString());
-        Assert.Equal("not_found", body.GetProperty("code").GetString());
-        Assert.Equal(404, body.GetProperty("status").GetInt32());
-
-        var correlationId = body.GetProperty("correlationId").GetString();
-        Assert.False(string.IsNullOrWhiteSpace(correlationId));
-        Assert.Equal(correlationId, response.Headers.GetValues("X-Correlation-ID").Single());
-    }
-
-    [Fact]
-    public async Task ApproveAlreadyDecidedApproval_Returns409_WithProblemDetails()
-    {
-        var approvalId = await SeedPendingApprovalAsync();
-
-        var firstResponse = await _client.PostAsJsonAsync(
-            $"/api/approvals/{approvalId}/approve", new { Comment = "First approval" });
-        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
-
-        var secondResponse = await _client.PostAsJsonAsync(
-            $"/api/approvals/{approvalId}/approve", new { Comment = "Second approval attempt" });
-        Assert.Equal(HttpStatusCode.Conflict, secondResponse.StatusCode);
-
-        var body = await secondResponse.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal("Operation conflict", body.GetProperty("title").GetString());
-        Assert.Equal("conflict", body.GetProperty("code").GetString());
-        Assert.Equal(409, body.GetProperty("status").GetInt32());
-        Assert.Contains("already decided", body.GetProperty("detail").GetString());
-
-        var correlationId = body.GetProperty("correlationId").GetString();
-        Assert.Equal(correlationId, secondResponse.Headers.GetValues("X-Correlation-ID").Single());
-    }
-
-    [Fact]
-    public async Task RejectAlreadyDecidedApproval_Returns409_WithProblemDetails()
-    {
-        var approvalId = await SeedPendingApprovalAsync();
-
-        var firstResponse = await _client.PostAsJsonAsync(
-            $"/api/approvals/{approvalId}/approve", new { Comment = "Approved" });
-        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
-
-        var secondResponse = await _client.PostAsJsonAsync(
-            $"/api/approvals/{approvalId}/reject", new { Comment = "Reject after approval" });
-        Assert.Equal(HttpStatusCode.Conflict, secondResponse.StatusCode);
-
-        var body = await secondResponse.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal("Operation conflict", body.GetProperty("title").GetString());
-        Assert.Equal("conflict", body.GetProperty("code").GetString());
-        Assert.Equal(409, body.GetProperty("status").GetInt32());
     }
 
     [Fact]

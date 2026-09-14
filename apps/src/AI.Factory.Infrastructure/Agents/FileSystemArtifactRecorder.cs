@@ -6,6 +6,13 @@ namespace AI.Factory.Infrastructure.Agents;
 
 public sealed class FileSystemArtifactRecorder : IArtifactRecorder
 {
+    // Phase 18.14 — workspacePath can now be an entire live Project directory
+    // (not just a small empty-then-agent-populated scratch folder), so build
+    // output and VCS metadata must be excluded or every execution would
+    // insert thousands of Artifact rows. Same exclusion list the deleted
+    // legacy OrchestrationRunExecutionEngine.CopyDirectory used.
+    private static readonly string[] ExcludedDirectoryNames = { "bin", "obj", "node_modules", ".git", ".vs" };
+
     private readonly FactoryDbContext _db;
 
     public FileSystemArtifactRecorder(FactoryDbContext db)
@@ -24,7 +31,10 @@ public sealed class FileSystemArtifactRecorder : IArtifactRecorder
             return;
         }
 
-        var files = Directory.EnumerateFiles(workspacePath, "*", SearchOption.AllDirectories);
+        var files = Directory.EnumerateFiles(workspacePath, "*", SearchOption.AllDirectories)
+            .Where(filePath => !ExcludedDirectoryNames.Any(excluded =>
+                filePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                    .Contains(excluded, StringComparer.OrdinalIgnoreCase)));
 
         foreach (var filePath in files)
         {

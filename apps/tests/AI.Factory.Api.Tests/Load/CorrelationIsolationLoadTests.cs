@@ -27,7 +27,7 @@ public sealed class CorrelationIsolationLoadTests : IClassFixture<HighThroughput
 
         var tasks = sentIds.Select(async sentId =>
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, "/api/approvals/pending");
+            using var request = new HttpRequestMessage(HttpMethod.Get, "/api/projects");
             request.Headers.Add("X-Correlation-ID", sentId);
 
             var response = await _client.SendAsync(request);

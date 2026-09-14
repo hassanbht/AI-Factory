@@ -79,14 +79,14 @@ public sealed class RateLimitingTests : IClassFixture<RateLimitingTestFactory>
     public async Task ExcessRequests_Return429_WithProblemDetails_AndRetryAfter()
     {
         // First 2 requests within GeneralApi permit limit (2)
-        var res1 = await _client.GetAsync("/api/approvals/pending");
+        var res1 = await _client.GetAsync("/api/projects");
         Assert.Equal(HttpStatusCode.OK, res1.StatusCode);
 
-        var res2 = await _client.GetAsync("/api/approvals/pending");
+        var res2 = await _client.GetAsync("/api/projects");
         Assert.Equal(HttpStatusCode.OK, res2.StatusCode);
 
         // 3rd request exceeds limit
-        var res3 = await _client.GetAsync("/api/approvals/pending");
+        var res3 = await _client.GetAsync("/api/projects");
         Assert.Equal(HttpStatusCode.TooManyRequests, res3.StatusCode);
 
         // Retry-After header should be present

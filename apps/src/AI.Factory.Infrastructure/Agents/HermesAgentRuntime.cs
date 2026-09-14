@@ -89,7 +89,12 @@ public sealed class HermesAgentRuntime : IAgentRuntime
             Agent: agentDefinition.Name,
             Model: agentRun.Model,
             Prompt: prompt,
-            WorkingDirectory: string.Empty);
+            // Phase 18.14 — the Factory-resolved workspace (AgentOrchestrator
+            // -> IWorkspaceResolver), never chosen here. Empty only for the
+            // one legitimate remaining case: a Planner-only AgentRun with no
+            // WorkItemId, which HermesAgentExecutor falls back to its own
+            // fresh scratch folder for.
+            WorkingDirectory: agentRun.WorkspacePath ?? string.Empty);
 
         var stopwatch = Stopwatch.StartNew();
 

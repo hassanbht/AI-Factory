@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using AI.Factory.Domain.Common;
 using AI.Factory.Domain.Enums;
 using AI.Factory.Domain.Exceptions;
@@ -77,6 +78,18 @@ public sealed class AgentRun : IVersionedEntity
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 
     public long Version { get; set; } = 1;
+
+    /// <summary>
+    /// Phase 18.14 — the Factory-resolved, trusted execution workspace for
+    /// this run. Transient/execution-time-only, exactly like the non-persisted
+    /// snapshot <see cref="AgentRun"/> that AgentOrchestrator.BuildExecutionSnapshot
+    /// already constructs to carry Input to IAgentRuntime: [NotMapped] means EF
+    /// Core excludes it from the model entirely, so nothing about workspace
+    /// resolution survives a restart in the database — it is re-derived fresh
+    /// from ProjectId -> Project.RootPath on every execution, including recovery.
+    /// </summary>
+    [NotMapped]
+    public string? WorkspacePath { get; set; }
 
     /// <summary>Applies a lifecycle transition, throwing <see cref="InvalidAgentRunTransitionException"/> if not allowed from the current status. The only sanctioned way to mutate Status.</summary>
     public void TransitionTo(AgentRunStatus next)

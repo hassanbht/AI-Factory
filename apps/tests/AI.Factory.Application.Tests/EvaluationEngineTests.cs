@@ -53,7 +53,7 @@ public sealed class EvaluationEngineTests : IDisposable
             new ApprovalRepository(db));
     }
 
-    private async Task<WorkItem> SeedWorkItemAsync(FactoryDbContext db, int attemptCount = 1)
+    private async Task<WorkItem> SeedWorkItemAsync(FactoryDbContext db, int attemptCount = 1, int repairAttemptCount = 0)
     {
         var workItem = new WorkItem
         {
@@ -62,6 +62,7 @@ public sealed class EvaluationEngineTests : IDisposable
             Title = "Task",
             Status = WorkItemStatus.Completed.ToString(),
             AttemptCount = attemptCount,
+            RepairAttemptCount = repairAttemptCount,
             CreatedAtUtc = DateTime.UtcNow,
             UpdatedAtUtc = DateTime.UtcNow
         };
@@ -238,11 +239,16 @@ public sealed class EvaluationEngineTests : IDisposable
         Assert.Equal(RegressionStatus.Improved, result.Regression);
     }
 
+    /// <summary>
+    /// Phase 18.13 — RepairCount is now derived from WorkItem.RepairAttemptCount
+    /// (incremented by TaskDispatchScheduler.DispatchRepairAsync for the
+    /// AgentRun pipeline), not the legacy AttemptCount field.
+    /// </summary>
     [Fact]
-    public async Task EvaluateAsync_DerivesRepairCount_FromAttemptCountMinusOne()
+    public async Task EvaluateAsync_DerivesRepairCount_FromRepairAttemptCount()
     {
         await using var db = new FactoryDbContext(_options);
-        var workItem = await SeedWorkItemAsync(db, attemptCount: 3);
+        var workItem = await SeedWorkItemAsync(db, repairAttemptCount: 2);
 
         await AddValidationRunAsync(db, workItem.Id, true, true, DateTime.UtcNow);
 

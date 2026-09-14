@@ -19,26 +19,32 @@ namespace AI.Factory.Application.Agents;
 public sealed class AgentOrchestrator : IAgentOrchestrator
 {
     private readonly IAgentRunRepository _agentRunRepository;
+    private readonly IProjectRepository _projectRepository;
     private readonly IAgentToolRegistry _toolRegistry;
     private readonly IAgentMemory _memory;
     private readonly IAgentRuntime _runtime;
+    private readonly IWorkspaceResolver _workspaceResolver;
     private readonly IAgentInstructionBuilder _instructionBuilder;
     private readonly IStructuredAgentResultParser _structuredResultParser;
     private readonly ILogger<AgentOrchestrator> _logger;
 
     public AgentOrchestrator(
         IAgentRunRepository agentRunRepository,
+        IProjectRepository projectRepository,
         IAgentToolRegistry toolRegistry,
         IAgentMemory memory,
         IAgentRuntime runtime,
+        IWorkspaceResolver workspaceResolver,
         IAgentInstructionBuilder instructionBuilder,
         IStructuredAgentResultParser structuredResultParser,
         ILogger<AgentOrchestrator> logger)
     {
         _agentRunRepository = agentRunRepository;
+        _projectRepository = projectRepository;
         _toolRegistry = toolRegistry;
         _memory = memory;
         _runtime = runtime;
+        _workspaceResolver = workspaceResolver;
         _instructionBuilder = instructionBuilder;
         _structuredResultParser = structuredResultParser;
         _logger = logger;
@@ -103,10 +109,50 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
                 run, "AgentDefinition could not be loaded for this AgentRun.", FailureCategory.Validation, cancellationToken);
         }
 
+        // Phase 18.14 — only WorkItem-backed AgentRuns need a resolved
+        // workspace; a Planner-only AgentRun (WorkItemId == null) is
+        // explicitly out of this phase's scope and keeps its exact prior
+        // behavior (workspacePath stays null, runtime still gets called).
+        string? workspacePath = null;
+
+        if (run.WorkItemId is not null)
+        {
+            if (run.ProjectId is not { } projectId)
+            {
+                return await FailRunningAsync(
+                    run, "AgentRun is WorkItem-backed but has no ProjectId; cannot resolve a workspace.",
+                    FailureCategory.Validation, cancellationToken);
+            }
+
+            var project = await _projectRepository.GetByIdAsync(projectId, cancellationToken);
+
+            if (project is null)
+            {
+                return await FailRunningAsync(
+                    run, $"Project '{projectId}' was not found; cannot resolve a workspace.",
+                    FailureCategory.Validation, cancellationToken);
+            }
+
+            var resolution = _workspaceResolver.Resolve(project);
+
+            if (!resolution.IsValid)
+            {
+                _logger.LogWarning(
+                    "AgentWorkspaceResolutionFailed AgentRunId={AgentRunId} ProjectId={ProjectId} Reason={Reason}",
+                    run.Id, projectId, resolution.FailureReason);
+
+                return await FailRunningAsync(
+                    run, resolution.FailureReason ?? "Workspace could not be resolved.",
+                    FailureCategory.Validation, cancellationToken);
+            }
+
+            workspacePath = resolution.Path;
+        }
+
         var availableToolNames = _toolRegistry.GetDescriptors().Select(x => x.Name).ToArray();
 
         var memoryEntries = await SearchMemorySafelyAsync(run, cancellationToken);
-        var executionRun = BuildExecutionSnapshot(run, availableToolNames, memoryEntries);
+        var executionRun = BuildExecutionSnapshot(run, availableToolNames, memoryEntries, workspacePath);
 
         var runtimeResult = await _runtime.ExecuteAsync(executionRun, cancellationToken);
 
@@ -189,7 +235,10 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
     /// runtime ever needs more than Input augmented.
     /// </summary>
     private AgentRun BuildExecutionSnapshot(
-        AgentRun run, IReadOnlyList<string> availableToolNames, IReadOnlyList<AgentMemoryEntry> memoryEntries)
+        AgentRun run,
+        IReadOnlyList<string> availableToolNames,
+        IReadOnlyList<AgentMemoryEntry> memoryEntries,
+        string? workspacePath)
     {
         var previousContext = memoryEntries.Count == 0
             ? null
@@ -221,6 +270,7 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
             Provider = run.Provider,
             Model = run.Model,
             Input = instructionText,
+            WorkspacePath = workspacePath,
             CreatedAtUtc = run.CreatedAtUtc,
             UpdatedAtUtc = run.UpdatedAtUtc,
             Version = run.Version

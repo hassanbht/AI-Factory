@@ -143,7 +143,7 @@ public sealed class OperationalEndpointSecurityTests : IClassFixture<Operational
     [Fact]
     public async Task BusinessEndpoints_DoNotRequireOperationalKey()
     {
-        var response = await _client.GetAsync("/api/approvals/pending");
+        var response = await _client.GetAsync("/api/projects");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }

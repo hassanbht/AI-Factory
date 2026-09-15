@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using System.Text.Json;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Agents;
+using AI.Factory.Application.Configuration;
 using AI.Factory.Application.Orchestration;
 using AI.Factory.Application.Planning;
 using AI.Factory.Application.Projects;
@@ -9,11 +11,14 @@ using AI.Factory.Domain.Entities;
 using AI.Factory.Domain.Enums;
 using AI.Factory.Infrastructure.Agents;
 using AI.Factory.Infrastructure.Persistence;
+using AI.Factory.Infrastructure.Source;
+using AI.Factory.Infrastructure.Validation;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace AI.Factory.Worker.Tests;
@@ -558,6 +563,292 @@ public sealed class RealHermesE2ETests
         return (run, definitionId.Value);
     }
 
+    // ──────────────────────────────────────────────────────────────────────
+    // Phase 18.17 — Real Hermes WorkItem E2E: modifies workspace + verifies
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Phase 18.17 §22 — the first real Hermes gate that proves the full
+    /// workspace chain in one test:
+    ///
+    ///   1. Project created  →  real ProjectWorkspaceProvisioner provisions RootPath
+    ///   2. Git source initialized  →  real ProjectSourceInitializer clones a
+    ///      local bare repo with a known C# source file into that RootPath
+    ///   3. WorkItem dispatched  →  real AgentRun created
+    ///   4. AgentRunWorker → AgentOrchestrator → HermesAgentExecutor →
+    ///      Docker run  →  /workspace bind-mounted to the SAME host RootPath
+    ///   5. Agent modifies src/Marker.cs — replacing "MARKER_BEFORE" with
+    ///      "MARKER_AFTER"  →  change visible on host filesystem
+    ///   6. VerificationGate runs dotnet build + test on the same workspace
+    ///   7. WorkItem reaches Completed (or Blocked — the real model decides)
+    ///
+    /// Requires:
+    ///   AI_FACTORY_HERMES_SMOKE_TEST=true
+    ///   OMNIROUTE_API_KEY env var set
+    ///   Docker daemon running
+    ///   Hermes image available (AI_FACTORY_HERMES_IMAGE or default)
+    ///   git available on PATH
+    /// </summary>
+    [Fact]
+    public async Task RealHermes_WorkItemExecution_ModifiesProjectWorkspace_AndPassesFactoryVerification()
+    {
+        if (!Enabled)
+        {
+            return;
+        }
+
+        // ── 1. Build fixture: bare Git repo with a minimal .NET project ──────
+        var fixtureTemp = Path.Combine(Path.GetTempPath(), "aif-e2e17-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(fixtureTemp);
+
+        string bareRepoPath;
+        try
+        {
+            bareRepoPath = CreateDemoFixtureBareRepo(fixtureTemp);
+        }
+        catch (Exception ex)
+        {
+            // git not available — skip rather than fail
+            throw new InvalidOperationException(
+                "Failed to create fixture bare repo (is git on PATH?): " + ex.Message, ex);
+        }
+
+        // projectsBase is the directory under which the Provisioner will
+        // create per-project subdirectories. We use the same fixtureTemp
+        // root so cleanup is one Directory.Delete call.
+        var projectsBase = Path.Combine(fixtureTemp, "projects");
+        Directory.CreateDirectory(projectsBase);
+
+        // ── 2. Provision workspace + initialize Git source ─────────────────
+        // Done OUTSIDE the Worker DI: Provisioner/SourceInitializer are not
+        // registered in the Worker composition root — they run once at
+        // project-creation time, not at agent execution time.
+        var workspaceOptions = new AgentWorkspaceOptions { ProjectsBaseDirectory = projectsBase };
+        var resolver = new ProjectWorkspaceResolver(workspaceOptions);
+        var commandPolicyOptions = new CommandPolicyOptions();
+        var executionLimitsOptions = new ExecutionLimitsOptions { BuildTimeoutMinutes = 5 };
+
+        // Reuse BuildHost to get the real Worker DI graph (with the
+        // overridden AgentWorkspaceOptions pointing to projectsBase).
+        using var testHost = BuildHost(
+            configureWorkspace: o => o.ProjectsBaseDirectory = projectsBase);
+
+        Guid projectId, workItemId, agentRunId;
+        string resolvedProjectRoot;
+
+        await using (var scope = testHost.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<FactoryDbContext>();
+
+            var provisioner = new ProjectWorkspaceProvisioner(
+                resolver, workspaceOptions,
+                NullLogger<ProjectWorkspaceProvisioner>.Instance);
+            var sourceInitializer = new ProjectSourceInitializer(
+                resolver, new SystemProcessRunner(commandPolicyOptions),
+                executionLimitsOptions,
+                NullLogger<ProjectSourceInitializer>.Instance);
+            var projectService = new ProjectService(
+                new ProjectRepository(db), provisioner, sourceInitializer: sourceInitializer);
+
+            var project = await projectService.CreateAsync("E2E Workspace Modifier", "d");
+            projectId = project.Id;
+
+            // Resolve and record the host RootPath for later assertions.
+            resolvedProjectRoot = resolver.Resolve(project).Path!;
+
+            // Clone the local bare repo into the workspace.
+            await projectService.InitializeSourceAsync(
+                projectId, new SourceSpecification(ProjectSourceType.GitRepository, bareRepoPath));
+
+            // Confirm fixture file is present.
+            var markerFile = Path.Combine(resolvedProjectRoot, "src", "Marker.cs");
+            Assert.True(File.Exists(markerFile),
+                $"Fixture file missing after Git clone: {markerFile}");
+            Assert.Contains("MARKER_BEFORE", await File.ReadAllTextAsync(markerFile));
+
+            // ── 3. Create + dispatch WorkItem ─────────────────────────────
+            await new AgentDefinitionRepository(db).CreateAsync(
+                new AgentDefinition { Name = "Coder", AgentType = "Implementation" });
+
+            var workItems = new WorkItemService(new WorkItemRepository(db), new ProjectRepository(db));
+            var item = await workItems.CreateAsync(
+                projectId, WorkItemType.Implementation,
+                "Replace marker string in src/Marker.cs",
+                "In src/Marker.cs, find the line containing \"MARKER_BEFORE\" and change it to \"MARKER_AFTER\". " +
+                "Do not modify any other file. Run dotnet test to confirm the project still builds.",
+                "Normal");
+            workItemId = item.Id;
+            await workItems.TransitionStatusAsync(workItemId, WorkItemStatus.Ready);
+
+            var scheduler = scope.ServiceProvider.GetRequiredService<ITaskDispatchScheduler>();
+            var cycle = await scheduler.RunCycleAsync(projectId);
+            agentRunId = cycle.Outcomes.Single().AgentRunId!.Value;
+
+            // Override model for the specific run.
+            var runRepo = new AgentRunRepository(db);
+            var reloaded = (await runRepo.GetByIdAsync(agentRunId))!;
+            reloaded.Model = OmniRouteModel;
+            await runRepo.UpdateAsync(reloaded);
+        }
+
+        // ── 4. Run the real Worker ────────────────────────────────────────
+        var worker = GetAgentRunWorker(testHost.Host);
+        using var cts = new CancellationTokenSource();
+        await worker.StartAsync(cts.Token);
+
+        var finalRun = await WaitForTerminalAsync(testHost, agentRunId, TimeSpan.FromSeconds(240));
+
+        await worker.StopAsync(CancellationToken.None);
+
+        Assert.NotNull(finalRun);
+        Assert.Equal(AgentRunStatus.Succeeded, finalRun!.Status);
+
+        // ── 5. Host filesystem: file content must have changed ────────────
+        var modifiedFile = Path.Combine(resolvedProjectRoot, "src", "Marker.cs");
+        Assert.True(File.Exists(modifiedFile), $"src/Marker.cs not found in workspace '{resolvedProjectRoot}'");
+        var content = await File.ReadAllTextAsync(modifiedFile);
+        Assert.True(content.Contains("MARKER_AFTER"),
+            $"Agent did not replace MARKER_BEFORE with MARKER_AFTER in src/Marker.cs. Actual content: {content}");
+
+        // ── 6. VerificationGate runs build + test on the same workspace ───
+        // Resolve via the production resolver (same options as Worker DI)
+        // to confirm the gate uses the identical physical path.
+        await using (var scope = testHost.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<FactoryDbContext>();
+            var gate = scope.ServiceProvider.GetRequiredService<IVerificationGate>();
+            var projectRepo = new ProjectRepository(db);
+            var project = (await projectRepo.GetByIdAsync(projectId))!;
+            var workItemRepo = new WorkItemRepository(db);
+            var workItem = (await workItemRepo.GetByIdAsync(workItemId))!;
+
+            var verification = await gate.VerifyAsync(project, workItem, CancellationToken.None);
+
+            Assert.True(verification.Status == VerificationStatus.Passed,
+                $"VerificationGate failed after agent modification. Summary: {verification.Summary}");
+        }
+
+        // ── 7. WorkItem must have reached Completed ───────────────────────
+        var finalWorkItem = await WaitForWorkItemLeavesRunningAsync(testHost, workItemId, TimeSpan.FromSeconds(30));
+        Assert.NotNull(finalWorkItem);
+        Assert.True(finalWorkItem!.Status == WorkItemStatus.Completed.ToString(),
+            $"WorkItem did not reach Completed — actual: {finalWorkItem.Status}");
+
+        // Cleanup fixture
+        try { Directory.Delete(fixtureTemp, recursive: true); } catch { /* best-effort */ }
+    }
+
+    /// <summary>
+    /// Phase 18.17 — creates a local bare Git repository containing a
+    /// minimal C# solution that builds and tests green. The production code
+    /// in src/Marker.cs contains the string "MARKER_BEFORE" which the Agent
+    /// is instructed to change to "MARKER_AFTER". The test project asserts
+    /// the file exists and compiles — it does NOT assert the marker value,
+    /// so the agent's modification does not break the tests.
+    /// </summary>
+    private static string CreateDemoFixtureBareRepo(string tempDir)
+    {
+        var seedDir = Path.Combine(tempDir, "seed");
+        Directory.CreateDirectory(seedDir);
+
+        var srcDir = Path.Combine(seedDir, "src");
+        var testsDir = Path.Combine(seedDir, "tests");
+        Directory.CreateDirectory(srcDir);
+        Directory.CreateDirectory(testsDir);
+
+        // src/Demo.csproj
+        File.WriteAllText(Path.Combine(srcDir, "Demo.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <Nullable>enable</Nullable>
+              </PropertyGroup>
+            </Project>
+            """);
+
+        // src/Marker.cs — the file the Agent will modify
+        File.WriteAllText(Path.Combine(srcDir, "Marker.cs"), """
+            namespace Demo;
+
+            public static class Marker
+            {
+                // The agent will change "MARKER_BEFORE" to "MARKER_AFTER" on the next line.
+                public const string Value = "MARKER_BEFORE";
+            }
+            """);
+
+        // tests/Demo.Tests.csproj
+        File.WriteAllText(Path.Combine(testsDir, "Demo.Tests.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <IsPackable>false</IsPackable>
+                <Nullable>enable</Nullable>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="xunit" Version="2.9.3" />
+                <PackageReference Include="xunit.runner.visualstudio" Version="3.0.2">
+                  <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+                  <PrivateAssets>all</PrivateAssets>
+                </PackageReference>
+                <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+                <ProjectReference Include="../src/Demo.csproj" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        // tests/MarkerTests.cs — verifies Marker.cs compiles; does NOT assert the value
+        File.WriteAllText(Path.Combine(testsDir, "MarkerTests.cs"), """
+            using Xunit;
+
+            namespace Demo.Tests;
+
+            public class MarkerTests
+            {
+                [Fact]
+                public void Marker_Value_IsNotEmpty()
+                {
+                    // Only verifies the string is non-empty — the agent can freely
+                    // change MARKER_BEFORE to MARKER_AFTER without failing this test.
+                    Assert.NotEmpty(Demo.Marker.Value);
+                }
+            }
+            """);
+
+        // Git init + initial commit + bare clone
+        RunGitInFixture(seedDir, "init", "-b", "main");
+        RunGitInFixture(seedDir, "config", "user.email", "test@example.com");
+        RunGitInFixture(seedDir, "config", "user.name", "Test");
+        RunGitInFixture(seedDir, "config", "commit.gpgsign", "false");
+        RunGitInFixture(seedDir, "add", ".");
+        RunGitInFixture(seedDir, "commit", "-m", "initial commit");
+
+        var bareRepoPath = Path.Combine(tempDir, "demo.git");
+        RunGitInFixture(tempDir, "clone", "--bare", seedDir, bareRepoPath);
+
+        return bareRepoPath;
+    }
+
+    private static void RunGitInFixture(string workingDirectory, params string[] arguments)
+    {
+        var startInfo = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        };
+        foreach (var arg in arguments) startInfo.ArgumentList.Add(arg);
+
+        using var process = Process.Start(startInfo)!;
+        process.WaitForExit(15_000);
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"git {string.Join(' ', arguments)} failed:\n{process.StandardError.ReadToEnd()}");
+        }
+    }
+
     private static async Task<AgentRun?> WaitForTerminalAsync(TestHost testHost, Guid runId, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
@@ -586,7 +877,8 @@ public sealed class RealHermesE2ETests
 
     private static TestHost BuildHost(
         Action<HermesOptions>? configureHermes = null,
-        Action<AgentWorkerOptions>? configureWorker = null)
+        Action<AgentWorkerOptions>? configureWorker = null,
+        Action<AgentWorkspaceOptions>? configureWorkspace = null)
     {
         var connection = new SqliteConnection("Data Source=:memory:");
         connection.Open();
@@ -648,6 +940,16 @@ public sealed class RealHermesE2ETests
         var workerOptionsDescriptor = builder.Services.Single(d => d.ServiceType == typeof(AgentWorkerOptions));
         builder.Services.Remove(workerOptionsDescriptor);
         builder.Services.AddSingleton(workerOptions);
+
+        // Phase 18.17 — allow tests to configure AgentWorkspaceOptions
+        // (e.g. set ProjectsBaseDirectory) so the Worker's IWorkspaceResolver
+        // resolves through the same base directory as the test Provisioner.
+        if (configureWorkspace is not null)
+        {
+            var workspaceDescriptor = builder.Services.Single(d => d.ServiceType == typeof(AgentWorkspaceOptions));
+            var existingOptions = (AgentWorkspaceOptions)workspaceDescriptor.ImplementationInstance!;
+            configureWorkspace(existingOptions);
+        }
 
         var host = builder.Build();
 

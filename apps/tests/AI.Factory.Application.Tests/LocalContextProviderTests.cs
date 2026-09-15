@@ -1,4 +1,6 @@
 using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Configuration;
+using AI.Factory.Application.Orchestration;
 using AI.Factory.Domain.Entities;
 using AI.Factory.Domain.Enums;
 using AI.Factory.Infrastructure.Context;
@@ -57,6 +59,15 @@ public sealed class LocalContextProviderTests : IDisposable
 
     private FactoryDbContext NewDbContext() => new(_options);
 
+    /// <summary>
+    /// Phase 18.17 — helper that constructs the shared resolver with unset
+    /// base directory, which exactly reproduces the prior CWD-relative
+    /// Path.GetFullPath behavior for every test that seeds an absolute
+    /// RootPath (Path.GetFullPath(absolutePath) == absolutePath unchanged).
+    /// </summary>
+    private static IWorkspaceResolver DefaultResolver() =>
+        new ProjectWorkspaceResolver(new AgentWorkspaceOptions());
+
     [Fact]
     public async Task QueryAsync_ReturnsRequirements_FromDatabase()
     {
@@ -77,7 +88,7 @@ public sealed class LocalContextProviderTests : IDisposable
         }
 
         await using var readDb = NewDbContext();
-        var provider = new LocalContextProvider(readDb);
+        var provider = new LocalContextProvider(readDb, DefaultResolver());
 
         var result = await provider.QueryAsync(
             new ContextQuery(_projectId, ContextCategory.ProjectRequirements));
@@ -91,7 +102,7 @@ public sealed class LocalContextProviderTests : IDisposable
     public async Task QueryAsync_ReturnsEmpty_WhenNoRequirementsExist()
     {
         await using var db = NewDbContext();
-        var provider = new LocalContextProvider(db);
+        var provider = new LocalContextProvider(db, DefaultResolver());
 
         var result = await provider.QueryAsync(
             new ContextQuery(_projectId, ContextCategory.ProjectRequirements));
@@ -106,7 +117,7 @@ public sealed class LocalContextProviderTests : IDisposable
             Path.Combine(_projectRoot, "architecture.md"), "# Architecture\n\nLayered.");
 
         await using var db = NewDbContext();
-        var provider = new LocalContextProvider(db);
+        var provider = new LocalContextProvider(db, DefaultResolver());
 
         var result = await provider.QueryAsync(
             new ContextQuery(_projectId, ContextCategory.ArchitectureDocuments));
@@ -119,7 +130,7 @@ public sealed class LocalContextProviderTests : IDisposable
     public async Task QueryAsync_ReturnsEmpty_WhenArchitectureFileDoesNotExist()
     {
         await using var db = NewDbContext();
-        var provider = new LocalContextProvider(db);
+        var provider = new LocalContextProvider(db, DefaultResolver());
 
         var result = await provider.QueryAsync(
             new ContextQuery(_projectId, ContextCategory.ArchitectureDocuments));
@@ -148,7 +159,7 @@ public sealed class LocalContextProviderTests : IDisposable
         }
 
         await using var readDb = NewDbContext();
-        var provider = new LocalContextProvider(readDb);
+        var provider = new LocalContextProvider(readDb, DefaultResolver());
 
         var result = await provider.QueryAsync(
             new ContextQuery(otherProjectId, ContextCategory.CodingStandards));
@@ -160,7 +171,7 @@ public sealed class LocalContextProviderTests : IDisposable
     public async Task QueryAsync_Throws_WhenProjectDoesNotExist()
     {
         await using var db = NewDbContext();
-        var provider = new LocalContextProvider(db);
+        var provider = new LocalContextProvider(db, DefaultResolver());
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             provider.QueryAsync(
@@ -180,7 +191,7 @@ public sealed class LocalContextProviderTests : IDisposable
         File.SetLastWriteTimeUtc(newerFile, DateTime.UtcNow);
 
         await using var db = NewDbContext();
-        var provider = new LocalContextProvider(db);
+        var provider = new LocalContextProvider(db, DefaultResolver());
 
         var result = await provider.QueryAsync(
             new ContextQuery(_projectId, ContextCategory.RelevantSourceFiles));
@@ -198,7 +209,7 @@ public sealed class LocalContextProviderTests : IDisposable
         await File.WriteAllTextAsync(Path.Combine(binDir, "generated.cs"), "class Generated {}");
 
         await using var db = NewDbContext();
-        var provider = new LocalContextProvider(db);
+        var provider = new LocalContextProvider(db, DefaultResolver());
 
         var result = await provider.QueryAsync(
             new ContextQuery(_projectId, ContextCategory.RelevantSourceFiles));
@@ -241,7 +252,7 @@ public sealed class LocalContextProviderTests : IDisposable
         }
 
         await using var readDb = NewDbContext();
-        var provider = new LocalContextProvider(readDb);
+        var provider = new LocalContextProvider(readDb, DefaultResolver());
 
         var result = await provider.QueryAsync(
             new ContextQuery(_projectId, ContextCategory.PreviousTaskOutputs));
@@ -283,7 +294,7 @@ public sealed class LocalContextProviderTests : IDisposable
         }
 
         await using var readDb = NewDbContext();
-        var provider = new LocalContextProvider(readDb);
+        var provider = new LocalContextProvider(readDb, DefaultResolver());
 
         var result = await provider.QueryAsync(
             new ContextQuery(_projectId, ContextCategory.PreviousAgentResults));
@@ -297,11 +308,182 @@ public sealed class LocalContextProviderTests : IDisposable
     public async Task QueryAsync_ReturnsEmpty_ForTestFailures_NoDataSourceYet()
     {
         await using var db = NewDbContext();
-        var provider = new LocalContextProvider(db);
+        var provider = new LocalContextProvider(db, DefaultResolver());
 
         var result = await provider.QueryAsync(
             new ContextQuery(_projectId, ContextCategory.TestFailures));
 
         Assert.Empty(result.Documents);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Phase 18.17 — workspace resolver integration tests
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Phase 18.17 §5 — proves ProjectsBaseDirectory is honored by
+    /// LocalContextProvider, not ignored in favor of the process CWD.
+    /// Creates a Project with a relative RootPath, configures a base
+    /// directory, and confirms the provider reads the file correctly from
+    /// the base-resolved absolute path.
+    /// </summary>
+    [Fact]
+    public async Task QueryAsync_UsesWorkspaceResolver_ProjectsBaseDirectory_IsHonored()
+    {
+        // Arrange: base directory + relative RootPath that only resolves correctly
+        // when combined with the base (not the process CWD).
+        var baseDir = Path.Combine(Path.GetTempPath(), "aifcp17", Guid.NewGuid().ToString("N")[..8]);
+        var relativeSlug = "proj-" + Guid.NewGuid().ToString("N")[..6];
+        var absoluteProjectDir = Path.Combine(baseDir, relativeSlug);
+        Directory.CreateDirectory(absoluteProjectDir);
+
+        try
+        {
+            // Write a known file to the absolute path.
+            await File.WriteAllTextAsync(
+                Path.Combine(absoluteProjectDir, "architecture.md"), "# Base Dir Architecture");
+
+            var relativeProjectId = Guid.NewGuid();
+
+            await using (var db = NewDbContext())
+            {
+                db.Projects.Add(new Project
+                {
+                    Id = relativeProjectId,
+                    Name = "Relative Root Project",
+                    Slug = relativeSlug,
+                    // Relative path — only resolves correctly against baseDir, not CWD.
+                    RootPath = relativeSlug,
+                    CreatedAtUtc = DateTime.UtcNow,
+                    UpdatedAtUtc = DateTime.UtcNow
+                });
+                await db.SaveChangesAsync();
+            }
+
+            var options = new AgentWorkspaceOptions { ProjectsBaseDirectory = baseDir };
+            var resolver = new ProjectWorkspaceResolver(options);
+
+            await using var readDb = NewDbContext();
+            var provider = new LocalContextProvider(readDb, resolver);
+
+            // Act
+            var result = await provider.QueryAsync(
+                new ContextQuery(relativeProjectId, ContextCategory.ArchitectureDocuments));
+
+            // Assert: file found via base-directory resolution.
+            Assert.Single(result.Documents);
+            Assert.Contains("Base Dir Architecture", result.Documents[0].Content);
+        }
+        finally
+        {
+            if (Directory.Exists(baseDir))
+            {
+                try { Directory.Delete(baseDir, recursive: true); } catch { /* best-effort */ }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Phase 18.17 §5 — proves that when workspace resolution fails (e.g. the
+    /// workspace directory does not exist), LocalContextProvider returns empty
+    /// rather than throwing — preserving the prior soft-failure behavior for
+    /// filesystem-backed queries.
+    /// </summary>
+    [Fact]
+    public async Task QueryAsync_ReturnsEmpty_WhenWorkspaceResolutionFails()
+    {
+        var nonExistentId = Guid.NewGuid();
+
+        await using (var db = NewDbContext())
+        {
+            db.Projects.Add(new Project
+            {
+                Id = nonExistentId,
+                Name = "Ghost Project",
+                Slug = "ghost",
+                // Absolute path that does not exist.
+                RootPath = Path.Combine(Path.GetTempPath(), "aifcp17-ghost-" + Guid.NewGuid().ToString("N")),
+                CreatedAtUtc = DateTime.UtcNow,
+                UpdatedAtUtc = DateTime.UtcNow
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await using var readDb = NewDbContext();
+        // Default resolver: existence check will fail → IsValid = false → empty.
+        var provider = new LocalContextProvider(readDb, DefaultResolver());
+
+        var archResult = await provider.QueryAsync(
+            new ContextQuery(nonExistentId, ContextCategory.ArchitectureDocuments));
+        var srcResult = await provider.QueryAsync(
+            new ContextQuery(nonExistentId, ContextCategory.RelevantSourceFiles));
+
+        Assert.Empty(archResult.Documents);
+        Assert.Empty(srcResult.Documents);
+    }
+
+    /// <summary>
+    /// Phase 18.17 §5 — proves that when ProjectsBaseDirectory is configured,
+    /// changing the process working directory does NOT alter the resolved path,
+    /// because the base-directory anchor is fixed at configuration time rather
+    /// than determined from the ambient CWD at resolution time.
+    /// </summary>
+    [Fact]
+    public async Task QueryAsync_ReturnsEmpty_WhenCwdChanges_ButBaseDirectoryConfigured()
+    {
+        // The project's relative RootPath will only be correct under the configured base.
+        var baseDir = Path.Combine(Path.GetTempPath(), "aifcp17cwd", Guid.NewGuid().ToString("N")[..8]);
+        var relativeSlug = "wksp-" + Guid.NewGuid().ToString("N")[..6];
+        var absoluteProjectDir = Path.Combine(baseDir, relativeSlug);
+        Directory.CreateDirectory(absoluteProjectDir);
+
+        var originalCwd = Directory.GetCurrentDirectory();
+
+        try
+        {
+            var relProjectId = Guid.NewGuid();
+
+            await using (var db = NewDbContext())
+            {
+                db.Projects.Add(new Project
+                {
+                    Id = relProjectId,
+                    Name = "CWD Test Project",
+                    Slug = relativeSlug,
+                    RootPath = relativeSlug,
+                    CreatedAtUtc = DateTime.UtcNow,
+                    UpdatedAtUtc = DateTime.UtcNow
+                });
+                await db.SaveChangesAsync();
+            }
+
+            var options = new AgentWorkspaceOptions { ProjectsBaseDirectory = baseDir };
+            var resolver = new ProjectWorkspaceResolver(options);
+
+            // Resolve BEFORE changing CWD.
+            await using var db1 = NewDbContext();
+            var project = (await db1.Projects.FindAsync(relProjectId))!;
+            var resolutionBefore = resolver.Resolve(project);
+
+            // Change CWD to something completely different — must not affect resolution.
+            Directory.SetCurrentDirectory(Path.GetTempPath());
+
+            var resolutionAfter = resolver.Resolve(project);
+
+            // Both resolutions must agree on the same absolute path.
+            Assert.True(resolutionBefore.IsValid, resolutionBefore.FailureReason);
+            Assert.True(resolutionAfter.IsValid, resolutionAfter.FailureReason);
+            Assert.Equal(resolutionBefore.Path, resolutionAfter.Path);
+            Assert.Equal(absoluteProjectDir, resolutionBefore.Path, ignoreCase: true);
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(originalCwd);
+
+            if (Directory.Exists(baseDir))
+            {
+                try { Directory.Delete(baseDir, recursive: true); } catch { /* best-effort */ }
+            }
+        }
     }
 }

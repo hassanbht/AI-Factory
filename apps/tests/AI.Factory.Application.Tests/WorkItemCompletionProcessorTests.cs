@@ -1,4 +1,5 @@
 using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Configuration;
 using AI.Factory.Application.Learning;
 using AI.Factory.Application.Orchestration;
 using AI.Factory.Domain.Entities;
@@ -106,7 +107,7 @@ public sealed class WorkItemCompletionProcessorTests : IDisposable
         var validationRunRepository = new ValidationRunRepository(db);
         var reviewRunRepository = new ReviewRunRepository(db);
         var artifactRepository = new ArtifactRepository(db);
-        var contextProvider = new LocalContextProvider(db);
+        var contextProvider = new LocalContextProvider(db, new ProjectWorkspaceResolver(new AgentWorkspaceOptions()));
         var reviewContextBuilder = new ReviewContextBuilder(contextProvider, artifactRepository, validationRunRepository);
         var evaluationRunRepository = new EvaluationRunRepository(db);
         var learningService = new LearningService(new LearningStore(db));

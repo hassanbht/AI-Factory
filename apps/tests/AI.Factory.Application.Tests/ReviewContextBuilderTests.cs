@@ -1,3 +1,4 @@
+using AI.Factory.Application.Configuration;
 using AI.Factory.Application.Orchestration;
 using AI.Factory.Domain.Entities;
 using AI.Factory.Domain.Enums;
@@ -117,7 +118,7 @@ public sealed class ReviewContextBuilderTests : IDisposable
         var workItem = await readDb.WorkItems.SingleAsync(x => x.Id == workItemId);
 
         var builder = new ReviewContextBuilder(
-            new LocalContextProvider(readDb),
+            new LocalContextProvider(readDb, new ProjectWorkspaceResolver(new AgentWorkspaceOptions())),
             new ArtifactRepository(readDb),
             new ValidationRunRepository(readDb));
 
@@ -157,7 +158,7 @@ public sealed class ReviewContextBuilderTests : IDisposable
         var workItem = await readDb.WorkItems.SingleAsync(x => x.Id == workItemId);
 
         var builder = new ReviewContextBuilder(
-            new LocalContextProvider(readDb),
+            new LocalContextProvider(readDb, new ProjectWorkspaceResolver(new AgentWorkspaceOptions())),
             new ArtifactRepository(readDb),
             new ValidationRunRepository(readDb));
 

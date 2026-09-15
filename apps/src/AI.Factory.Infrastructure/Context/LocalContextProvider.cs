@@ -1,4 +1,5 @@
 using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Orchestration;
 using AI.Factory.Domain.Entities;
 using AI.Factory.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -32,11 +33,23 @@ public sealed class LocalContextProvider : IContextProvider
     };
 
     private readonly FactoryDbContext _db;
+    private readonly IWorkspaceResolver _workspaceResolver;
     private readonly ILearningStore? _learningStore;
 
-    public LocalContextProvider(FactoryDbContext db, ILearningStore? learningStore = null)
+    /// <summary>
+    /// Phase 18.17 — <paramref name="workspaceResolver"/> is the authoritative
+    /// workspace resolution path shared with AgentOrchestrator, HermesAgentExecutor,
+    /// and VerificationGate. Context queries now honor ProjectsBaseDirectory and
+    /// AllowedRoot identically to agent execution — no second Path.GetFullPath
+    /// resolution exists anywhere in the solution after this change.
+    /// </summary>
+    public LocalContextProvider(
+        FactoryDbContext db,
+        IWorkspaceResolver workspaceResolver,
+        ILearningStore? learningStore = null)
     {
         _db = db;
+        _workspaceResolver = workspaceResolver;
         _learningStore = learningStore;
     }
 
@@ -120,12 +133,18 @@ public sealed class LocalContextProvider : IContextProvider
     {
         var project = await GetProjectOrThrow(query.ProjectId, cancellationToken);
 
-        if (string.IsNullOrWhiteSpace(project.RootPath) || !Directory.Exists(project.RootPath))
+        // Phase 18.17 — resolve through the shared IWorkspaceResolver (honors
+        // ProjectsBaseDirectory + AllowedRoot) instead of raw Path.GetFullPath.
+        // Returns empty on an unresolvable workspace (graceful degradation —
+        // same soft-failure as the prior "directory doesn't exist" check).
+        var workspace = _workspaceResolver.Resolve(project);
+
+        if (!workspace.IsValid)
         {
             return new ContextResult(Array.Empty<ContextDocument>());
         }
 
-        var rootFullPath = Path.GetFullPath(project.RootPath);
+        var rootFullPath = workspace.Path!;
 
         foreach (var fileName in candidateFileNames)
         {
@@ -162,12 +181,15 @@ public sealed class LocalContextProvider : IContextProvider
     {
         var project = await GetProjectOrThrow(query.ProjectId, cancellationToken);
 
-        if (string.IsNullOrWhiteSpace(project.RootPath) || !Directory.Exists(project.RootPath))
+        // Phase 18.17 — same single resolver used by QueryProjectFileAsync above.
+        var workspace = _workspaceResolver.Resolve(project);
+
+        if (!workspace.IsValid)
         {
             return new ContextResult(Array.Empty<ContextDocument>());
         }
 
-        var rootFullPath = Path.GetFullPath(project.RootPath);
+        var rootFullPath = workspace.Path!;
 
         var files = Directory.EnumerateFiles(rootFullPath, "*", SearchOption.AllDirectories)
             .Where(path => SourceFileExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))

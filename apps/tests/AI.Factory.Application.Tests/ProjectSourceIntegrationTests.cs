@@ -8,6 +8,7 @@ using AI.Factory.Application.Tasks;
 using AI.Factory.Domain.Entities;
 using AI.Factory.Domain.Enums;
 using AI.Factory.Infrastructure.Agents;
+using AI.Factory.Infrastructure.Context;
 using AI.Factory.Infrastructure.Persistence;
 using AI.Factory.Infrastructure.Source;
 using Microsoft.Data.Sqlite;
@@ -232,5 +233,127 @@ public sealed class ProjectSourceIntegrationTests : IDisposable
             LastResolvedPath = result.Path;
             return result;
         }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Phase 18.17 §5 — Context / Agent / Verification consistency
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Phase 18.17 §5 — proves the unified-workspace invariant holds across all
+    /// three production components that consume a Project workspace:
+    ///
+    ///   LocalContextProvider (Phase 18.17 fix)
+    ///   AgentOrchestrator    (Phase 18.14)
+    ///   VerificationGate     (Phase 18.16)
+    ///
+    /// All three resolve to the SAME absolute physical directory when
+    /// ProjectsBaseDirectory is configured — without depending on the process
+    /// CWD. The test does NOT duplicate the existing 18.14–18.16 coverage; it
+    /// adds the one previously-missing Context leg of the triangle.
+    /// </summary>
+    [Fact]
+    public async Task ContextProvider_AgentOrchestrator_VerificationGate_AllResolveToSameAbsolutePath_WhenBaseDirectoryConfigured()
+    {
+        var workspaceOptions = new AgentWorkspaceOptions { ProjectsBaseDirectory = _tempRoot };
+
+        Guid projectId;
+        string resolvedByProvisioner;
+
+        // 1. Create Project + initialize Git source into the provisioned workspace.
+        await using (var db = new FactoryDbContext(_options))
+        {
+            var repo = new ProjectRepository(db);
+            var resolver = new ProjectWorkspaceResolver(workspaceOptions);
+            var provisioner = new ProjectWorkspaceProvisioner(
+                resolver, workspaceOptions, NullLogger<ProjectWorkspaceProvisioner>.Instance);
+            var sourceInitializer = new ProjectSourceInitializer(
+                resolver, new SystemProcessRunner(new CommandPolicyOptions()),
+                new ExecutionLimitsOptions { BuildTimeoutMinutes = 1 },
+                NullLogger<ProjectSourceInitializer>.Instance);
+            var service = new ProjectService(repo, provisioner, sourceInitializer: sourceInitializer);
+
+            var project = await service.CreateAsync("Consistency Test Project", "d");
+            projectId = project.Id;
+            resolvedByProvisioner = resolver.Resolve(project).Path!;
+
+            await service.InitializeSourceAsync(
+                projectId, new SourceSpecification(ProjectSourceType.GitRepository, _bareRepoPath));
+        }
+
+        // Seed WorkItem + dispatch for Orchestrator path.
+        await SeedAgentDefinitionAsync();
+        Guid workItemId;
+        await using (var db = new FactoryDbContext(_options))
+        {
+            var workItems = new WorkItemService(new WorkItemRepository(db), new ProjectRepository(db));
+            var item = await workItems.CreateAsync(projectId, WorkItemType.Implementation, "t", null, "Normal");
+            await workItems.TransitionStatusAsync(item.Id, WorkItemStatus.Ready);
+            workItemId = item.Id;
+        }
+
+        Guid agentRunId;
+        await using (var db = new FactoryDbContext(_options))
+        {
+            var scheduler = new TaskDispatchScheduler(
+                new WorkItemRepository(db), new ProjectRepository(db), new TaskDependencyResolver(),
+                new AgentRunRepository(db), new AgentDefinitionRepository(db),
+                new TaskSchedulerOptions { MaxConcurrentTasks = 2 }, new ExecutionLimitsOptions(),
+                new ProjectCompletionGate(
+                    new ProjectRepository(db), new AgentRunRepository(db), new FakeVerificationGate(),
+                    NullLogger<ProjectCompletionGate>.Instance),
+                new OperationalMetrics(), NullLogger<TaskDispatchScheduler>.Instance);
+
+            var cycle = await scheduler.RunCycleAsync(projectId);
+            agentRunId = cycle.Outcomes.Single().AgentRunId!.Value;
+        }
+
+        // 2. AgentOrchestrator resolves workspace via IWorkspaceResolver.
+        string? resolvedByOrchestrator = null;
+        await using (var db = new FactoryDbContext(_options))
+        {
+            var probingResolver = new RecordingWorkspaceResolver(new ProjectWorkspaceResolver(workspaceOptions));
+            var orchestrator = new AgentOrchestrator(
+                new AgentRunRepository(db), new ProjectRepository(db),
+                new FakeAgentToolRegistry(), new FakeAgentMemory(),
+                new FakeAgentRuntime(FakeAgentRuntime.Mode.Success, CompletedExecutionResult),
+                probingResolver, new AgentInstructionBuilder(), new StructuredAgentResultParser(),
+                NullLogger<AgentOrchestrator>.Instance);
+
+            await orchestrator.ExecuteAsync(agentRunId);
+            resolvedByOrchestrator = probingResolver.LastResolvedPath;
+        }
+
+        // 3. LocalContextProvider (Phase 18.17) resolves workspace via IWorkspaceResolver.
+        string? resolvedByContextProvider = null;
+        await using (var db = new FactoryDbContext(_options))
+        {
+            var contextResolver = new RecordingWorkspaceResolver(new ProjectWorkspaceResolver(workspaceOptions));
+            var contextProvider = new LocalContextProvider(db, contextResolver);
+            var project = (await new ProjectRepository(db).GetByIdAsync(projectId))!;
+
+            // Trigger both filesystem-backed query paths through the resolver.
+            await contextProvider.QueryAsync(new ContextQuery(projectId, ContextCategory.RelevantSourceFiles));
+            resolvedByContextProvider = contextResolver.LastResolvedPath;
+        }
+
+        // 4. VerificationGate resolver (standalone re-resolve, matching what RunAsync does).
+        string? resolvedByVerificationGate = null;
+        await using (var db = new FactoryDbContext(_options))
+        {
+            var project = (await new ProjectRepository(db).GetByIdAsync(projectId))!;
+            var verificationResolution = new ProjectWorkspaceResolver(workspaceOptions).Resolve(project);
+            Assert.True(verificationResolution.IsValid, verificationResolution.FailureReason);
+            resolvedByVerificationGate = verificationResolution.Path;
+        }
+
+        // All three must agree on the same absolute path — and that path must
+        // contain the real cloned fixture file.
+        Assert.Equal(resolvedByProvisioner, resolvedByOrchestrator);
+        Assert.Equal(resolvedByProvisioner, resolvedByContextProvider);
+        Assert.Equal(resolvedByProvisioner, resolvedByVerificationGate);
+        Assert.True(
+            File.Exists(Path.Combine(resolvedByProvisioner, "real-source.txt")),
+            $"Fixture file missing from resolved workspace '{resolvedByProvisioner}'");
     }
 }

@@ -65,7 +65,12 @@ public sealed class RepairDispatchTests : IDisposable
     private async Task<Guid> SeedProjectAsync()
     {
         await using var db = new FactoryDbContext(_options);
-        var project = await new ProjectService(new ProjectRepository(db)).CreateAsync("Repair Project", "d");
+        var repo = new ProjectRepository(db);
+        var project = await new ProjectService(repo).CreateAsync("Repair Project", "d");
+        // Phase 18.16 §12 — WorkItem creation now requires a source decision
+        // (Status != Created); this file is not exercising source init.
+        project.Status = ProjectStatus.Analyzing;
+        await repo.SaveChangesAsync();
         return project.Id;
     }
 

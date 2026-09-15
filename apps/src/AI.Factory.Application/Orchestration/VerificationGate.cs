@@ -20,17 +20,20 @@ public sealed class VerificationGate : IVerificationGate
 {
     private readonly IBuildExecutor _buildExecutor;
     private readonly ITestExecutor _testExecutor;
+    private readonly IWorkspaceResolver _workspaceResolver;
     private readonly ExecutionLimitsOptions _executionLimits;
     private readonly ILogger<VerificationGate> _logger;
 
     public VerificationGate(
         IBuildExecutor buildExecutor,
         ITestExecutor testExecutor,
+        IWorkspaceResolver workspaceResolver,
         ExecutionLimitsOptions executionLimits,
         ILogger<VerificationGate> logger)
     {
         _buildExecutor = buildExecutor;
         _testExecutor = testExecutor;
+        _workspaceResolver = workspaceResolver;
         _executionLimits = executionLimits;
         _logger = logger;
     }
@@ -51,8 +54,27 @@ public sealed class VerificationGate : IVerificationGate
 
         try
         {
+            // Phase 18.16 §15 — resolve through the SAME IWorkspaceResolver
+            // the Agent uses (Phase 18.14), rather than trusting the raw,
+            // un-resolved project.RootPath. This makes "Agent workspace ==
+            // Verification workspace" true by construction (shared
+            // resolution), not by the two independently-CWD-dependent
+            // resolutions happening to agree. No silent CWD fallback: a
+            // resolution failure is a deterministic verification failure.
+            var workspace = _workspaceResolver.Resolve(project);
+
+            if (!workspace.IsValid)
+            {
+                return Result(
+                    VerificationStatus.InfrastructureError,
+                    $"Workspace could not be resolved for verification: {workspace.FailureReason}",
+                    null, stopwatch);
+            }
+
+            var resolvedPath = workspace.Path!;
+
             var build = await _buildExecutor.BuildAsync(
-                new BuildRequest(project.RootPath, TimeSpan.FromMinutes(_executionLimits.BuildTimeoutMinutes)),
+                new BuildRequest(resolvedPath, TimeSpan.FromMinutes(_executionLimits.BuildTimeoutMinutes)),
                 cancellationToken);
 
             if (build.TimedOut)
@@ -73,7 +95,7 @@ public sealed class VerificationGate : IVerificationGate
             }
 
             var test = await _testExecutor.TestAsync(
-                new TestRequest(project.RootPath, TimeSpan.FromMinutes(_executionLimits.TestTimeoutMinutes)),
+                new TestRequest(resolvedPath, TimeSpan.FromMinutes(_executionLimits.TestTimeoutMinutes)),
                 cancellationToken);
 
             if (test.TimedOut)

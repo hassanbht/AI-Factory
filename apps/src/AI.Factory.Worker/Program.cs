@@ -309,6 +309,7 @@ builder.Services.AddScoped<IAgentMemory, LocalAgentMemoryProvider>();
 // the existing WorkspacePathGuard.
 var agentWorkspaceOptions = new AgentWorkspaceOptions();
 builder.Configuration.GetSection("AgentWorkspace").Bind(agentWorkspaceOptions);
+agentWorkspaceOptions.Validate();
 builder.Services.AddSingleton(agentWorkspaceOptions);
 builder.Services.AddScoped<IWorkspaceResolver, ProjectWorkspaceResolver>();
 

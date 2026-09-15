@@ -34,6 +34,18 @@ public sealed class WorkItemService
         var project = await _projects.GetByIdAsync(projectId, cancellationToken)
             ?? throw new NotFoundException($"Project '{projectId}' was not found.");
 
+        // Phase 18.16 §12 — a Project must not enter the execution path
+        // while its required source decision (GitRepository or explicit
+        // Empty, via ProjectService.InitializeSourceAsync) is still missing.
+        // Status stays Created until that decision succeeds, so this is the
+        // smallest existing lifecycle signal that distinguishes "not yet
+        // decided" from "decided" — no new state machine needed.
+        if (project.Status == ProjectStatus.Created)
+        {
+            throw new ConflictException(
+                $"Project '{projectId}' has no source initialized yet (status '{project.Status}'). Initialize the Project source before creating tasks.");
+        }
+
         var now = DateTime.UtcNow;
 
         var workItem = new WorkItem

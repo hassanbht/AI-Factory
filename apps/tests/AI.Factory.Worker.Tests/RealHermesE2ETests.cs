@@ -418,8 +418,15 @@ public sealed class RealHermesE2ETests
         await using (var scope = testHost.Host.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<FactoryDbContext>();
-            var project = await new ProjectService(new ProjectRepository(db)).CreateAsync("WorkItem Execution E2E Project", "d");
+            var projectRepo = new ProjectRepository(db);
+            var project = await new ProjectService(projectRepo).CreateAsync("WorkItem Execution E2E Project", "d");
             projectId = project.Id;
+
+            // Phase 18.16 §12 — WorkItem creation now requires a source
+            // decision (Status != Created); this E2E test is not exercising
+            // source init.
+            project.Status = ProjectStatus.Analyzing;
+            await projectRepo.SaveChangesAsync();
 
             await new AgentDefinitionRepository(db).CreateAsync(
                 new AgentDefinition { Name = "Coder", AgentType = "Implementation" });

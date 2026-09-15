@@ -73,13 +73,14 @@ public sealed class WorkItemExecutionIntegrationTests : IDisposable
         new OperationalMetrics(),
         NullLogger<TaskDispatchScheduler>.Instance);
 
-    private static AgentOrchestrator CreateOrchestrator(FactoryDbContext db, IAgentRuntime runtime) => new(
+    private static AgentOrchestrator CreateOrchestrator(
+        FactoryDbContext db, IAgentRuntime runtime, AgentWorkspaceOptions? workspaceOptions = null) => new(
         new AgentRunRepository(db),
         new ProjectRepository(db),
         new FakeAgentToolRegistry(),
         new FakeAgentMemory(),
         runtime,
-        new ProjectWorkspaceResolver(new AgentWorkspaceOptions()),
+        new ProjectWorkspaceResolver(workspaceOptions ?? new AgentWorkspaceOptions()),
         new AgentInstructionBuilder(),
         new StructuredAgentResultParser(),
         NullLogger<AgentOrchestrator>.Instance);
@@ -133,6 +134,43 @@ public sealed class WorkItemExecutionIntegrationTests : IDisposable
 
         project.RootPath = Path.Combine(_workspaceRoot, project.Slug);
         Directory.CreateDirectory(project.RootPath);
+        // Phase 18.16 §12 — WorkItem creation now requires a source decision
+        // (Status != Created); this file exercises scheduler/orchestrator
+        // wiring, not source initialization itself.
+        project.Status = ProjectStatus.Analyzing;
+        await repo.SaveChangesAsync();
+
+        return project.Id;
+    }
+
+    /// <summary>
+    /// Phase 18.15 — unlike <see cref="SeedProjectAsync"/>, this never manually
+    /// touches Project.RootPath or the filesystem: it goes through the real
+    /// ProjectService + ProjectWorkspaceProvisioner, exactly as
+    /// POST /api/projects does, proving a freshly created Project's workspace
+    /// is usable by the existing dispatch/orchestration pipeline without any
+    /// test-only workaround. No AllowedRoot here: Project's default RootPath
+    /// ("projects/{slug}") is relative, and the (unchanged, Phase 18.14)
+    /// resolver treats a relative RootPath as CWD-relative before applying
+    /// any AllowedRoot boundary, so this test uses the same unset-AllowedRoot
+    /// trust model as CreateOrchestrator's own default (see final report for
+    /// the AllowedRoot + relative-RootPath limitation this surfaced).
+    /// </summary>
+    private async Task<Guid> SeedProvisionedProjectAsync()
+    {
+        var options = new AgentWorkspaceOptions();
+
+        await using var db = new FactoryDbContext(_options);
+        var repo = new ProjectRepository(db);
+        var provisioner = new ProjectWorkspaceProvisioner(
+            new ProjectWorkspaceResolver(options), options, NullLogger<ProjectWorkspaceProvisioner>.Instance);
+
+        var project = await new ProjectService(repo, provisioner).CreateAsync("Provisioned Execution Project", "d");
+
+        // Phase 18.16 §12 — WorkItem creation now requires a source decision
+        // (Status != Created); this file exercises scheduler/orchestrator
+        // wiring, not source initialization itself.
+        project.Status = ProjectStatus.Analyzing;
         await repo.SaveChangesAsync();
 
         return project.Id;
@@ -373,5 +411,71 @@ public sealed class WorkItemExecutionIntegrationTests : IDisposable
 
         Assert.Equal(1, secondCycle.DispatchedCount);
         Assert.Equal(dependentId, secondCycle.Outcomes.Single(o => o.Dispatched).WorkItemId);
+    }
+
+    /// <summary>
+    /// Phase 18.15 §10/§15/§23 — the practical end-to-end gap this phase
+    /// closes: a Project created through the real ProjectService (no manual
+    /// RootPath/directory setup) reaches WorkItem dispatch and
+    /// AgentOrchestrator resolves its workspace successfully, because
+    /// ProjectService.CreateAsync provisioned Project.RootPath before
+    /// persisting. Before Phase 18.15 this failed deterministically at
+    /// workspace resolution (Phase 18.14 report).
+    /// </summary>
+    [Fact]
+    public async Task ProvisionedProject_WorkItemDispatch_AgentOrchestratorResolvesWorkspace()
+    {
+        var workspaceOptions = new AgentWorkspaceOptions();
+        var projectId = await SeedProvisionedProjectAsync();
+        await SeedAgentDefinitionAsync();
+        var workItemId = await SeedReadyWorkItemAsync(projectId);
+
+        string? resolvedPath = null;
+
+        try
+        {
+            await using (var verifyDb = new FactoryDbContext(_options))
+            {
+                var project = (await new ProjectRepository(verifyDb).GetByIdAsync(projectId))!;
+                var resolution = new ProjectWorkspaceResolver(workspaceOptions).Resolve(project);
+                Assert.True(resolution.IsValid, resolution.FailureReason);
+                Assert.True(Directory.Exists(resolution.Path));
+                resolvedPath = resolution.Path;
+
+                // §11/§15 verification-compatibility — VerificationGate/BuildExecutor/
+                // TestExecutor consume Project.RootPath directly (no second resolved
+                // path); with no AllowedRoot configured, GetFullPath(Project.RootPath)
+                // is exactly what both the Agent's resolver and a `dotnet build`/`dotnet
+                // test` invocation against that same relative path resolve to — the
+                // exact same directory.
+                Assert.Equal(resolution.Path, Path.GetFullPath(project.RootPath));
+            }
+
+            Guid agentRunId;
+            await using (var db = new FactoryDbContext(_options))
+            {
+                var cycle = await CreateScheduler(db).RunCycleAsync(projectId);
+                Assert.Equal(1, cycle.DispatchedCount);
+                agentRunId = cycle.Outcomes.Single().AgentRunId!.Value;
+            }
+
+            await using (var db = new FactoryDbContext(_options))
+            {
+                var runtime = new FakeAgentRuntime(FakeAgentRuntime.Mode.Success, CompletedExecutionResult);
+                var result = await CreateOrchestrator(db, runtime, workspaceOptions).ExecuteAsync(agentRunId);
+                Assert.True(result.Success);
+            }
+
+            await using var finalDb = new FactoryDbContext(_options);
+            var run = await new AgentRunRepository(finalDb).GetByIdAsync(agentRunId);
+            Assert.Equal(AgentRunStatus.Succeeded, run!.Status);
+        }
+        finally
+        {
+            if (resolvedPath is not null && Directory.Exists(resolvedPath))
+            {
+                Directory.Delete(resolvedPath, recursive: true);
+            }
+        }
     }
 }

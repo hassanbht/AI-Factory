@@ -85,7 +85,12 @@ public sealed class AgentRunWorkItemSyncTests : IDisposable
     private async Task<Guid> SeedRunningTaskAsync()
     {
         await using var db = new FactoryDbContext(_options);
-        var project = await new ProjectService(new ProjectRepository(db)).CreateAsync("Sync Project", "d");
+        var repo = new ProjectRepository(db);
+        var project = await new ProjectService(repo).CreateAsync("Sync Project", "d");
+        // Phase 18.16 §12 — WorkItem creation now requires a source decision
+        // (Status != Created); this file is not exercising source init.
+        project.Status = ProjectStatus.Analyzing;
+        await repo.SaveChangesAsync();
         var workItems = new WorkItemService(new WorkItemRepository(db), new ProjectRepository(db));
         var item = await workItems.CreateAsync(project.Id, WorkItemType.Implementation, "T", null, "Normal");
         await workItems.TransitionStatusAsync(item.Id, WorkItemStatus.Ready);

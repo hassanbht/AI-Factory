@@ -164,4 +164,121 @@ public sealed class WorkspaceResolverTests : IDisposable
         Assert.True(first.IsValid);
         Assert.True(second.IsValid);
     }
+
+    // ---------------- Phase 18.16 §2/§8 — ProjectsBaseDirectory ----------------
+
+    /// <summary>Backward-compatibility regression (spec §8/B7): unset ProjectsBaseDirectory must reproduce the exact prior CWD-relative behavior.</summary>
+    [Fact]
+    public void Resolve_ProjectsBaseDirectoryUnset_ReproducesPriorCwdRelativeBehavior()
+    {
+        var relativeSegment = Path.GetRelativePath(Directory.GetCurrentDirectory(), Path.Combine(_tempRoot, "cwd-relative"));
+        Directory.CreateDirectory(Path.Combine(_tempRoot, "cwd-relative"));
+
+        var resolver = new ProjectWorkspaceResolver(new AgentWorkspaceOptions { ProjectsBaseDirectory = null });
+        var result = resolver.Resolve(MakeProject(relativeSegment));
+
+        Assert.True(result.IsValid, result.FailureReason);
+        Assert.Equal(Path.GetFullPath(relativeSegment), result.Path);
+    }
+
+    [Fact]
+    public void Resolve_ProjectsBaseDirectoryConfigured_RelativeRootPath_ResolvesUnderBase()
+    {
+        var baseDir = Path.Combine(_tempRoot, "base");
+        var target = Path.Combine(baseDir, "my-project");
+        Directory.CreateDirectory(target);
+
+        var resolver = new ProjectWorkspaceResolver(new AgentWorkspaceOptions { ProjectsBaseDirectory = baseDir });
+        var result = resolver.Resolve(MakeProject("my-project"));
+
+        Assert.True(result.IsValid, result.FailureReason);
+        Assert.Equal(Path.GetFullPath(target), result.Path);
+    }
+
+    [Fact]
+    public void Resolve_ProjectsBaseDirectoryConfigured_AbsoluteRootPath_IsUnaffected()
+    {
+        var baseDir = Path.Combine(_tempRoot, "base");
+        Directory.CreateDirectory(baseDir);
+
+        var resolver = new ProjectWorkspaceResolver(new AgentWorkspaceOptions { ProjectsBaseDirectory = baseDir });
+        var result = resolver.Resolve(MakeProject(_tempRoot));
+
+        Assert.True(result.IsValid, result.FailureReason);
+        Assert.Equal(Path.GetFullPath(_tempRoot), result.Path);
+    }
+
+    [Fact]
+    public void Resolve_ProjectsBaseDirectoryConfigured_ChangingProcessCwd_DoesNotChangeResolution()
+    {
+        var baseDir = Path.Combine(_tempRoot, "base-cwd-independent");
+        var target = Path.Combine(baseDir, "my-project");
+        Directory.CreateDirectory(target);
+
+        var elsewhereCwd = Path.Combine(_tempRoot, "elsewhere-cwd");
+        Directory.CreateDirectory(elsewhereCwd);
+
+        var originalCwd = Directory.GetCurrentDirectory();
+        try
+        {
+            var resolver = new ProjectWorkspaceResolver(new AgentWorkspaceOptions { ProjectsBaseDirectory = baseDir });
+            var before = resolver.Resolve(MakeProject("my-project"));
+
+            Directory.SetCurrentDirectory(elsewhereCwd);
+            var after = resolver.Resolve(MakeProject("my-project"));
+
+            Assert.True(before.IsValid, before.FailureReason);
+            Assert.True(after.IsValid, after.FailureReason);
+            Assert.Equal(before.Path, after.Path);
+            Assert.Equal(Path.GetFullPath(target), after.Path);
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(originalCwd);
+        }
+    }
+
+    [Fact]
+    public void Resolve_ProjectsBaseDirectoryConfigured_WithAllowedRootConfigured_BothApply()
+    {
+        var baseDir = Path.Combine(_tempRoot, "base");
+        var target = Path.Combine(baseDir, "my-project");
+        Directory.CreateDirectory(target);
+
+        var resolver = new ProjectWorkspaceResolver(
+            new AgentWorkspaceOptions { ProjectsBaseDirectory = baseDir, AllowedRoot = baseDir });
+        var result = resolver.Resolve(MakeProject("my-project"));
+
+        Assert.True(result.IsValid, result.FailureReason);
+        Assert.Equal(Path.GetFullPath(target), result.Path);
+    }
+
+    [Fact]
+    public void Resolve_ProjectsBaseDirectoryOutsideAllowedRoot_IsRejectedDeterministically()
+    {
+        var baseDir = Path.Combine(_tempRoot, "base-outside-allowed");
+        var allowedRoot = Path.Combine(_tempRoot, "allowed-root");
+        Directory.CreateDirectory(Path.Combine(baseDir, "my-project"));
+        Directory.CreateDirectory(allowedRoot);
+
+        var resolver = new ProjectWorkspaceResolver(
+            new AgentWorkspaceOptions { ProjectsBaseDirectory = baseDir, AllowedRoot = allowedRoot });
+        var result = resolver.Resolve(MakeProject("my-project"));
+
+        Assert.False(result.IsValid);
+        Assert.Contains("outside", result.FailureReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Resolve_ProjectsBaseDirectoryConfigured_TraversalShapedRootPath_CannotEscapeBase_WhenAllowedRootIsBase()
+    {
+        var baseDir = Path.Combine(_tempRoot, "base-traversal");
+        Directory.CreateDirectory(baseDir);
+
+        var resolver = new ProjectWorkspaceResolver(
+            new AgentWorkspaceOptions { ProjectsBaseDirectory = baseDir, AllowedRoot = baseDir });
+        var result = resolver.Resolve(MakeProject(Path.Combine("..", "..", "escaped")));
+
+        Assert.False(result.IsValid);
+    }
 }

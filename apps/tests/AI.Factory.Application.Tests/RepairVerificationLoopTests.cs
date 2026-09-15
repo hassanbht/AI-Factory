@@ -148,6 +148,11 @@ public sealed class RepairVerificationLoopTests : IDisposable
 
         project.RootPath = Path.Combine(_workspaceRoot, project.Slug);
         Directory.CreateDirectory(project.RootPath);
+        // Phase 18.16 §12 — WorkItemService.CreateAsync now requires a
+        // Project's source decision to already be made (Status != Created);
+        // this file exercises repair/verification wiring, not source
+        // initialization, so seed straight past that gate.
+        project.Status = ProjectStatus.Analyzing;
         await repo.SaveChangesAsync();
 
         return project.Id;

@@ -88,7 +88,12 @@ public sealed class AgentRunProjectTaskLinkageTests : IDisposable
         var agentDefinitionId = await SeedAgentDefinitionAsync();
 
         await using var db = new FactoryDbContext(_options);
-        var project = await new ProjectService(new ProjectRepository(db)).CreateAsync("Task-Linked Project", "d");
+        var repo = new ProjectRepository(db);
+        var project = await new ProjectService(repo).CreateAsync("Task-Linked Project", "d");
+        // Phase 18.16 §12 — WorkItem creation now requires a source decision
+        // (Status != Created); this test is not exercising source init.
+        project.Status = ProjectStatus.Analyzing;
+        await repo.SaveChangesAsync();
         var task = await new WorkItemService(new WorkItemRepository(db), new ProjectRepository(db))
             .CreateAsync(project.Id, WorkItemType.Implementation, "T", null, "Normal");
         var run = new AgentRun { AgentDefinitionId = agentDefinitionId, ProjectId = project.Id, WorkItemId = task.Id };

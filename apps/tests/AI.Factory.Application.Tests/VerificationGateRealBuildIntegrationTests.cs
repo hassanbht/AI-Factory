@@ -18,10 +18,16 @@ namespace AI.Factory.Application.Tests;
 /// </summary>
 public sealed class VerificationGateRealBuildIntegrationTests
 {
-    private static string DomainProjectPath =>
+    // Phase 18.16 §15 — VerificationGate now resolves the workspace through
+    // IWorkspaceResolver first, which requires an existing DIRECTORY (same
+    // rule Agent workspace resolution already enforces); Project.RootPath is
+    // therefore the Domain project's DIRECTORY, not its .csproj file — dotnet
+    // build/test both accept a directory and locate the single project file
+    // inside it.
+    private static string DomainProjectDirectory =>
         Path.GetFullPath(Path.Combine(
             AppContext.BaseDirectory,
-            "../../../../../src/AI.Factory.Domain/AI.Factory.Domain.csproj"));
+            "../../../../../src/AI.Factory.Domain"));
 
     [Fact]
     public async Task VerifyAsync_RealDotNetBuildAndTest_ReturnsPassed()
@@ -30,10 +36,11 @@ public sealed class VerificationGateRealBuildIntegrationTests
         var gate = new VerificationGate(
             new DotNetBuildExecutor(processRunner),
             new DotNetTestExecutor(processRunner),
+            new ProjectWorkspaceResolver(new AI.Factory.Application.Configuration.AgentWorkspaceOptions()),
             new ExecutionLimitsOptions { BuildTimeoutMinutes = 2, TestTimeoutMinutes = 2 },
             NullLogger<VerificationGate>.Instance);
 
-        var project = new Project { Id = Guid.NewGuid(), Name = "Domain", Slug = "domain", RootPath = DomainProjectPath };
+        var project = new Project { Id = Guid.NewGuid(), Name = "Domain", Slug = "domain", RootPath = DomainProjectDirectory };
         var workItem = new WorkItem
         {
             Id = Guid.NewGuid(), ProjectId = project.Id, Title = "T", Description = "d", Status = WorkItemStatus.Testing.ToString()
@@ -45,20 +52,29 @@ public sealed class VerificationGateRealBuildIntegrationTests
         Assert.Equal(0, result.ExitCode);
     }
 
+    /// <summary>
+    /// Phase 18.16 §15 — a nonexistent Project workspace now fails
+    /// deterministically at the shared IWorkspaceResolver resolution step
+    /// (InfrastructureError, no process ever launched), rather than reaching
+    /// `dotnet build` and failing there with a nonzero exit — the same
+    /// "no silent CWD fallback" rule Agent workspace resolution already
+    /// enforces.
+    /// </summary>
     [Fact]
-    public async Task VerifyAsync_MissingProjectPath_ReturnsFailed()
+    public async Task VerifyAsync_MissingProjectPath_ReturnsInfrastructureError_ViaWorkspaceResolution()
     {
         var processRunner = new SystemProcessRunner();
         var gate = new VerificationGate(
             new DotNetBuildExecutor(processRunner),
             new DotNetTestExecutor(processRunner),
+            new ProjectWorkspaceResolver(new AI.Factory.Application.Configuration.AgentWorkspaceOptions()),
             new ExecutionLimitsOptions { BuildTimeoutMinutes = 1, TestTimeoutMinutes = 1 },
             NullLogger<VerificationGate>.Instance);
 
         var project = new Project
         {
             Id = Guid.NewGuid(), Name = "Missing", Slug = "missing",
-            RootPath = Path.Combine(Path.GetTempPath(), "definitely-does-not-exist.csproj")
+            RootPath = Path.Combine(Path.GetTempPath(), "ai-factory-definitely-does-not-exist-" + Guid.NewGuid().ToString("N"))
         };
         var workItem = new WorkItem
         {
@@ -67,6 +83,6 @@ public sealed class VerificationGateRealBuildIntegrationTests
 
         var result = await gate.VerifyAsync(project, workItem);
 
-        Assert.Equal(VerificationStatus.Failed, result.Status);
+        Assert.Equal(VerificationStatus.InfrastructureError, result.Status);
     }
 }

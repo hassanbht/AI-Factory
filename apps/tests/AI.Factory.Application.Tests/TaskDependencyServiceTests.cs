@@ -36,7 +36,12 @@ public sealed class TaskDependencyServiceTests : IDisposable
     private async Task<(Guid ProjectId, Guid TaskA, Guid TaskB)> SeedTwoTasksAsync()
     {
         await using var db = new FactoryDbContext(_options);
-        var project = await new ProjectService(new ProjectRepository(db)).CreateAsync("Dep Project", "d");
+        var repo = new ProjectRepository(db);
+        var project = await new ProjectService(repo).CreateAsync("Dep Project", "d");
+        // Phase 18.16 §12 — WorkItem creation now requires a source decision
+        // (Status != Created); this file is not exercising source init.
+        project.Status = ProjectStatus.Analyzing;
+        await repo.SaveChangesAsync();
         var workItems = CreateWorkItemService(db);
         var a = await workItems.CreateAsync(project.Id, WorkItemType.Implementation, "A", null, "Normal");
         var b = await workItems.CreateAsync(project.Id, WorkItemType.Implementation, "B", null, "Normal");
@@ -82,9 +87,15 @@ public sealed class TaskDependencyServiceTests : IDisposable
     public async Task AddDependencyAsync_CrossProject_Throws()
     {
         await using var db = new FactoryDbContext(_options);
-        var projects = new ProjectService(new ProjectRepository(db));
+        var projectRepo = new ProjectRepository(db);
+        var projects = new ProjectService(projectRepo);
         var p1 = await projects.CreateAsync("P1", "d");
         var p2 = await projects.CreateAsync("P2", "d");
+        // Phase 18.16 §12 — WorkItem creation now requires a source decision
+        // (Status != Created); this file is not exercising source init.
+        p1.Status = ProjectStatus.Analyzing;
+        p2.Status = ProjectStatus.Analyzing;
+        await projectRepo.SaveChangesAsync();
         var workItems = CreateWorkItemService(db);
         var taskA = await workItems.CreateAsync(p1.Id, WorkItemType.Implementation, "A", null, "Normal");
         var taskB = await workItems.CreateAsync(p2.Id, WorkItemType.Implementation, "B", null, "Normal");

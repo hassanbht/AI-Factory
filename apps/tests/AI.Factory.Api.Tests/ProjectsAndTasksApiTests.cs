@@ -15,11 +15,28 @@ public sealed class ProjectsAndTasksApiTests : IClassFixture<ApiTestFactory>
         _client = factory.CreateClient();
     }
 
-    private async Task<Guid> CreateProjectAsync(string? name = null)
+    /// <summary>
+    /// Phase 18.16 §12 — WorkItem creation now requires a Project's source
+    /// decision to already be made (Status != Created). Every caller of this
+    /// helper that goes on to create a Task defaults straight past that gate
+    /// with the simplest deterministic decision (Empty); the few
+    /// status-transition tests that specifically need to observe the raw
+    /// just-created "Created" state pass initializeSource: false.
+    /// </summary>
+    private async Task<Guid> CreateProjectAsync(string? name = null, bool initializeSource = true)
     {
         var response = await _client.PostAsJsonAsync("/api/projects", new { Name = name ?? $"Project {Guid.NewGuid():N}" });
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        return body.GetProperty("id").GetGuid();
+        var id = body.GetProperty("id").GetGuid();
+
+        if (initializeSource)
+        {
+            var sourceResponse = await _client.PostAsJsonAsync(
+                $"/api/projects/{id}/source", new { SourceType = "Empty" });
+            sourceResponse.EnsureSuccessStatusCode();
+        }
+
+        return id;
     }
 
     private async Task<Guid> CreateTaskAsync(Guid projectId, string? title = null)
@@ -74,7 +91,7 @@ public sealed class ProjectsAndTasksApiTests : IClassFixture<ApiTestFactory>
     [Fact]
     public async Task UpdateProjectStatus_ValidTransition_Returns200()
     {
-        var id = await CreateProjectAsync();
+        var id = await CreateProjectAsync(initializeSource: false);
 
         var response = await _client.PatchAsJsonAsync($"/api/projects/{id}/status", new { Status = "Analyzing" });
 
@@ -86,7 +103,7 @@ public sealed class ProjectsAndTasksApiTests : IClassFixture<ApiTestFactory>
     [Fact]
     public async Task UpdateProjectStatus_InvalidTransition_Returns409()
     {
-        var id = await CreateProjectAsync();
+        var id = await CreateProjectAsync(initializeSource: false);
 
         var response = await _client.PatchAsJsonAsync($"/api/projects/{id}/status", new { Status = "Completed" });
 
@@ -96,7 +113,7 @@ public sealed class ProjectsAndTasksApiTests : IClassFixture<ApiTestFactory>
     [Fact]
     public async Task UpdateProjectStatus_UnknownStatusName_Returns400()
     {
-        var id = await CreateProjectAsync();
+        var id = await CreateProjectAsync(initializeSource: false);
 
         var response = await _client.PatchAsJsonAsync($"/api/projects/{id}/status", new { Status = "NotAStatus" });
 

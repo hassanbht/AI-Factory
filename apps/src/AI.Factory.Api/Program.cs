@@ -320,8 +320,20 @@ builder.Services.AddScoped<IAgentMemory, LocalAgentMemoryProvider>();
 // the existing WorkspacePathGuard.
 var agentWorkspaceOptions = new AgentWorkspaceOptions();
 builder.Configuration.GetSection("AgentWorkspace").Bind(agentWorkspaceOptions);
+agentWorkspaceOptions.Validate();
 builder.Services.AddSingleton(agentWorkspaceOptions);
 builder.Services.AddScoped<IWorkspaceResolver, ProjectWorkspaceResolver>();
+
+// Phase 18.15 — Project Workspace Provisioning. Same lifetime/options as
+// IWorkspaceResolver above; ProjectService (registered earlier) picks this up
+// so a newly created Project's RootPath is provisioned before it is persisted.
+builder.Services.AddScoped<IProjectWorkspaceProvisioner, ProjectWorkspaceProvisioner>();
+
+// Phase 18.16 — Project Source Initialization. Lives in Infrastructure
+// (depends on IProcessRunner); ProjectService picks this up via its optional
+// constructor parameter so POST /api/projects/{id}/source can obtain/place
+// real source into the already-provisioned workspace.
+builder.Services.AddScoped<IProjectSourceInitializer, AI.Factory.Infrastructure.Source.ProjectSourceInitializer>();
 
 // Phase 18.1.5 — Agent Orchestration Service. The Worker hosts the actual
 // AgentRunWorker background loop; the API only needs IAgentOrchestrator
@@ -855,6 +867,34 @@ app.MapPost("/api/projects/{id}/approve", async (
     return Results.Ok(ToProjectDto(project));
 }).RequireRateLimiting("GeneralApi");
 
+// Phase 18.16 — the explicit source-initialization operation (spec §18):
+// separate from POST /api/projects because a Git clone/network operation can
+// fail independently of Project metadata creation. Reachable only once, from
+// Status == Created (ProjectService.InitializeSourceAsync rejects a repeat
+// call with 409, whether the first call succeeded or is simply already
+// underway/decided).
+app.MapPost("/api/projects/{id}/source", async (
+    string id,
+    InitializeProjectSourceRequest request,
+    ProjectService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!Guid.TryParse(id, out var parsedGuid) || parsedGuid == Guid.Empty)
+    {
+        throw new ValidationException("Invalid project identifier.");
+    }
+
+    if (!Enum.TryParse<ProjectSourceType>(request.SourceType, ignoreCase: true, out var sourceType) || !Enum.IsDefined(sourceType))
+    {
+        throw new ValidationException($"Invalid source type '{request.SourceType}'.");
+    }
+
+    var project = await service.InitializeSourceAsync(
+        parsedGuid, new SourceSpecification(sourceType, request.Location, request.Branch), cancellationToken);
+
+    return Results.Ok(ToProjectDto(project));
+}).RequireRateLimiting("GeneralApi");
+
 // ------------------------------------------------------------
 // Tasks (Phase 18.2)
 // ------------------------------------------------------------
@@ -1086,6 +1126,8 @@ static object ToProjectDto(Project project) => new
     project.Slug,
     project.Description,
     Status = project.Status.ToString(),
+    project.GitRepository,
+    project.GitBranch,
     project.CreatedAtUtc,
     project.UpdatedAtUtc
 };
@@ -1707,6 +1749,14 @@ public sealed record UpdateStatusRequest(string Status);
 /// purely for audit purposes, not a verified identity claim.
 /// </summary>
 public sealed record ApproveProjectRequest(string? Actor);
+
+/// <summary>
+/// Phase 18.16 — SourceType is "Empty" or "GitRepository" (parsed against
+/// ProjectSourceType). Location/Branch apply only to GitRepository and are
+/// never used as a filesystem destination — the Factory-owned
+/// Project.RootPath always is.
+/// </summary>
+public sealed record InitializeProjectSourceRequest(string SourceType, string? Location = null, string? Branch = null);
 
 public sealed record CreateWorkItemRequest(
     string Type,

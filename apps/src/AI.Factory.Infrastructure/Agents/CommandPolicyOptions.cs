@@ -8,7 +8,7 @@ namespace AI.Factory.Infrastructure.Agents;
 /// </summary>
 public sealed class CommandPolicyOptions
 {
-    public string[] AllowedCommands { get; set; } = { "docker", "dotnet" };
+    public string[] AllowedCommands { get; set; } = { "docker", "dotnet", "git" };
 
     public string[] DeniedCommands { get; set; } =
     {

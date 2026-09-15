@@ -739,6 +739,131 @@ public sealed class RealHermesE2ETests
     }
 
     /// <summary>
+    /// Phase 18.18 — Real Hermes Acceptance: Runs real Docker Hermes against
+    /// an initialized Project workspace from a bare Git fixture, verifies
+    /// host filesystem modifications, and executes VerificationGate.
+    /// Opt-in only via AI_FACTORY_HERMES_SMOKE_TEST=true.
+    /// </summary>
+    [Fact]
+    public async Task RealHermes_FullProjectLifecycle_WithRepair_WhenEnabled()
+    {
+        if (!Enabled)
+        {
+            return;
+        }
+
+        var fixtureTemp = Path.Combine(Path.GetTempPath(), "hermes-p1818-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(fixtureTemp);
+        var bareRepoPath = CreateDemoFixtureBareRepo(fixtureTemp);
+        var projectsBaseDir = Path.Combine(fixtureTemp, "workspaces");
+        Directory.CreateDirectory(projectsBaseDir);
+
+        using var testHost = BuildHost(
+            configureHermes: options =>
+            {
+                options.AdditionalEnvironmentVariables["OPENAI_BASE_URL"] = OmniRouteBaseUrl;
+                options.AdditionalEnvironmentVariables["OPENAI_API_KEY"] = "omniroute-local";
+            },
+            configureWorker: options =>
+            {
+                options.PollingInterval = TimeSpan.FromMilliseconds(200);
+            },
+            configureWorkspace: options =>
+            {
+                options.ProjectsBaseDirectory = projectsBaseDir;
+                options.AllowedRoot = fixtureTemp;
+            });
+
+        Guid projectId;
+        Guid workItemId;
+        Guid agentRunId;
+        string resolvedProjectRoot;
+
+        await using (var scope = testHost.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<FactoryDbContext>();
+            var projectRepo = new ProjectRepository(db);
+            var workspaceOptions = scope.ServiceProvider.GetRequiredService<AgentWorkspaceOptions>();
+            var resolver = new ProjectWorkspaceResolver(workspaceOptions);
+            var provisioner = new ProjectWorkspaceProvisioner(resolver, workspaceOptions, NullLogger<ProjectWorkspaceProvisioner>.Instance);
+            var projectService = new ProjectService(projectRepo, provisioner);
+
+            var project = await projectService.CreateAsync("Hermes Lifecycle", "Real Hermes Lifecycle acceptance");
+            projectId = project.Id;
+
+            var processRunner = new SystemProcessRunner();
+            var executionLimits = new ExecutionLimitsOptions { BuildTimeoutMinutes = 5 };
+            var sourceInitializer = new ProjectSourceInitializer(resolver, processRunner, executionLimits, NullLogger<ProjectSourceInitializer>.Instance);
+            var initResult = await sourceInitializer.InitializeAsync(
+                project, new SourceSpecification(ProjectSourceType.GitRepository, bareRepoPath, "main"), CancellationToken.None);
+            Assert.True(initResult.Success, $"Source init failed: {initResult.FailureReason}");
+
+            resolvedProjectRoot = resolver.Resolve(project).Path!;
+
+            var workItemRepo = new WorkItemRepository(db);
+            var workItem = new WorkItem
+            {
+                ProjectId = projectId,
+                Title = "Phase 18.18 Real Hermes Task",
+                Description = "Replace MARKER_BEFORE with MARKER_AFTER in src/Marker.cs",
+                Type = WorkItemType.Implementation,
+                Status = WorkItemStatus.Running.ToString(),
+                Priority = "Normal"
+            };
+            await workItemRepo.AddAsync(workItem);
+            await db.SaveChangesAsync();
+            workItemId = workItem.Id;
+
+            var runRepo = new AgentRunRepository(db);
+            var definition = (await new AgentDefinitionRepository(db).GetAllAsync()).First();
+
+            var run = new AgentRun
+            {
+                ProjectId = projectId,
+                WorkItemId = workItemId,
+                AgentDefinitionId = definition.Id,
+                Input = "In the file src/Marker.cs, replace the text 'MARKER_BEFORE' with 'MARKER_AFTER'. Do not change anything else."
+            };
+            run = await runRepo.CreateAsync(run);
+            run.TransitionTo(AgentRunStatus.Queued);
+            await runRepo.UpdateAsync(run);
+            agentRunId = run.Id;
+
+            var reloaded = (await runRepo.GetByIdAsync(agentRunId))!;
+            reloaded.Model = OmniRouteModel;
+            await runRepo.UpdateAsync(reloaded);
+        }
+
+        var worker = GetAgentRunWorker(testHost.Host);
+        using var cts = new CancellationTokenSource();
+        await worker.StartAsync(cts.Token);
+
+        var finalRun = await WaitForTerminalAsync(testHost, agentRunId, TimeSpan.FromSeconds(240));
+        await worker.StopAsync(CancellationToken.None);
+
+        Assert.NotNull(finalRun);
+        Assert.Equal(AgentRunStatus.Succeeded, finalRun!.Status);
+
+        var modifiedFile = Path.Combine(resolvedProjectRoot, "src", "Marker.cs");
+        Assert.True(File.Exists(modifiedFile));
+        var content = await File.ReadAllTextAsync(modifiedFile);
+        Assert.Contains("MARKER_AFTER", content);
+
+        await using (var scope = testHost.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<FactoryDbContext>();
+            var gate = scope.ServiceProvider.GetRequiredService<IVerificationGate>();
+            var project = (await new ProjectRepository(db).GetByIdAsync(projectId))!;
+            var workItem = (await new WorkItemRepository(db).GetByIdAsync(workItemId))!;
+
+            var verification = await gate.VerifyAsync(project, workItem, CancellationToken.None);
+            Assert.True(verification.Status == VerificationStatus.Passed);
+        }
+
+        try { Directory.Delete(fixtureTemp, recursive: true); } catch { /* best-effort */ }
+    }
+
+    /// <summary>
     /// Phase 18.17 — creates a local bare Git repository containing a
     /// minimal C# solution that builds and tests green. The production code
     /// in src/Marker.cs contains the string "MARKER_BEFORE" which the Agent

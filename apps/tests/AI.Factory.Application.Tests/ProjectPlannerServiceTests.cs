@@ -41,14 +41,14 @@ public sealed class ProjectPlannerServiceTests : IDisposable
 
     private const string ValidCandidateJson = """
         {"version":1,"status":"Succeeded","summary":"plan ready","output":"ok","data":{"plan":{"version":1,"summary":"s","tasks":[
-          {"planKey":"root","title":"Root task","type":"Implementation","priority":"Normal","dependsOn":[]},
-          {"planKey":"dependent","title":"Dependent task","type":"Test","priority":"Normal","dependsOn":["root"]}
+          {"planKey":"root","title":"Root task","type":"Implementation","priority":"Normal","dependsOn":[],"acceptanceCriteria":{"version":1,"criteria":[{"type":"FileExists","path":"README.md"}]}},
+          {"planKey":"dependent","title":"Dependent task","type":"Test","priority":"Normal","dependsOn":["root"],"acceptanceCriteria":{"version":1,"criteria":[{"type":"FileExists","path":"README.md"}]}}
         ]}},"warnings":[],"errors":[],"artifacts":[],"metadata":{}}
         """;
 
     private const string UnknownDependencyCandidateJson = """
         {"version":1,"status":"Succeeded","summary":"plan","output":"ok","data":{"plan":{"version":1,"tasks":[
-          {"planKey":"a","title":"A","type":"Implementation","priority":"Normal","dependsOn":["ghost"]}
+          {"planKey":"a","title":"A","type":"Implementation","priority":"Normal","dependsOn":["ghost"],"acceptanceCriteria":{"version":1,"criteria":[{"type":"FileExists","path":"README.md"}]}}
         ]}},"warnings":[],"errors":[],"artifacts":[],"metadata":{}}
         """;
 

@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Orchestration;
 using AI.Factory.Application.Exceptions;
 using AI.Factory.Domain.Entities;
 using AI.Factory.Domain.Enums;
@@ -139,6 +140,25 @@ public sealed class ProjectPlanService : IProjectPlanService
             {
                 throw new ValidationException($"Duplicate task PlanKey '{task.PlanKey}'.");
             }
+
+            // Phase 18.22 §2/§5 — every task in a NEWLY created plan must carry
+            // a machine-checkable acceptance contract. Phase 18.21 proved that
+            // build/test alone cannot tell "the agent did the work" from "the
+            // agent did nothing on an already-green repo"; a plan that never
+            // states observable evidence would silently reintroduce exactly
+            // that gap. Rejected before any persistence, so a plan is never
+            // partially written (§5). Historical WorkItems already in the
+            // database are untouched by this — the rule governs plan creation,
+            // not rows that predate it (§6).
+            var acceptance = AcceptanceCriteriaContract.Parse(task.AcceptanceCriteria);
+
+            if (acceptance.Status != AcceptanceCriteriaParseStatus.Valid)
+            {
+                throw new ValidationException(
+                    $"Task '{task.PlanKey}' has no usable acceptance criteria" +
+                    (acceptance.Error is null ? "." : $": {acceptance.Error}") +
+                    " Every planned task must declare machine-checkable evidence of completion.");
+            }
         }
 
         foreach (var task in request.Tasks)
@@ -229,7 +249,11 @@ public sealed class ProjectPlanService : IProjectPlanService
                 .Append(task.Title).Append('|')
                 .Append(task.Type).Append('|')
                 .Append(task.Priority).Append('|')
-                .Append(string.Join(",", task.DependsOn))
+                .Append(string.Join(",", task.DependsOn)).Append('|')
+                // Phase 18.22 — two plans that agree on every task but demand
+                // different evidence are different plans, so the idempotency
+                // hash has to see the acceptance contract too.
+                .Append(task.AcceptanceCriteria)
                 .Append('\n');
         }
 
@@ -263,6 +287,10 @@ public sealed class ProjectPlanService : IProjectPlanService
                 Status = WorkItemStatus.Ready.ToString(),
                 Priority = task.Priority,
                 PlanKey = task.PlanKey,
+                // Phase 18.22 §2/§28 — the validated contract rides into the
+                // pre-existing AcceptanceCriteria column, so IVerificationGate
+                // evaluates exactly what the plan committed to. No new column.
+                AcceptanceCriteria = task.AcceptanceCriteria,
                 CreatedAtUtc = now,
                 UpdatedAtUtc = now
             };
@@ -336,7 +364,12 @@ public sealed class ProjectPlanService : IProjectPlanService
                     .Where(d => byId.ContainsKey(d.DependsOnWorkItemId) && byId[d.DependsOnWorkItemId].PlanKey is not null)
                     .Select(d => byId[d.DependsOnWorkItemId].PlanKey!)
                     .OrderBy(k => k, StringComparer.Ordinal)
-                    .ToList()))
+                    .ToList(),
+                // Phase 18.22 — ComputePlanHash now covers the acceptance
+                // contract, so reconstruction has to carry it too; otherwise a
+                // repeated identical plan would hash differently from what was
+                // persisted and be rejected as a conflicting re-plan.
+                x.AcceptanceCriteria))
             .OrderBy(t => t.PlanKey, StringComparer.Ordinal)
             .ToList();
 

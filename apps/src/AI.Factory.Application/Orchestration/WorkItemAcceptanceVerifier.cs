@@ -87,72 +87,34 @@ public sealed class WorkItemAcceptanceVerifier : IWorkItemAcceptanceVerifier
 
     public AcceptanceVerificationResult Verify(WorkItem workItem, string workspacePath)
     {
-        var raw = workItem.AcceptanceCriteria;
+        // Phase 18.22 §3 — one parser, shared with PlannerResultMapper, so the
+        // contract a plan was accepted with is exactly the contract evaluated
+        // here later.
+        var parsed = AcceptanceCriteriaContract.Parse(workItem.AcceptanceCriteria);
 
-        if (string.IsNullOrWhiteSpace(raw) || !LooksLikeEnvelope(raw))
+        if (parsed.Status == AcceptanceCriteriaParseStatus.NotSpecified)
         {
             // Legacy free text (or nothing at all) is not a machine-checkable
             // contract and must never be reinterpreted as one.
             return new AcceptanceVerificationResult(AcceptanceVerificationStatus.NotSpecified, null, 0);
         }
 
-        AcceptanceCriteriaEnvelope? envelope;
-
-        try
+        if (parsed.Status == AcceptanceCriteriaParseStatus.Invalid)
         {
-            envelope = JsonSerializer.Deserialize<AcceptanceCriteriaEnvelope>(raw, JsonOptions);
-        }
-        catch (JsonException ex)
-        {
-            return Invalid($"Acceptance criteria JSON failed to parse: {ex.Message}");
-        }
-
-        if (envelope is null)
-        {
-            return Invalid("Acceptance criteria JSON parsed to null.");
-        }
-
-        if (envelope.Version != CurrentVersion)
-        {
-            return Invalid($"Acceptance criteria declare version '{envelope.Version}', only {CurrentVersion} is supported.");
-        }
-
-        if (envelope.Criteria is null || envelope.Criteria.Count == 0)
-        {
-            return Invalid("Acceptance criteria envelope contains no criteria.");
+            return Invalid(parsed.Error!);
         }
 
         var failures = new List<string>();
         var evaluated = 0;
 
-        foreach (var dto in envelope.Criteria)
+        foreach (var criterion in parsed.Criteria)
         {
-            if (!Enum.TryParse<AcceptanceCriterionType>(dto.Type, ignoreCase: true, out var type)
-                || !Enum.IsDefined(type))
-            {
-                return Invalid($"Unsupported acceptance criterion type '{dto.Type}'.");
-            }
-
             evaluated++;
 
             // Already proven by the build/test gate that ran before this.
-            if (type is AcceptanceCriterionType.BuildPasses or AcceptanceCriterionType.TestsPass)
+            if (criterion.Type is AcceptanceCriterionType.BuildPasses or AcceptanceCriterionType.TestsPass)
             {
                 continue;
-            }
-
-            if (string.IsNullOrWhiteSpace(dto.Path))
-            {
-                return Invalid($"Acceptance criterion '{type}' is missing the required 'path'.");
-            }
-
-            var needsValue = type is AcceptanceCriterionType.ExpectedTextPresent
-                or AcceptanceCriterionType.ExpectedTextAbsent
-                or AcceptanceCriterionType.ExpectedFileContent;
-
-            if (needsValue && string.IsNullOrEmpty(dto.Value))
-            {
-                return Invalid($"Acceptance criterion '{type}' for '{dto.Path}' is missing the required 'value'.");
             }
 
             string resolvedPath;
@@ -161,14 +123,14 @@ public sealed class WorkItemAcceptanceVerifier : IWorkItemAcceptanceVerifier
             {
                 // The contract is untrusted input like any other: a criterion
                 // must never be able to read outside the Project workspace.
-                resolvedPath = WorkspacePathGuard.EnsureWithinRoot(workspacePath, dto.Path!);
+                resolvedPath = WorkspacePathGuard.EnsureWithinRoot(workspacePath, criterion.Path!);
             }
             catch (SecurityViolationException ex)
             {
-                return Invalid($"Acceptance criterion path '{dto.Path}' is not allowed: {ex.Message}");
+                return Invalid($"Acceptance criterion path '{criterion.Path}' is not allowed: {ex.Message}");
             }
 
-            var failure = Evaluate(type, dto, resolvedPath);
+            var failure = Evaluate(criterion, resolvedPath);
 
             if (failure is not null)
             {
@@ -196,23 +158,23 @@ public sealed class WorkItemAcceptanceVerifier : IWorkItemAcceptanceVerifier
             AcceptanceVerificationStatus.Passed, $"All {evaluated} acceptance criteria met.", evaluated);
     }
 
-    private string? Evaluate(AcceptanceCriterionType type, AcceptanceCriterionDto dto, string resolvedPath)
+    private string? Evaluate(AcceptanceCriterion criterion, string resolvedPath)
     {
         var exists = File.Exists(resolvedPath);
 
-        if (type == AcceptanceCriterionType.FileExists)
+        if (criterion.Type == AcceptanceCriterionType.FileExists)
         {
-            return exists ? null : $"expected file '{dto.Path}' to exist";
+            return exists ? null : $"expected file '{criterion.Path}' to exist";
         }
 
-        if (type == AcceptanceCriterionType.FileAbsent)
+        if (criterion.Type == AcceptanceCriterionType.FileAbsent)
         {
-            return exists ? $"expected file '{dto.Path}' to be absent" : null;
+            return exists ? $"expected file '{criterion.Path}' to be absent" : null;
         }
 
         if (!exists)
         {
-            return $"file '{dto.Path}' does not exist";
+            return $"file '{criterion.Path}' does not exist";
         }
 
         string content;
@@ -223,28 +185,28 @@ public sealed class WorkItemAcceptanceVerifier : IWorkItemAcceptanceVerifier
 
             if (info.Length > MaxFileBytes)
             {
-                return $"file '{dto.Path}' is too large to verify ({info.Length} bytes)";
+                return $"file '{criterion.Path}' is too large to verify ({info.Length} bytes)";
             }
 
             content = File.ReadAllText(resolvedPath);
         }
         catch (IOException ex)
         {
-            return $"file '{dto.Path}' could not be read: {ex.Message}";
+            return $"file '{criterion.Path}' could not be read: {ex.Message}";
         }
         catch (UnauthorizedAccessException ex)
         {
-            return $"file '{dto.Path}' could not be read: {ex.Message}";
+            return $"file '{criterion.Path}' could not be read: {ex.Message}";
         }
 
-        return type switch
+        return criterion.Type switch
         {
-            AcceptanceCriterionType.ExpectedTextPresent when !content.Contains(dto.Value!, StringComparison.Ordinal) =>
-                $"expected '{dto.Path}' to contain \"{Truncate(dto.Value!, 120)}\"",
-            AcceptanceCriterionType.ExpectedTextAbsent when content.Contains(dto.Value!, StringComparison.Ordinal) =>
-                $"expected '{dto.Path}' to no longer contain \"{Truncate(dto.Value!, 120)}\"",
-            AcceptanceCriterionType.ExpectedFileContent when !ContentEquals(content, dto.Value!) =>
-                $"expected '{dto.Path}' to contain exactly \"{Truncate(dto.Value!, 120)}\"",
+            AcceptanceCriterionType.ExpectedTextPresent when !content.Contains(criterion.Value!, StringComparison.Ordinal) =>
+                $"expected '{criterion.Path}' to contain \"{Truncate(criterion.Value!, 120)}\"",
+            AcceptanceCriterionType.ExpectedTextAbsent when content.Contains(criterion.Value!, StringComparison.Ordinal) =>
+                $"expected '{criterion.Path}' to no longer contain \"{Truncate(criterion.Value!, 120)}\"",
+            AcceptanceCriterionType.ExpectedFileContent when !ContentEquals(content, criterion.Value!) =>
+                $"expected '{criterion.Path}' to contain exactly \"{Truncate(criterion.Value!, 120)}\"",
             _ => null
         };
     }
@@ -256,17 +218,6 @@ public sealed class WorkItemAcceptanceVerifier : IWorkItemAcceptanceVerifier
     private static string Normalize(string text) =>
         text.Replace("\r\n", "\n", StringComparison.Ordinal).Trim();
 
-    /// <summary>
-    /// Only text that is actually shaped like the envelope is treated as a
-    /// contract; everything else is legacy free text (§9). Deliberately a
-    /// cheap structural check — the real parse still has to succeed.
-    /// </summary>
-    private static bool LooksLikeEnvelope(string raw)
-    {
-        var trimmed = raw.TrimStart();
-        return trimmed.StartsWith('{') && raw.Contains("\"criteria\"", StringComparison.OrdinalIgnoreCase);
-    }
-
     private AcceptanceVerificationResult Invalid(string reason)
     {
         _logger.LogWarning("WorkItemAcceptanceContractInvalid Reason={Reason}", reason);
@@ -275,20 +226,4 @@ public sealed class WorkItemAcceptanceVerifier : IWorkItemAcceptanceVerifier
 
     private static string Truncate(string text, int max = MaxSummaryLength) =>
         text.Length <= max ? text : text[..max] + "…(truncated)";
-
-    private sealed class AcceptanceCriteriaEnvelope
-    {
-        public int Version { get; set; }
-
-        public List<AcceptanceCriterionDto>? Criteria { get; set; }
-    }
-
-    private sealed class AcceptanceCriterionDto
-    {
-        public string? Type { get; set; }
-
-        public string? Path { get; set; }
-
-        public string? Value { get; set; }
-    }
 }

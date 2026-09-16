@@ -22,6 +22,10 @@ namespace AI.Factory.Application.Tests;
 /// </summary>
 public sealed class ProjectPlanSchedulerIntegrationTests : IDisposable
 {
+    /// <summary>Phase 18.22 §2 — a new plan's tasks must declare machine-checkable evidence of completion.</summary>
+    private const string ValidCriteria =
+        """{"version":1,"criteria":[{"type":"FileExists","path":"README.md"}]}""";
+
     private readonly SqliteConnection _connection;
     private readonly DbContextOptions<FactoryDbContext> _options;
 
@@ -97,8 +101,8 @@ public sealed class ProjectPlanSchedulerIntegrationTests : IDisposable
                 projectId, "Integration plan",
                 new[]
                 {
-                    new PlannedWorkItemInput("root", "Root task", "d", WorkItemType.Implementation, "Normal", Array.Empty<string>()),
-                    new PlannedWorkItemInput("dependent", "Dependent task", "d", WorkItemType.Implementation, "Normal", new[] { "root" })
+                    new PlannedWorkItemInput("root", "Root task", "d", WorkItemType.Implementation, "Normal", Array.Empty<string>(), ValidCriteria),
+                    new PlannedWorkItemInput("dependent", "Dependent task", "d", WorkItemType.Implementation, "Normal", new[] { "root" }, ValidCriteria)
                 }));
 
             rootWorkItemId = plan.Tasks.Single(t => t.PlanKey == "root").WorkItemId;

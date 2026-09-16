@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Orchestration;
 using AI.Factory.Application.Agents;
 using AI.Factory.Application.Exceptions;
 using AI.Factory.Domain.Entities;
@@ -222,16 +223,22 @@ public sealed class ProjectPlanner : IProjectPlanner
         var workItemTypes = string.Join(", ", Enum.GetNames<WorkItemType>());
         var priorities = string.Join(", ", ProjectPlanService.ValidPriorities);
 
+        var criterionTypes = string.Join(", ", Enum.GetNames<AcceptanceCriterionType>());
+
         var jsonShape =
             """
             {"plan":{"version":1,"summary":"<one-line plan summary>","tasks":[
               {"planKey":"<stable.dotted.key>","title":"<task title>","description":"<task description>",
                 "type":"<one of: WORK_ITEM_TYPES>","priority":"<one of: PRIORITIES>",
-                "dependsOn":["<planKey of a prerequisite task>", "..."]}
+                "dependsOn":["<planKey of a prerequisite task>", "..."],
+                "acceptanceCriteria":{"version":1,"criteria":[
+                  {"type":"<one of: CRITERION_TYPES>","path":"<repository-relative file path>","value":"<expected text>"}
+                ]}}
             ]}}
             """
             .Replace("WORK_ITEM_TYPES", workItemTypes)
-            .Replace("PRIORITIES", priorities);
+            .Replace("PRIORITIES", priorities)
+            .Replace("CRITERION_TYPES", criterionTypes);
 
         return $"""
             You are the Planner Agent for AI Factory. Produce a candidate software
@@ -255,6 +262,19 @@ public sealed class ProjectPlanner : IProjectPlanner
               same plan, describing real prerequisite relationships — never invent
               a dependency that is not actually required.
             - Use only the listed "type" and "priority" values above.
+            - EVERY task must carry "acceptanceCriteria" stating observable
+              evidence that the task is done. The Factory verifies these itself
+              against the real repository — a task whose completion cannot be
+              observed will be rejected and the whole plan refused.
+            - Use only the listed criterion types above. "path" is always a
+              repository-relative file path. "value" is the exact expected text
+              and is required for ExpectedTextPresent, ExpectedTextAbsent and
+              ExpectedFileContent; BuildPasses and TestsPass take neither.
+            - Prefer criteria that cannot be satisfied by accident: name the
+              specific file the task changes and the specific text it must (or
+              must no longer) contain.
+            - Never put a shell command, script, regular expression or
+              natural-language assertion in a criterion — only the listed types.
             - Do not write implementation code.
             - Do not include any prose outside the single structured JSON object.
             - Do not attempt to execute tools, modify files, run shell commands, or

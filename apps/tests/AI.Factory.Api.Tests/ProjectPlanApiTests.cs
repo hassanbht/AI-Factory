@@ -41,7 +41,7 @@ public sealed class ProjectPlanApiTests : IClassFixture<ApiTestFactory>
         Summary = "Test plan",
         Tasks = new[]
         {
-            new { PlanKey = key, Title = "Task A", Description = "d", Type = "Implementation", Priority = "Normal", DependsOn = Array.Empty<string>() }
+            new { PlanKey = key, Title = "Task A", Description = "d", Type = "Implementation", Priority = "Normal", DependsOn = Array.Empty<string>(), AcceptanceCriteria = new { version = 1, criteria = new[] { new { type = "FileExists", path = "README.md" } } } }
         }
     };
 
@@ -82,7 +82,7 @@ public sealed class ProjectPlanApiTests : IClassFixture<ApiTestFactory>
         {
             Tasks = new[]
             {
-                new { PlanKey = "a", Title = "T", Type = "NotAType", Priority = "Normal", DependsOn = Array.Empty<string>() }
+                new { PlanKey = "a", Title = "T", Type = "NotAType", Priority = "Normal", DependsOn = Array.Empty<string>(), AcceptanceCriteria = new { version = 1, criteria = new[] { new { type = "FileExists", path = "README.md" } } } }
             }
         });
 
@@ -99,8 +99,8 @@ public sealed class ProjectPlanApiTests : IClassFixture<ApiTestFactory>
         {
             Tasks = new[]
             {
-                new { PlanKey = "a", Title = "A", Type = "Implementation", Priority = "Normal", DependsOn = new[] { "b" } },
-                new { PlanKey = "b", Title = "B", Type = "Implementation", Priority = "Normal", DependsOn = new[] { "a" } }
+                new { PlanKey = "a", Title = "A", Type = "Implementation", Priority = "Normal", DependsOn = new[] { "b" }, AcceptanceCriteria = new { version = 1, criteria = new[] { new { type = "FileExists", path = "README.md" } } } },
+                new { PlanKey = "b", Title = "B", Type = "Implementation", Priority = "Normal", DependsOn = new[] { "a" }, AcceptanceCriteria = new { version = 1, criteria = new[] { new { type = "FileExists", path = "README.md" } } } }
             }
         });
 

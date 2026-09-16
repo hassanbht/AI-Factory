@@ -50,9 +50,34 @@ public sealed class LiveProjectLifecycleE2ETests
     /// repository-configured router/model, not a model picked to make this
     /// phase pass (§26).
     /// </summary>
-    private const string LiveModel = "auto/coding:free";
+    /// <summary>
+    /// Phase 18.22 §10/§23 — provider-neutral live configuration. Nothing here
+    /// is hard-coded to a vendor: the base URL and each role's model come from
+    /// the environment, and the defaults simply name what this machine actually
+    /// has (a local Ollama serving an OpenAI-compatible /v1 endpoint, reachable
+    /// from the Hermes container on host.docker.internal — both verified before
+    /// they were chosen). Point these at OmniRoute/OpenRouter or anything else
+    /// OpenAI-compatible and the same code path runs unchanged.
+    /// </summary>
+    /// <remarks>
+    /// The default is the OmniRoute gateway (§23's external fallback). A local
+    /// Ollama was evaluated first and is genuinely reachable from the container
+    /// on http://host.docker.internal:11434/v1, but Hermes refuses any model
+    /// advertising under 64,000 tokens of context and the only locally
+    /// installed family (qwen2.5-coder:7b) advertises 32,768 — see the phase
+    /// report. Set AI_FACTORY_LIVE_BASE_URL/AI_FACTORY_LIVE_MODEL to use it (or
+    /// anything else OpenAI-compatible) once a large-context model is present.
+    /// </remarks>
+    private static string LiveBaseUrl =>
+        Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_BASE_URL")
+        ?? "http://host.docker.internal:20128/v1";
 
-    private const string OmniRouteBaseUrl = "http://host.docker.internal:20128/v1";
+    private static string LiveModel =>
+        Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_MODEL") ?? "auto/coding:free";
+
+    /// <summary>§10 — each role may be pointed at its own model; by default they share one.</summary>
+    private static string ModelForRole(string role) =>
+        Environment.GetEnvironmentVariable($"AI_FACTORY_LIVE_{role.ToUpperInvariant()}_MODEL") ?? LiveModel;
 
     private static bool Enabled =>
         bool.TryParse(Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_SMOKE_TEST"), out var enabled) && enabled;
@@ -467,29 +492,52 @@ public sealed class LiveProjectLifecycleE2ETests
             hermesOptions.Provider = "openrouter";
             hermesOptions.ProviderApiKeyEnvironmentVariable = "OPENROUTER_API_KEY";
             hermesOptions.ProviderApiKeySecretName = "OMNIROUTE_API_KEY";
-            hermesOptions.AdditionalEnvironmentVariables["OPENROUTER_BASE_URL"] = OmniRouteBaseUrl;
+            hermesOptions.AdditionalEnvironmentVariables["OPENROUTER_BASE_URL"] = LiveBaseUrl;
             hermesOptions.DefaultModel = LiveModel;
 
-            // The shipped ModelRouting catalog ships placeholder model ids
-            // ("independent-strong-model-a", ...) which no real provider can
-            // serve; the independent-review stage routes through it. Point the
-            // existing router at the same reachable model instead of bypassing
-            // it — configuration of an existing mechanism, not a hard-coded
-            // model inside production code (§26).
+            // Phase 18.22 §10/§23 — per-role routing, configured through the
+            // existing catalog rather than any provider-specific branch. Each
+            // role's category gets its own entry, so Implementation, Repair,
+            // Review and Planner can be pointed at different models purely by
+            // environment; by default they share one, which §14 of the previous
+            // phase explicitly permits.
             var routingOptions = (ModelRoutingOptions)builder.Services
                 .Single(d => d.ServiceType == typeof(ModelRoutingOptions)).ImplementationInstance!;
-            foreach (var model in routingOptions.Models)
+
+            var roleCategories = new (string Role, string Category)[]
             {
-                model.ModelId = LiveModel;
+                ("implementation", "coding"),
+                ("repair", "debugging"),
+                ("review", "code-review"),
+                ("planner", "planning"),
+                ("test", "testing")
+            };
+
+            routingOptions.Models.Clear();
+            routingOptions.CategoryProfiles.Clear();
+
+            foreach (var (role, category) in roleCategories)
+            {
+                var modelId = ModelForRole(role);
+
+                if (!routingOptions.Models.Any(m => string.Equals(m.ModelId, modelId, StringComparison.OrdinalIgnoreCase)))
+                {
+                    routingOptions.Models.Add(new ModelCapability
+                    {
+                        ModelId = modelId,
+                        Provider = "openrouter",
+                        ReasoningStrength = 4,
+                        MaxContextTokens = 32_000,
+                        CostTier = 1,
+                        IsCodingOptimized = true,
+                        IsAvailable = true
+                    });
+                }
+
+                routingOptions.CategoryProfiles[category] = new List<string> { modelId };
             }
 
-            foreach (var profile in routingOptions.CategoryProfiles)
-            {
-                for (var i = 0; i < profile.Value.Count; i++)
-                {
-                    profile.Value[i] = LiveModel;
-                }
-            }
+            Assert.Empty(routingOptions.Validate());
 
             builder.Services.AddScoped<IProcessRunner, SystemProcessRunner>();
             builder.Services.AddScoped<IProjectWorkspaceProvisioner, ProjectWorkspaceProvisioner>();

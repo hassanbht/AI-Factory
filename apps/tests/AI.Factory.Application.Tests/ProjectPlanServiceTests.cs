@@ -61,9 +61,22 @@ public sealed class ProjectPlanServiceTests : IDisposable
         });
     }
 
+    private const string ValidCriteria =
+        """{"version":1,"criteria":[{"type":"FileExists","path":"README.md"}]}""";
+
+    /// <summary>
+    /// Phase 18.22 §2 — every task in a new plan must carry a machine-checkable
+    /// acceptance contract, so this shared helper supplies one by default. Pass
+    /// <paramref name="acceptanceCriteria"/> explicitly to exercise the missing
+    /// or malformed cases.
+    /// </summary>
     private static PlannedWorkItemInput Task_(
-        string key, IReadOnlyList<string>? dependsOn = null, WorkItemType type = WorkItemType.Implementation, string priority = "Normal") =>
-        new(key, $"Title {key}", $"Description {key}", type, priority, dependsOn ?? Array.Empty<string>());
+        string key,
+        IReadOnlyList<string>? dependsOn = null,
+        WorkItemType type = WorkItemType.Implementation,
+        string priority = "Normal",
+        string? acceptanceCriteria = ValidCriteria) =>
+        new(key, $"Title {key}", $"Description {key}", type, priority, dependsOn ?? Array.Empty<string>(), acceptanceCriteria);
 
     // ---------------- Generation ----------------
 

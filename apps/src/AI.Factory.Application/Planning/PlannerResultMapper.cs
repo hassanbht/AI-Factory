@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Orchestration;
 using AI.Factory.Application.Agents;
 using AI.Factory.Domain.Enums;
 
@@ -90,7 +91,49 @@ public sealed class PlannerResultMapper : IPlannerResultMapper
             task.Description,
             type,
             task.Priority ?? "Normal",
-            task.DependsOn ?? new List<string>());
+            task.DependsOn ?? new List<string>(),
+            MapAcceptanceCriteria(task));
+    }
+
+    /// <summary>
+    /// Phase 18.22 §4 — structural validation only, distinguishing the four
+    /// cases the phase requires: missing, malformed, unsupported criterion,
+    /// valid. Nothing here touches the filesystem: whether the declared paths
+    /// exist is the acceptance subsystem's question at verification time, not
+    /// the planner's at planning time. Parsed through the one shared
+    /// <see cref="AcceptanceCriteriaContract"/> so the planner can never accept
+    /// a contract the verifier would later refuse to read.
+    /// </summary>
+    private static string MapAcceptanceCriteria(CandidateTask task)
+    {
+        if (task.AcceptanceCriteria is not { } element || element.ValueKind == JsonValueKind.Null)
+        {
+            throw new PlannerCandidatePlanException(
+                $"Candidate task '{task.PlanKey}' is missing required field 'acceptanceCriteria'. " +
+                "Every planned task must state machine-checkable evidence of completion.");
+        }
+
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            throw new PlannerCandidatePlanException(
+                $"Candidate task '{task.PlanKey}' has an 'acceptanceCriteria' value that is not an object.");
+        }
+
+        var raw = element.GetRawText();
+        var parsed = AcceptanceCriteriaContract.Parse(raw);
+
+        return parsed.Status switch
+        {
+            AcceptanceCriteriaParseStatus.Valid => raw,
+            AcceptanceCriteriaParseStatus.Invalid => throw new PlannerCandidatePlanException(
+                $"Candidate task '{task.PlanKey}' has invalid acceptance criteria: {parsed.Error}"),
+            // Structurally present but not recognizable as a contract at all —
+            // e.g. an object with no "criteria" array. Never treated as "none
+            // specified", which would silently defeat the whole requirement.
+            _ => throw new PlannerCandidatePlanException(
+                $"Candidate task '{task.PlanKey}' has an 'acceptanceCriteria' object that is not a valid " +
+                "acceptance contract (expected a version and a criteria array).")
+        };
     }
 
     private sealed class CandidateEnvelope
@@ -114,5 +157,8 @@ public sealed class PlannerResultMapper : IPlannerResultMapper
         public string? Type { get; set; }
         public string? Priority { get; set; }
         public List<string>? DependsOn { get; set; }
+
+        /// <summary>Phase 18.22 §3 — the acceptance envelope, kept as raw JSON so it reaches storage unchanged.</summary>
+        public JsonElement? AcceptanceCriteria { get; set; }
     }
 }

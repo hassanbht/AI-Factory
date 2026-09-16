@@ -27,8 +27,8 @@ public sealed class PlannerResultMapperTests
     {
         const string data = """
             {"plan":{"version":1,"summary":"s","tasks":[
-              {"planKey":"a","title":"Task A","description":"d","type":"Implementation","priority":"High","dependsOn":[]},
-              {"planKey":"b","title":"Task B","type":"Test","priority":"Normal","dependsOn":["a"]}
+              {"planKey":"a","title":"Task A","description":"d","type":"Implementation","priority":"High","dependsOn":[],"acceptanceCriteria":{"version":1,"criteria":[{"type":"FileExists","path":"README.md"}]}},
+              {"planKey":"b","title":"Task B","type":"Test","priority":"Normal","dependsOn":["a"],"acceptanceCriteria":{"version":1,"criteria":[{"type":"FileExists","path":"README.md"}]}}
             ]}}
             """;
 
@@ -111,7 +111,7 @@ public sealed class PlannerResultMapperTests
     [Fact]
     public void Map_DefaultsMissingPriorityToNormal()
     {
-        const string data = """{"plan":{"version":1,"tasks":[{"planKey":"a","title":"A","type":"Implementation"}]}}""";
+        const string data = """{"plan":{"version":1,"tasks":[{"planKey":"a","title":"A","type":"Implementation","acceptanceCriteria":{"version":1,"criteria":[{"type":"FileExists","path":"README.md"}]}}]}}""";
 
         var request = Mapper.Map(ProjectId, Succeeded(data));
 

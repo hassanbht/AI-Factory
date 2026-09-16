@@ -1073,7 +1073,8 @@ app.MapPost("/api/projects/{projectId}/plan", async (
             t.Description,
             type,
             t.Priority ?? "Normal",
-            (IReadOnlyList<string>)(t.DependsOn ?? new List<string>()));
+            (IReadOnlyList<string>)(t.DependsOn ?? new List<string>()),
+            t.AcceptanceCriteria?.GetRawText());
     }).ToList();
 
     var result = await service.CreatePlanAsync(
@@ -1784,7 +1785,11 @@ public sealed record PlanTaskRequestDto(
     string? Description,
     string Type,
     string? Priority,
-    List<string>? DependsOn);
+    List<string>? DependsOn,
+    // Phase 18.22 §2 — the task's machine-checkable acceptance contract, in the
+    // same envelope Phase 18.21 evaluates. Accepted as a JSON object so callers
+    // write it inline; required for every task in a new plan.
+    System.Text.Json.JsonElement? AcceptanceCriteria = null);
 
 public sealed record CreatePlanRequest(
     string? Summary,

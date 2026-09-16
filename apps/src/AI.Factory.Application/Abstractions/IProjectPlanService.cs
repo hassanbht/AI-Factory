@@ -27,13 +27,22 @@ public interface IProjectPlanService
 }
 
 /// <summary>One candidate task in an untrusted planning request — caller-supplied, not yet validated.</summary>
+/// <param name="AcceptanceCriteria">
+/// Phase 18.22 §2 — the task's machine-checkable acceptance contract, as the
+/// same JSON envelope Phase 18.21 stores in <c>WorkItem.AcceptanceCriteria</c>.
+/// Required for every task in a newly created plan: a plan that cannot say how
+/// completion will be observed must not produce an execution-ready WorkItem.
+/// Nullable only so the invalid case is representable and can be rejected with
+/// a clear error instead of failing to bind.
+/// </param>
 public sealed record PlannedWorkItemInput(
     string PlanKey,
     string Title,
     string? Description,
     WorkItemType Type,
     string Priority,
-    IReadOnlyList<string> DependsOn);
+    IReadOnlyList<string> DependsOn,
+    string? AcceptanceCriteria = null);
 
 public sealed record ProjectPlanRequest(
     Guid ProjectId,

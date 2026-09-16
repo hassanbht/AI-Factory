@@ -123,6 +123,12 @@ var plannerOptions = new AI.Factory.Application.Planning.PlannerOptions();
 builder.Configuration.GetSection(AI.Factory.Application.Planning.PlannerOptions.SectionName).Bind(plannerOptions);
 builder.Services.AddSingleton(plannerOptions);
 builder.Services.AddScoped<AI.Factory.Application.Planning.IPlannerResultMapper, AI.Factory.Application.Planning.PlannerResultMapper>();
+// ProjectPlanner depends on IAgentRunService, which this root registered
+// IProjectPlanner without — so resolving the planner in the Worker process
+// threw "Unable to resolve service for type 'IAgentRunService'". The Api root
+// has always registered it; the Worker's omission only surfaced when the
+// Phase 18.22 real-Planner E2E first tried to resolve the planner here.
+builder.Services.AddScoped<IAgentRunService, AgentRunService>();
 builder.Services.AddScoped<AI.Factory.Application.Planning.IProjectPlanner, AI.Factory.Application.Planning.ProjectPlanner>();
 
 var hermesOptions = new HermesOptions();

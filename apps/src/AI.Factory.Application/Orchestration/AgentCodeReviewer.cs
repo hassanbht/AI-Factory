@@ -42,8 +42,20 @@ public sealed class AgentCodeReviewer : ICodeReviewer
 
         var prompt = BuildPrompt(context);
 
+        // WorkingDirectory must be a real filesystem path: since Phase 18.14 it
+        // IS the directory bind-mounted into the agent container, and a
+        // non-existent one fails the execution outright. This used to pass
+        // ProjectId.ToString(), so every real review failed with "Resolved
+        // workspace '<guid>' no longer exists" — which surfaces as a Critical
+        // finding, blocks completion, and burns the WorkItem's entire repair
+        // budget (observed end-to-end in the Phase 18.20 live run). Empty is the
+        // executor's documented "no resolved workspace" path: it provisions a
+        // fresh isolated scratch directory instead. That is also the correct
+        // least-privilege choice here — the review prompt already carries the
+        // requirements, changed files and build/test output, so the reviewer has
+        // no reason to be handed the Project's real workspace.
         var result = await _agentExecutor.ExecuteAsync(
-            new AgentExecutionRequest(ReviewAgentName, modelSelection.ModelId, prompt, context.ProjectId.ToString()),
+            new AgentExecutionRequest(ReviewAgentName, modelSelection.ModelId, prompt, string.Empty),
             cancellationToken);
 
         if (!result.Success)

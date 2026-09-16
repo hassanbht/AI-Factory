@@ -175,24 +175,42 @@ public sealed class AgentRunWorkItemSyncTests : IDisposable
     }
 
     [Fact]
-    public async Task SyncAsync_SucceededWithNoStructuredResult_TransitionsToFailed()
+    public async Task SyncAsync_SucceededWithNoStructuredResult_GoesToVerificationNotFailed()
     {
-        // Phase 18.7 §12 "Execution result invalid" — a bare Succeeded with
-        // no interpretable structured result can no longer be trusted as a
-        // completed WorkItem (the gap this phase closes).
+        // Phase 18.20 §4 — an unusable *report* is not evidence the *work*
+        // failed. A Succeeded AgentRun with no interpretable structured result
+        // is handed to the Factory's own verification instead of dead-ending,
+        // which is exactly what the live coding model observably needs
+        // (Phase 18.19 §11). A gate that never returns pins the WorkItem in
+        // Testing so this asserts the routing decision itself, not whatever
+        // verification would have concluded afterwards.
         var taskId = await SeedRunningTaskAsync();
         var run = new AgentRun { WorkItemId = taskId, Status = AgentRunStatus.Succeeded, StructuredResult = null };
 
         await using var db = new FactoryDbContext(_options);
-        await CreateSync(db).SyncAsync(run);
 
-        var workItem = await new WorkItemRepository(db).GetByIdAsync(taskId);
-        Assert.Equal(WorkItemStatus.Failed.ToString(), workItem!.Status);
+        var gate = new BlockingVerificationGate();
+        var syncTask = CreateSync(db, gate).SyncAsync(run);
+        await gate.EnteredAsync();
+
+        await using (var midDb = new FactoryDbContext(_options))
+        {
+            var inFlight = await new WorkItemRepository(midDb).GetByIdAsync(taskId);
+            Assert.Equal(WorkItemStatus.Testing.ToString(), inFlight!.Status);
+            // Nothing has actually gone wrong yet — no error may be recorded.
+            Assert.Null(inFlight.CurrentError);
+        }
+
+        gate.Release();
+        await syncTask;
     }
 
     [Fact]
-    public async Task SyncAsync_SucceededWithMalformedExecutionData_TransitionsToFailed()
+    public async Task SyncAsync_SucceededWithMalformedExecutionData_GoesToVerificationNotFailed()
     {
+        // Phase 18.20 §6 — malformed metadata is never reinterpreted as valid
+        // (the mapper still rejects it); it is only treated as "no usable
+        // report", so the Factory decides via verification.
         var taskId = await SeedRunningTaskAsync();
         var run = new AgentRun
         {
@@ -202,10 +220,84 @@ public sealed class AgentRunWorkItemSyncTests : IDisposable
         };
 
         await using var db = new FactoryDbContext(_options);
-        await CreateSync(db).SyncAsync(run);
+
+        var gate = new BlockingVerificationGate();
+        var syncTask = CreateSync(db, gate).SyncAsync(run);
+        await gate.EnteredAsync();
+
+        await using (var midDb = new FactoryDbContext(_options))
+        {
+            var inFlight = await new WorkItemRepository(midDb).GetByIdAsync(taskId);
+            Assert.Equal(WorkItemStatus.Testing.ToString(), inFlight!.Status);
+        }
+
+        gate.Release();
+        await syncTask;
+    }
+
+    [Theory]
+    [InlineData(VerificationStatus.Passed, WorkItemStatus.Completed)]
+    [InlineData(VerificationStatus.Failed, WorkItemStatus.Repairing)]
+    public async Task SyncAsync_SucceededWithoutMetadata_FactoryVerificationDecidesOutcome(
+        VerificationStatus gateStatus, WorkItemStatus expected)
+    {
+        // Phase 18.20 §9 — the whole point of routing an unusable report to
+        // Testing: verification, not the agent, produces the final answer.
+        var taskId = await SeedRunningTaskAsync();
+        var run = new AgentRun { WorkItemId = taskId, Status = AgentRunStatus.Succeeded, StructuredResult = null };
+
+        await using var db = new FactoryDbContext(_options);
+        await CreateSync(db, new FakeVerificationGate(gateStatus)).SyncAsync(run);
 
         var workItem = await new WorkItemRepository(db).GetByIdAsync(taskId);
-        Assert.Equal(WorkItemStatus.Failed.ToString(), workItem!.Status);
+        Assert.Equal(expected.ToString(), workItem!.Status);
+    }
+
+    [Theory]
+    [InlineData("completed")]
+    [InlineData("not-a-real-status")]
+    [InlineData(null)]
+    public async Task SyncAsync_SucceededAgentRun_NeverReachesCompletedWithoutVerification(string? executionStatus)
+    {
+        // Phase 18.20 §8 invariant: AgentRun.Succeeded NEVER maps straight to
+        // WorkItem.Completed, for any report shape the agent can produce —
+        // including the one where it explicitly claims completion. A gate that
+        // fails everything proves no report can bypass it.
+        var taskId = await SeedRunningTaskAsync();
+        var run = new AgentRun
+        {
+            WorkItemId = taskId,
+            Status = AgentRunStatus.Succeeded,
+            StructuredResult = executionStatus is null ? null : SucceededStructuredResult(executionStatus)
+        };
+
+        await using var db = new FactoryDbContext(_options);
+        await CreateSync(db, new FakeVerificationGate(VerificationStatus.Failed)).SyncAsync(run);
+
+        var workItem = await new WorkItemRepository(db).GetByIdAsync(taskId);
+        Assert.NotEqual(WorkItemStatus.Completed.ToString(), workItem!.Status);
+        Assert.Equal(WorkItemStatus.Repairing.ToString(), workItem.Status);
+    }
+
+    [Fact]
+    public async Task SyncAsync_SucceededWithoutMetadata_RepeatedSync_IsIdempotent()
+    {
+        // Phase 18.20 §28.11 — the new routing must not weaken the existing
+        // idempotency guard: a second observation of the same terminal
+        // AgentRun finds the WorkItem no longer Running and changes nothing.
+        var taskId = await SeedRunningTaskAsync();
+        var run = new AgentRun { WorkItemId = taskId, Status = AgentRunStatus.Succeeded, StructuredResult = null };
+
+        await using var db = new FactoryDbContext(_options);
+        await CreateSync(db, new FakeVerificationGate(VerificationStatus.Passed)).SyncAsync(run);
+
+        var afterFirst = await new WorkItemRepository(db).GetByIdAsync(taskId);
+        Assert.Equal(WorkItemStatus.Completed.ToString(), afterFirst!.Status);
+
+        await CreateSync(db, new FakeVerificationGate(VerificationStatus.Failed)).SyncAsync(run);
+
+        var afterSecond = await new WorkItemRepository(db).GetByIdAsync(taskId);
+        Assert.Equal(WorkItemStatus.Completed.ToString(), afterSecond!.Status);
     }
 
     // ---------------- Phase 18.8 — deterministic verification gate ----------------

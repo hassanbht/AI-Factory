@@ -141,11 +141,16 @@ public sealed class HermesAgentExecutor : IAgentExecutor
         // AgentRun/AgentExecutionRequest have always carried a Model — this
         // was the one place it silently never reached the Hermes CLI,
         // leaving every execution on Hermes's own persisted default model
-        // with no way for a caller to override it.
-        if (!string.IsNullOrWhiteSpace(request.Model))
+        // with no way for a caller to override it. Phase 18.20: the caller's
+        // own Model still wins, but a configured HermesOptions.DefaultModel
+        // now covers every run that has none — which is every run the
+        // scheduler and planner create.
+        var model = string.IsNullOrWhiteSpace(request.Model) ? _options.DefaultModel : request.Model;
+
+        if (!string.IsNullOrWhiteSpace(model))
         {
             arguments.Add("-m");
-            arguments.Add(request.Model);
+            arguments.Add(model);
         }
 
         if (!string.IsNullOrWhiteSpace(_options.Provider))

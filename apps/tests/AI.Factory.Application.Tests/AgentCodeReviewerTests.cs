@@ -62,6 +62,31 @@ public sealed class AgentCodeReviewerTests
     }
 
     [Fact]
+    public async Task ReviewAsync_NeverPassesAnIdentifierAsTheWorkingDirectory()
+    {
+        // Phase 18.20 — regression lock for a defect only a live run could
+        // surface: AgentExecutionRequest.WorkingDirectory is a real filesystem
+        // path (the agent container's bind mount) since Phase 18.14, but this
+        // reviewer passed ProjectId.ToString(). Against real Hermes every
+        // review then failed with "Resolved workspace '<guid>' no longer
+        // exists", which became a Critical finding, blocked completion, and
+        // exhausted the WorkItem's repair budget — so no WorkItem could ever
+        // reach Completed. Empty selects the executor's fresh isolated scratch
+        // workspace, which is all a review prompt needs.
+        var executor = new FakeAgentExecutor(_ => new AgentExecutionResult(true, "[]", null, 5));
+        var reviewer = new AgentCodeReviewer(executor, MakeModelRouter(), NullLogger<AgentCodeReviewer>.Instance);
+        var context = MakeContext();
+
+        await reviewer.ReviewAsync(context);
+
+        Assert.NotNull(executor.LastRequest);
+        Assert.True(
+            string.IsNullOrEmpty(executor.LastRequest!.WorkingDirectory),
+            $"Reviewer passed '{executor.LastRequest.WorkingDirectory}' as WorkingDirectory — it must be a real path or empty, never an identifier.");
+        Assert.False(Guid.TryParse(executor.LastRequest.WorkingDirectory, out _));
+    }
+
+    [Fact]
     public async Task ReviewAsync_UsesIndependentAgentNameAndModel()
     {
         var executor = new FakeAgentExecutor(_ =>

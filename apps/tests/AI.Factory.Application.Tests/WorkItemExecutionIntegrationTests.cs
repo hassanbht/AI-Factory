@@ -245,7 +245,7 @@ public sealed class WorkItemExecutionIntegrationTests : IDisposable
     }
 
     [Fact]
-    public async Task InvalidExecutionResult_ProducesNoUnsafeStateMutation()
+    public async Task InvalidExecutionResult_IsDecidedByFactoryVerification_NotByTheReport()
     {
         var projectId = await SeedProjectAsync();
         await SeedAgentDefinitionAsync();
@@ -271,14 +271,18 @@ public sealed class WorkItemExecutionIntegrationTests : IDisposable
             completedRun = (await new AgentRunRepository(verifyDb).GetByIdAsync(agentRunId))!;
         }
 
+        // Phase 18.20 §4/§9 — the garbage report grants the agent nothing: the
+        // run is handed to the Factory's own verification, and a failing gate
+        // decides the outcome. The unsafe mutation this test guards against is
+        // "Completed without verification", which no report shape can reach.
         await using (var db = new FactoryDbContext(_options))
         {
-            await CreateSync(db).SyncAsync(completedRun);
+            await CreateSync(db, new FakeVerificationGate(VerificationStatus.Failed)).SyncAsync(completedRun);
         }
 
         await using var finalDb = new FactoryDbContext(_options);
         var workItem = await new WorkItemRepository(finalDb).GetByIdAsync(workItemId);
-        Assert.Equal(WorkItemStatus.Failed.ToString(), workItem!.Status);
+        Assert.Equal(WorkItemStatus.Repairing.ToString(), workItem!.Status);
         Assert.False(string.IsNullOrWhiteSpace(workItem.CurrentError));
     }
 

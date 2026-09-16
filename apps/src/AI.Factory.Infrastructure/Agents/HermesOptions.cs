@@ -21,6 +21,19 @@ public sealed class HermesOptions
     public string? Provider { get; set; }
 
     /// <summary>
+    /// Phase 18.20 — Hermes CLI -m fallback for any AgentRun that carries no
+    /// Model of its own. Nothing in the production pipeline populates
+    /// AgentRun.Model (TaskDispatchScheduler and ProjectPlanner both create
+    /// runs without one), so without this every scheduler-dispatched run
+    /// silently executed on whatever model Hermes had persisted internally,
+    /// with no way to configure it from the Factory side. An explicit
+    /// AgentRun.Model still wins — e.g. AgentCodeReviewer, which routes its
+    /// own model through IModelRouter. Null/empty keeps the pre-existing
+    /// behavior (no -m flag at all).
+    /// </summary>
+    public string? DefaultModel { get; set; }
+
+    /// <summary>
     /// Non-secret environment variables to pass into the Hermes container beyond PATH — e.g.
     /// {"OPENROUTER_BASE_URL": "http://host.docker.internal:20128/v1"} to point the named
     /// <see cref="Provider"/> at a local OpenAI-compatible gateway instead of its real endpoint.

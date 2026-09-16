@@ -218,9 +218,13 @@ public sealed class AgentRunWorkItemSync : IAgentRunWorkItemSync
     /// Phase 18.7 §7/§12 — a Succeeded AgentRun is interpreted, not trusted
     /// blindly:
     /// <list type="bullet">
-    /// <item>missing/unparseable/Invalid StructuredResult -> "Execution
-    /// result invalid" -> WorkItem.Failed (cannot safely claim any better
-    /// state for an untrustworthy report).</item>
+    /// <item>missing/unparseable/Invalid StructuredResult -> Phase 18.20 §4:
+    /// WorkItem.Testing, NOT WorkItem.Failed. An unusable *report* is not
+    /// evidence the *work* failed, and it must not dead-end a run that the
+    /// Factory is perfectly capable of judging itself. Testing claims nothing
+    /// about correctness — it means "agent execution finished; the Factory
+    /// must now independently verify the workspace" — so this is strictly a
+    /// request for verification, never a shortcut to completion.</item>
     /// <item>ExecutionSucceeded -> WorkItem.Testing (Phase 18.8). The agent's
     /// self-reported "completed" is no longer sufficient proof by itself —
     /// SyncAsync runs the deterministic IVerificationGate immediately after
@@ -238,35 +242,52 @@ public sealed class AgentRunWorkItemSync : IAgentRunWorkItemSync
     /// </summary>
     private (WorkItemStatus? Target, string? ErrorMessage) DetermineSucceededTarget(AgentRun agentRun)
     {
-        var structuredResult = TryDeserializeStructuredResult(agentRun.StructuredResult);
-
-        if (structuredResult is null || structuredResult.Status == StructuredResultStatus.Invalid)
-        {
-            _logger.LogWarning(
-                "WorkItemExecutionResultInvalid AgentRunId={AgentRunId} Reason=NoValidStructuredResult", agentRun.Id);
-            return (WorkItemStatus.Failed, "AgentRun succeeded but produced no valid structured execution result.");
-        }
-
-        WorkItemExecutionResult mapped;
-
-        try
-        {
-            mapped = _executionResultMapper.Map(structuredResult);
-        }
-        catch (WorkItemExecutionResultInvalidException ex)
-        {
-            _logger.LogWarning(
-                "WorkItemExecutionResultInvalid AgentRunId={AgentRunId} Reason={Reason}", agentRun.Id, ex.Message);
-            return (WorkItemStatus.Failed, $"Execution result could not be interpreted: {ex.Message}");
-        }
+        var mapped = InterpretExecutionReport(agentRun);
 
         return mapped.Outcome switch
         {
             WorkItemExecutionResultOutcome.ExecutionSucceeded => (WorkItemStatus.Testing, null),
             WorkItemExecutionResultOutcome.ExecutionRequestedRepair =>
                 (WorkItemStatus.Blocked, mapped.Summary ?? "Agent execution requested repair."),
+            // Phase 18.20 §4/§8 — no usable report, so the Factory verifies
+            // instead of guessing. No CurrentError is recorded: nothing has
+            // actually gone wrong yet, and VerificationGate overwrites it with
+            // the real build/test summary if something has.
+            WorkItemExecutionResultOutcome.ExecutionMetadataUnavailable => (WorkItemStatus.Testing, null),
             _ => (WorkItemStatus.Failed, "Unrecognized execution outcome.")
         };
+    }
+
+    /// <summary>
+    /// Phase 18.20 §6/§7 — the interpretation boundary. The parser and
+    /// <see cref="IWorkItemExecutionResultMapper"/> both stay strict (malformed
+    /// JSON is never re-read as valid JSON); this method only decides what an
+    /// unusable report *means*, and keeps the four cases §7 requires distinct:
+    /// explicit completion, explicit repair request, unusable metadata, and
+    /// (handled by the caller, from AgentRunStatus alone) runtime failure.
+    /// </summary>
+    private WorkItemExecutionResult InterpretExecutionReport(AgentRun agentRun)
+    {
+        var structuredResult = TryDeserializeStructuredResult(agentRun.StructuredResult);
+
+        if (structuredResult is null || structuredResult.Status == StructuredResultStatus.Invalid)
+        {
+            _logger.LogWarning(
+                "WorkItemExecutionMetadataUnavailable AgentRunId={AgentRunId} Reason=NoValidStructuredResult",
+                agentRun.Id);
+            return new WorkItemExecutionResult(WorkItemExecutionResultOutcome.ExecutionMetadataUnavailable, null);
+        }
+
+        try
+        {
+            return _executionResultMapper.Map(structuredResult);
+        }
+        catch (WorkItemExecutionResultInvalidException ex)
+        {
+            _logger.LogWarning(
+                "WorkItemExecutionMetadataUnavailable AgentRunId={AgentRunId} Reason={Reason}", agentRun.Id, ex.Message);
+            return new WorkItemExecutionResult(WorkItemExecutionResultOutcome.ExecutionMetadataUnavailable, null);
+        }
     }
 
     private static StructuredAgentResult? TryDeserializeStructuredResult(string? json)

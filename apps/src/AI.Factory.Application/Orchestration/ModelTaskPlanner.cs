@@ -67,7 +67,12 @@ public sealed class ModelTaskPlanner : ITaskPlanner
             var prompt = BuildPrompt(request, contextText, previousError);
 
             var result = await _agentExecutor.ExecuteAsync(
-                new AgentExecutionRequest(PlannerAgentName, modelSelection.ModelId, prompt, request.ProjectId.ToString()),
+                // Same defect the Phase 18.20 live run exposed in
+                // AgentCodeReviewer: WorkingDirectory is a real filesystem path
+                // (the container bind mount) since Phase 18.14, never an id.
+                // Empty selects the executor's fresh isolated scratch workspace,
+                // which is all a planning prompt needs.
+                new AgentExecutionRequest(PlannerAgentName, modelSelection.ModelId, prompt, string.Empty),
                 cancellationToken);
 
             if (!result.Success)

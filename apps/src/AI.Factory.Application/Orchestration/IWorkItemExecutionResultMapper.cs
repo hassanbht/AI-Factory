@@ -34,12 +34,12 @@ public sealed class WorkItemExecutionResultInvalidException : Exception
 }
 
 /// <summary>
-/// Phase 18.7 §6/§12 — the only two outcomes an execution Agent may honestly
+/// Phase 18.7 §6/§12 — the outcomes an execution Agent may honestly
 /// self-report; deliberately narrow (no arbitrary status string can reach
-/// domain state). "RuntimeFailed" and "CandidateExecutionResultInvalid" are
-/// not values here because they are never a successfully-parsed execution
-/// result — they are decided one layer up, before or instead of calling
-/// <see cref="IWorkItemExecutionResultMapper.Map"/> at all.
+/// domain state). "RuntimeFailed" is not a value here because it is never a
+/// successfully-parsed execution result — it is decided one layer up, from
+/// <see cref="AI.Factory.Domain.Enums.AgentRunStatus"/> itself, before
+/// <see cref="IWorkItemExecutionResultMapper.Map"/> is called at all.
 /// </summary>
 public enum WorkItemExecutionResultOutcome
 {
@@ -47,7 +47,22 @@ public enum WorkItemExecutionResultOutcome
     ExecutionSucceeded,
 
     /// <summary>The agent reports it attempted the WorkItem but could not complete it — needs further work.</summary>
-    ExecutionRequestedRepair
+    ExecutionRequestedRepair,
+
+    /// <summary>
+    /// Phase 18.20 §7 — the AgentRun itself ended Succeeded, but carried no
+    /// usable execution metadata (absent, unparseable, wrong version, or an
+    /// unrecognized status value). Deliberately distinct from both
+    /// <see cref="ExecutionRequestedRepair"/> (never inferred from silence —
+    /// §4) and from a runtime failure: it asserts nothing about whether the
+    /// work itself succeeded, only that the agent's *report* is unusable.
+    /// Never returned by <see cref="IWorkItemExecutionResultMapper.Map"/>,
+    /// which stays strict and throws instead (§6); it is produced at the
+    /// interpretation boundary in <see cref="AgentRunWorkItemSync"/>, whose
+    /// policy is to hand such a run to the Factory's own verification rather
+    /// than dead-ending it.
+    /// </summary>
+    ExecutionMetadataUnavailable
 }
 
 public sealed record WorkItemExecutionResult(WorkItemExecutionResultOutcome Outcome, string? Summary);

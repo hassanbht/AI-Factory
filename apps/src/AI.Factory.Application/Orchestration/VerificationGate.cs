@@ -21,6 +21,7 @@ public sealed class VerificationGate : IVerificationGate
     private readonly IBuildExecutor _buildExecutor;
     private readonly ITestExecutor _testExecutor;
     private readonly IWorkspaceResolver _workspaceResolver;
+    private readonly IWorkItemAcceptanceVerifier _acceptanceVerifier;
     private readonly ExecutionLimitsOptions _executionLimits;
     private readonly ILogger<VerificationGate> _logger;
 
@@ -28,19 +29,21 @@ public sealed class VerificationGate : IVerificationGate
         IBuildExecutor buildExecutor,
         ITestExecutor testExecutor,
         IWorkspaceResolver workspaceResolver,
+        IWorkItemAcceptanceVerifier acceptanceVerifier,
         ExecutionLimitsOptions executionLimits,
         ILogger<VerificationGate> logger)
     {
         _buildExecutor = buildExecutor;
         _testExecutor = testExecutor;
         _workspaceResolver = workspaceResolver;
+        _acceptanceVerifier = acceptanceVerifier;
         _executionLimits = executionLimits;
         _logger = logger;
     }
 
     public Task<VerificationResult> VerifyAsync(
         Project project, WorkItem workItem, CancellationToken cancellationToken = default) =>
-        RunAsync(project, workItem.Id, cancellationToken);
+        RunAsync(project, workItem, cancellationToken);
 
     /// <summary>Phase 18.10 — same build/test run, scoped to the whole Project (no WorkItem context needed).</summary>
     public Task<VerificationResult> VerifyProjectAsync(
@@ -48,7 +51,7 @@ public sealed class VerificationGate : IVerificationGate
         RunAsync(project, null, cancellationToken);
 
     private async Task<VerificationResult> RunAsync(
-        Project project, Guid? workItemId, CancellationToken cancellationToken)
+        Project project, WorkItem? workItem, CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
 
@@ -115,7 +118,48 @@ public sealed class VerificationGate : IVerificationGate
                         test.ExitCode, stopwatch);
             }
 
-            return Result(VerificationStatus.Passed, "Build and tests passed.", test.ExitCode, stopwatch);
+            // Phase 18.21 §5/§10 — build/test proves the project is still
+            // healthy; it cannot prove the WorkItem's own requested outcome
+            // exists, because an agent that changed nothing leaves an
+            // already-green suite green (the no-op acceptance gap measured
+            // live in Phase 18.20). Explicit criteria are therefore evaluated
+            // as a second, equally deterministic layer — never instead of the
+            // build/test gate, and only for a WorkItem-scoped run.
+            if (workItem is null)
+            {
+                return Result(VerificationStatus.Passed, "Build and tests passed.", test.ExitCode, stopwatch);
+            }
+
+            var acceptance = _acceptanceVerifier.Verify(workItem, resolvedPath);
+
+            return acceptance.Status switch
+            {
+                // A real outcome gap: repairable, exactly like a failing test.
+                AcceptanceVerificationStatus.Failed => Result(
+                    VerificationStatus.Failed,
+                    $"Build and tests passed, but acceptance criteria failed. {acceptance.Summary}",
+                    test.ExitCode, stopwatch),
+
+                // An authoring error in the criteria themselves — no agent can
+                // repair that, so it must not enter the repair loop.
+                AcceptanceVerificationStatus.ContractInvalid => Result(
+                    VerificationStatus.InfrastructureError,
+                    $"Acceptance criteria could not be evaluated: {acceptance.Summary}",
+                    test.ExitCode, stopwatch),
+
+                AcceptanceVerificationStatus.Passed => Result(
+                    VerificationStatus.Passed,
+                    $"Build and tests passed. {acceptance.Summary}",
+                    test.ExitCode, stopwatch),
+
+                // §9 — legacy WorkItem with no machine-checkable contract:
+                // historical build/test-only semantics, stated explicitly so
+                // it is never mistaken for acceptance verification.
+                _ => Result(
+                    VerificationStatus.Passed,
+                    "Build and tests passed (no explicit acceptance criteria).",
+                    test.ExitCode, stopwatch)
+            };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -129,7 +173,7 @@ public sealed class VerificationGate : IVerificationGate
             // convert their own known failure modes into a normal result.
             _logger.LogError(
                 ex, "VerificationInfrastructureError WorkItemId={WorkItemId} ProjectId={ProjectId}",
-                workItemId, project.Id);
+                workItem?.Id, project.Id);
             return Result(
                 VerificationStatus.InfrastructureError, $"Verification infrastructure error: {ex.Message}",
                 null, stopwatch);

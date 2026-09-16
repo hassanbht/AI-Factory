@@ -37,6 +37,7 @@ public sealed class VerificationGateRealBuildIntegrationTests
             new DotNetBuildExecutor(processRunner),
             new DotNetTestExecutor(processRunner),
             new ProjectWorkspaceResolver(new AI.Factory.Application.Configuration.AgentWorkspaceOptions()),
+            new WorkItemAcceptanceVerifier(NullLogger<WorkItemAcceptanceVerifier>.Instance),
             new ExecutionLimitsOptions { BuildTimeoutMinutes = 2, TestTimeoutMinutes = 2 },
             NullLogger<VerificationGate>.Instance);
 
@@ -68,6 +69,7 @@ public sealed class VerificationGateRealBuildIntegrationTests
             new DotNetBuildExecutor(processRunner),
             new DotNetTestExecutor(processRunner),
             new ProjectWorkspaceResolver(new AI.Factory.Application.Configuration.AgentWorkspaceOptions()),
+            new WorkItemAcceptanceVerifier(NullLogger<WorkItemAcceptanceVerifier>.Instance),
             new ExecutionLimitsOptions { BuildTimeoutMinutes = 1, TestTimeoutMinutes = 1 },
             NullLogger<VerificationGate>.Instance);
 

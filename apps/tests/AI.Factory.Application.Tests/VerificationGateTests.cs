@@ -16,6 +16,14 @@ public sealed class VerificationGateTests
 {
     private static readonly ExecutionLimitsOptions Limits = new() { BuildTimeoutMinutes = 1, TestTimeoutMinutes = 1 };
 
+    /// <summary>
+    /// Phase 18.21 — the real verifier, not a fake: none of the WorkItems in
+    /// this file declare acceptance criteria, so it deterministically reports
+    /// NotSpecified and these tests keep asserting pure build/test semantics.
+    /// </summary>
+    private static readonly WorkItemAcceptanceVerifier Acceptance =
+        new(NullLogger<WorkItemAcceptanceVerifier>.Instance);
+
     private sealed class FakeBuildExecutor : IBuildExecutor
     {
         private readonly BuildResult _result;
@@ -72,7 +80,7 @@ public sealed class VerificationGateTests
         var gate = new VerificationGate(
             new FakeBuildExecutor(new BuildResult(true, "ok", "", 0)),
             new FakeTestExecutor(new TestExecutionResult(true, "ok", "", 0)),
-            new FakeWorkspaceResolver(), Limits, NullLogger<VerificationGate>.Instance);
+            new FakeWorkspaceResolver(), Acceptance, Limits, NullLogger<VerificationGate>.Instance);
         var (project, workItem) = MakeSubjects();
 
         var result = await gate.VerifyAsync(project, workItem);
@@ -88,7 +96,7 @@ public sealed class VerificationGateTests
         var gate = new VerificationGate(
             new FakeBuildExecutor(new BuildResult(false, "", "error CS1002", 1)),
             testExecutor,
-            new FakeWorkspaceResolver(), Limits, NullLogger<VerificationGate>.Instance);
+            new FakeWorkspaceResolver(), Acceptance, Limits, NullLogger<VerificationGate>.Instance);
         var (project, workItem) = MakeSubjects();
 
         var result = await gate.VerifyAsync(project, workItem);
@@ -103,7 +111,7 @@ public sealed class VerificationGateTests
         var gate = new VerificationGate(
             new FakeBuildExecutor(new BuildResult(true, "ok", "", 0)),
             new FakeTestExecutor(new TestExecutionResult(false, "1 failed", "", 1)),
-            new FakeWorkspaceResolver(), Limits, NullLogger<VerificationGate>.Instance);
+            new FakeWorkspaceResolver(), Acceptance, Limits, NullLogger<VerificationGate>.Instance);
         var (project, workItem) = MakeSubjects();
 
         var result = await gate.VerifyAsync(project, workItem);
@@ -117,7 +125,7 @@ public sealed class VerificationGateTests
         var gate = new VerificationGate(
             new FakeBuildExecutor(new BuildResult(false, "", "", -1, TimedOut: true)),
             new FakeTestExecutor(new TestExecutionResult(true, "", "", 0)),
-            new FakeWorkspaceResolver(), Limits, NullLogger<VerificationGate>.Instance);
+            new FakeWorkspaceResolver(), Acceptance, Limits, NullLogger<VerificationGate>.Instance);
         var (project, workItem) = MakeSubjects();
 
         var result = await gate.VerifyAsync(project, workItem);
@@ -134,7 +142,7 @@ public sealed class VerificationGateTests
         var gate = new VerificationGate(
             new FakeBuildExecutor(new BuildResult(false, "", "Docker not found", -1, TimedOut: false)),
             new FakeTestExecutor(new TestExecutionResult(true, "", "", 0)),
-            new FakeWorkspaceResolver(), Limits, NullLogger<VerificationGate>.Instance);
+            new FakeWorkspaceResolver(), Acceptance, Limits, NullLogger<VerificationGate>.Instance);
         var (project, workItem) = MakeSubjects();
 
         var result = await gate.VerifyAsync(project, workItem);
@@ -148,7 +156,7 @@ public sealed class VerificationGateTests
         var gate = new VerificationGate(
             new ThrowingBuildExecutor(new InvalidOperationException("policy violation")),
             new FakeTestExecutor(new TestExecutionResult(true, "", "", 0)),
-            new FakeWorkspaceResolver(), Limits, NullLogger<VerificationGate>.Instance);
+            new FakeWorkspaceResolver(), Acceptance, Limits, NullLogger<VerificationGate>.Instance);
         var (project, workItem) = MakeSubjects();
 
         var result = await gate.VerifyAsync(project, workItem);
@@ -165,7 +173,7 @@ public sealed class VerificationGateTests
         var gate = new VerificationGate(
             new ThrowingBuildExecutor(new OperationCanceledException(cts.Token)),
             new FakeTestExecutor(new TestExecutionResult(true, "", "", 0)),
-            new FakeWorkspaceResolver(), Limits, NullLogger<VerificationGate>.Instance);
+            new FakeWorkspaceResolver(), Acceptance, Limits, NullLogger<VerificationGate>.Instance);
         var (project, workItem) = MakeSubjects();
 
         var result = await gate.VerifyAsync(project, workItem, cts.Token);
@@ -180,7 +188,7 @@ public sealed class VerificationGateTests
         var gate = new VerificationGate(
             new FakeBuildExecutor(new BuildResult(false, "", hugeFailureText, 1)),
             new FakeTestExecutor(new TestExecutionResult(true, "", "", 0)),
-            new FakeWorkspaceResolver(), Limits, NullLogger<VerificationGate>.Instance);
+            new FakeWorkspaceResolver(), Acceptance, Limits, NullLogger<VerificationGate>.Instance);
         var (project, workItem) = MakeSubjects();
 
         var result = await gate.VerifyAsync(project, workItem);
@@ -225,7 +233,7 @@ public sealed class VerificationGateTests
         var test = new RecordingTestExecutor();
         var gate = new VerificationGate(
             build, test, new FakeWorkspaceResolver(WorkspaceResolution.Valid(resolvedPath)),
-            Limits, NullLogger<VerificationGate>.Instance);
+            Acceptance, Limits, NullLogger<VerificationGate>.Instance);
 
         await gate.VerifyAsync(project, workItem);
 
@@ -242,7 +250,7 @@ public sealed class VerificationGateTests
             new FakeBuildExecutor(new BuildResult(true, "", "", 0)),
             new FakeTestExecutor(new TestExecutionResult(true, "", "", 0)),
             new FakeWorkspaceResolver(WorkspaceResolution.Invalid("simulated resolution failure")),
-            Limits, NullLogger<VerificationGate>.Instance);
+            Acceptance, Limits, NullLogger<VerificationGate>.Instance);
 
         var result = await gate.VerifyAsync(project, workItem);
 
@@ -258,7 +266,7 @@ public sealed class VerificationGateTests
             new FakeBuildExecutor(new BuildResult(true, "", "", 0)),
             new FakeTestExecutor(new TestExecutionResult(true, "", "", 0)),
             new FakeWorkspaceResolver(WorkspaceResolution.Invalid("simulated resolution failure")),
-            Limits, NullLogger<VerificationGate>.Instance);
+            Acceptance, Limits, NullLogger<VerificationGate>.Instance);
 
         var result = await gate.VerifyProjectAsync(project);
 

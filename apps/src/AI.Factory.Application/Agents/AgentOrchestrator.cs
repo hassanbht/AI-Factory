@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Exceptions;
+using AI.Factory.Application.Orchestration;
 using AI.Factory.Domain.Entities;
 using AI.Factory.Domain.Enums;
 using Microsoft.Extensions.Logging;
@@ -26,6 +27,8 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
     private readonly IWorkspaceResolver _workspaceResolver;
     private readonly IAgentInstructionBuilder _instructionBuilder;
     private readonly IStructuredAgentResultParser _structuredResultParser;
+    private readonly IModelRouter? _modelRouter;
+    private readonly ModelRoutingOptions? _routingOptions;
     private readonly ILogger<AgentOrchestrator> _logger;
 
     public AgentOrchestrator(
@@ -37,7 +40,9 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
         IWorkspaceResolver workspaceResolver,
         IAgentInstructionBuilder instructionBuilder,
         IStructuredAgentResultParser structuredResultParser,
-        ILogger<AgentOrchestrator> logger)
+        ILogger<AgentOrchestrator> logger,
+        IModelRouter? modelRouter = null,
+        ModelRoutingOptions? routingOptions = null)
     {
         _agentRunRepository = agentRunRepository;
         _projectRepository = projectRepository;
@@ -47,6 +52,8 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
         _workspaceResolver = workspaceResolver;
         _instructionBuilder = instructionBuilder;
         _structuredResultParser = structuredResultParser;
+        _modelRouter = modelRouter;
+        _routingOptions = routingOptions;
         _logger = logger;
     }
 
@@ -268,13 +275,60 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
             Attempt = run.Attempt,
             CorrelationId = run.CorrelationId,
             Provider = run.Provider,
-            Model = run.Model,
+            Model = run.Model ?? ResolveRoleModel(run),
             Input = instructionText,
             WorkspacePath = workspacePath,
             CreatedAtUtc = run.CreatedAtUtc,
             UpdatedAtUtc = run.UpdatedAtUtc,
             Version = run.Version
         };
+    }
+
+    /// <summary>
+    /// Phase 18.21 §13/§14 — picks the model for this run's ROLE when the run
+    /// does not name one itself. An explicit AgentRun.Model always wins; this
+    /// only fills the gap that made Implementation and Repair
+    /// indistinguishable, since nothing in the production pipeline ever set
+    /// AgentRun.Model and both silently used the container's internal default.
+    /// Routing stays entirely in configuration (AgentType -> category ->
+    /// candidate models), so no model id is hard-coded here. A missing or
+    /// unusable profile is not an error: the run simply carries no model and
+    /// HermesOptions.DefaultModel remains the last-resort fallback.
+    /// </summary>
+    private string? ResolveRoleModel(AgentRun run)
+    {
+        const int estimatedContextTokens = 16_000;
+
+        var agentType = run.AgentDefinition?.AgentType;
+
+        if (_modelRouter is null || _routingOptions is null || string.IsNullOrWhiteSpace(agentType))
+        {
+            return null;
+        }
+
+        if (!_routingOptions.AgentTypeCategories.TryGetValue(agentType, out var category))
+        {
+            return null;
+        }
+
+        try
+        {
+            var selection = _modelRouter.SelectModel(new ModelRoutingRequest(
+                category, TaskComplexity.Standard, estimatedContextTokens, CostPreference.Balanced));
+
+            _logger.LogInformation(
+                "AgentRunModelResolved AgentRunId={AgentRunId} AgentType={AgentType} Category={Category} ModelId={ModelId}",
+                run.Id, agentType, category, selection.ModelId);
+
+            return selection.ModelId;
+        }
+        catch (NoModelAvailableException ex)
+        {
+            _logger.LogWarning(
+                "AgentRunModelUnresolved AgentRunId={AgentRunId} AgentType={AgentType} Category={Category} Reason={Reason}",
+                run.Id, agentType, category, ex.Message);
+            return null;
+        }
     }
 
     /// <summary>

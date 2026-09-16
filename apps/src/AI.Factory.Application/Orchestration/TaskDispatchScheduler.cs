@@ -423,7 +423,15 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
     /// </summary>
     private static string BuildRepairObjective(WorkItem workItem, Project? project)
     {
-        const int maxFailureSummaryLength = 2000;
+        // Phase 18.21 §12 — measured, not guessed. A repair driven by a short
+        // failure summary (an acceptance-criteria miss, ~150 chars) completed
+        // in ~84s live; the same model on the same tiny workspace, handed a
+        // 2000-char raw `dotnet test` dump, exceeded the 5-minute execution
+        // budget on every attempt across Phases 18.20-18.21. The decisive
+        // lines (failing test name and assertion) sit at the tail that
+        // VerificationGate already selected, so a tighter bound keeps the
+        // signal and drops the noise that was costing the whole repair.
+        const int maxFailureSummaryLength = 600;
 
         var failureSummary = workItem.CurrentError ?? "(no verification failure summary recorded)";
 

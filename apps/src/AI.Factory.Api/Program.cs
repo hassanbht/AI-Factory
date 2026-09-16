@@ -177,6 +177,15 @@ builder.Services.AddScoped<IAgentRuntime, HermesAgentRuntime>();
 var modelRoutingOptions = new ModelRoutingOptions();
 builder.Configuration.GetSection("ModelRouting").Bind(modelRoutingOptions);
 builder.Services.AddSingleton(modelRoutingOptions);
+
+// Phase 18.21 §15 — deterministic, offline configuration validation (never a
+// provider call). A placeholder or incoherent catalog is reported loudly
+// rather than only surfacing much later as an unexplained agent failure, as
+// the shipped placeholder ids did for the review stage in Phase 18.20.
+foreach (var problem in modelRoutingOptions.Validate())
+{
+    Console.Error.WriteLine($"[ModelRouting] {problem}");
+}
 builder.Services.AddSingleton<IModelRouter, ModelRouter>();
 
 // ------------------------------------------------------------
@@ -298,6 +307,9 @@ builder.Services.AddScoped<IValidationRunRepository, ValidationRunRepository>();
 // are registered here too (not just in the Worker) so CriticalServicesHealthCheck
 // can resolve the new authoritative dispatch service; the Worker process still
 // owns the actual scheduling loop (TaskSchedulerHostedService).
+// Phase 18.21 — deterministic, Factory-owned acceptance criteria, evaluated
+// by VerificationGate after (never instead of) the mandatory build/test run.
+builder.Services.AddScoped<IWorkItemAcceptanceVerifier, WorkItemAcceptanceVerifier>();
 builder.Services.AddScoped<IVerificationGate, VerificationGate>();
 builder.Services.AddScoped<IProjectCompletionGate, ProjectCompletionGate>();
 builder.Services.AddScoped<ITaskDispatchScheduler, TaskDispatchScheduler>();

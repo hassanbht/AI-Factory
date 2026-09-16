@@ -482,12 +482,19 @@ public sealed class RealHermesE2ETests
         await worker.StopAsync(CancellationToken.None);
 
         Assert.NotNull(finalWorkItem);
-        // The real model decides completed/repair_required on its own — this
-        // proves the deterministic mapping pipeline actually ran and reached
-        // one of its known outcomes, not any specific one.
+        // The real model decides completed/repair_required on its own, and
+        // this WorkItem's workspace was never seeded with real buildable
+        // source — so a real VerificationGate run legitimately lands on
+        // Repairing too. This proves the deterministic mapping pipeline
+        // actually ran and reached one of its known outcomes, not any
+        // specific one.
         Assert.Contains(
             finalWorkItem!.Status,
-            new[] { WorkItemStatus.Completed.ToString(), WorkItemStatus.Blocked.ToString(), WorkItemStatus.Failed.ToString() });
+            new[]
+            {
+                WorkItemStatus.Completed.ToString(), WorkItemStatus.Blocked.ToString(),
+                WorkItemStatus.Failed.ToString(), WorkItemStatus.Repairing.ToString()
+            });
     }
 
     private static async Task<WorkItem?> WaitForWorkItemLeavesRunningAsync(TestHost testHost, Guid workItemId, TimeSpan timeout)
@@ -500,7 +507,14 @@ public sealed class RealHermesE2ETests
             var db = scope.ServiceProvider.GetRequiredService<FactoryDbContext>();
             var workItem = await new WorkItemRepository(db).GetByIdAsync(workItemId);
 
-            if (workItem is not null && workItem.Status != WorkItemStatus.Running.ToString())
+            // Testing is itself a transient intermediate status (Phase 18.8)
+            // resolved to Completed/Blocked/Failed/Repairing moments later by
+            // the same SyncAsync call — against real Hermes timing (unlike
+            // the fast in-memory fakes) this poll can observe that window, so
+            // it must not be treated as "left Running" either.
+            if (workItem is not null
+                && workItem.Status != WorkItemStatus.Running.ToString()
+                && workItem.Status != WorkItemStatus.Testing.ToString())
             {
                 return workItem;
             }
@@ -629,8 +643,17 @@ public sealed class RealHermesE2ETests
         var executionLimitsOptions = new ExecutionLimitsOptions { BuildTimeoutMinutes = 5 };
 
         // Reuse BuildHost to get the real Worker DI graph (with the
-        // overridden AgentWorkspaceOptions pointing to projectsBase).
+        // overridden AgentWorkspaceOptions pointing to projectsBase). This
+        // test's task requires the agent to actually invoke a file-editing
+        // tool (not just emit text like the plain Smoke test), which the
+        // real free-tier OmniRoute model observably needs more than
+        // BuildHost's 120s test default to complete — so both timeouts are
+        // raised here to match the shipped production defaults
+        // (HermesOptions.TimeoutSeconds / AgentExecutionTimeoutMinutes in
+        // appsettings.json are both 300s), not an arbitrary longer wait.
         using var testHost = BuildHost(
+            configureHermes: o => o.TimeoutSeconds = 300,
+            configureWorker: o => o.ExecutionTimeout = TimeSpan.FromSeconds(320),
             configureWorkspace: o => o.ProjectsBaseDirectory = projectsBase);
 
         Guid projectId, workItemId, agentRunId;
@@ -696,7 +719,7 @@ public sealed class RealHermesE2ETests
         using var cts = new CancellationTokenSource();
         await worker.StartAsync(cts.Token);
 
-        var finalRun = await WaitForTerminalAsync(testHost, agentRunId, TimeSpan.FromSeconds(240));
+        var finalRun = await WaitForTerminalAsync(testHost, agentRunId, TimeSpan.FromSeconds(360));
 
         await worker.StopAsync(CancellationToken.None);
 
@@ -815,7 +838,8 @@ public sealed class RealHermesE2ETests
             workItemId = workItem.Id;
 
             var runRepo = new AgentRunRepository(db);
-            var definition = (await new AgentDefinitionRepository(db).GetAllAsync()).First();
+            var definition = await new AgentDefinitionRepository(db).CreateAsync(
+                new AgentDefinition { Name = "Coder", AgentType = "Implementation" });
 
             var run = new AgentRun
             {
@@ -880,6 +904,17 @@ public sealed class RealHermesE2ETests
         var testsDir = Path.Combine(seedDir, "tests");
         Directory.CreateDirectory(srcDir);
         Directory.CreateDirectory(testsDir);
+
+        // Demo.slnx — required so `dotnet build`/`dotnet test` against the
+        // workspace root (what IVerificationGate always targets) can resolve
+        // a project; without it MSBuild fails with MSB1003 ("the current
+        // working directory does not contain a project or solution file").
+        File.WriteAllText(Path.Combine(seedDir, "Demo.slnx"), """
+            <Solution>
+              <Project Path="src/Demo.csproj" />
+              <Project Path="tests/Demo.Tests.csproj" />
+            </Solution>
+            """);
 
         // src/Demo.csproj
         File.WriteAllText(Path.Combine(srcDir, "Demo.csproj"), """

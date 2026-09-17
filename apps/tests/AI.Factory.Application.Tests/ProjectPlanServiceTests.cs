@@ -146,6 +146,21 @@ public sealed class ProjectPlanServiceTests : IDisposable
             new ProjectPlanRequest(projectId, null, new[] { Task_("a", new[] { "ghost" }) })));
     }
 
+    /// <summary>Phase 18.23 §9 — a priority outside the domain's own list is a plan-validation rejection, never coerced to a default.</summary>
+    [Fact]
+    public async Task CreatePlanAsync_InvalidPriority_Rejected()
+    {
+        var projectId = await SeedPlanningProjectAsync();
+        await SeedAgentDefinitionAsync("Implementation");
+
+        await using var db = new FactoryDbContext(_options);
+
+        await Assert.ThrowsAsync<ValidationException>(() => CreateService(db).CreatePlanAsync(
+            new ProjectPlanRequest(projectId, "s", new[] { Task_("a", priority: "Urgent") })));
+
+        Assert.Empty(await new WorkItemRepository(db).GetByProjectIdAsync(projectId));
+    }
+
     [Fact]
     public async Task CreatePlanAsync_SelfDependency_Rejected()
     {

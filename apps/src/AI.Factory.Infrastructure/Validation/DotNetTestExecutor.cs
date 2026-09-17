@@ -18,8 +18,15 @@ public sealed class DotNetTestExecutor : ITestExecutor
     {
         try
         {
+            // Same daemon-inherits-the-pipe hazard as the build path — see
+            // DotNetBuildExecutor.NoDaemonFlags for the full explanation.
+            // `dotnet test` drives the same MSBuild machinery, so it needs the
+            // same flags; fixing only the build would leave half the gate exposed.
+            var arguments = new List<string> { "test", request.ProjectPath };
+            arguments.AddRange(DotNetBuildExecutor.NoDaemonFlags);
+
             var result = await _processRunner.RunAsync(
-                new ProcessRunRequest("dotnet", new[] { "test", request.ProjectPath }, request.Timeout),
+                new ProcessRunRequest("dotnet", arguments, request.Timeout),
                 cancellationToken);
 
             return new TestExecutionResult(

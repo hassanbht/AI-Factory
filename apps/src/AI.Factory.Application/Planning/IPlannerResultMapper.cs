@@ -23,10 +23,47 @@ public interface IPlannerResultMapper
     ProjectPlanRequest Map(Guid projectId, StructuredAgentResult structuredResult);
 }
 
+/// <summary>
+/// Phase 18.23 §6 — the stage of the Planner pipeline a run reached before it
+/// stopped. Recorded so a failed Planner run says WHERE it failed rather than
+/// only that it failed; deliberately a small closed enum rather than free text,
+/// so diagnostics stay aggregatable and carry no model output of their own.
+/// </summary>
+public enum PlannerDiagnosticStage
+{
+    /// <summary>Hermes/provider/runtime never produced a successful AgentRun.</summary>
+    PlannerExecution,
+
+    /// <summary>The AgentRun succeeded but carried no raw output to read.</summary>
+    PlannerRawOutputReceived,
+
+    /// <summary>No valid structured-result envelope could be read out of the raw output.</summary>
+    PlannerStructuredParse,
+
+    /// <summary>The envelope was valid but the candidate plan's shape/types were not.</summary>
+    PlannerSchemaValidation,
+
+    /// <summary>The plan was well-shaped but semantically invalid (keys, dependencies, priorities, cycles).</summary>
+    PlannerPlanValidation,
+
+    /// <summary>A task's acceptance contract was missing or unusable.</summary>
+    PlannerAcceptanceValidation,
+
+    /// <summary>The plan was accepted but could not be persisted.</summary>
+    PlannerPersistence
+}
+
 /// <summary>A Planner Agent's structured output could not be mapped into a candidate plan — untrusted LLM output failed basic shape/type validation.</summary>
 public sealed class PlannerCandidatePlanException : Exception
 {
-    public PlannerCandidatePlanException(string message) : base(message)
+    public PlannerCandidatePlanException(string message)
+        : this(message, PlannerDiagnosticStage.PlannerSchemaValidation)
     {
     }
+
+    public PlannerCandidatePlanException(string message, PlannerDiagnosticStage stage) : base(message) =>
+        Stage = stage;
+
+    /// <summary>Which §6 stage rejected the candidate — schema shape, or the acceptance contract inside it.</summary>
+    public PlannerDiagnosticStage Stage { get; }
 }

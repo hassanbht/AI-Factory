@@ -91,6 +91,38 @@ public sealed class PlannerResultMapperTests
         Assert.Throws<PlannerCandidatePlanException>(() => Mapper.Map(ProjectId, Succeeded(data)));
     }
 
+    /// <summary>Phase 18.23 §9 — an absent "tasks" is rejected exactly like an empty one; never read as "a plan with nothing to do".</summary>
+    [Fact]
+    public void Map_MissingTasksField_Rejected()
+    {
+        const string data = """{"plan":{"version":1,"summary":"s"}}""";
+        Assert.Throws<PlannerCandidatePlanException>(() => Mapper.Map(ProjectId, Succeeded(data)));
+    }
+
+    /// <summary>
+    /// Phase 18.23 §6 — the stage a rejection carries is what makes a failed
+    /// Planner run diagnosable, so it is asserted rather than left incidental.
+    /// </summary>
+    [Fact]
+    public void Map_MissingAcceptanceCriteria_IsTaggedAsAnAcceptanceFailure_NotASchemaFailure()
+    {
+        const string data = """{"plan":{"version":1,"tasks":[{"planKey":"a","title":"A","type":"Implementation"}]}}""";
+
+        var ex = Assert.Throws<PlannerCandidatePlanException>(() => Mapper.Map(ProjectId, Succeeded(data)));
+
+        Assert.Equal(PlannerDiagnosticStage.PlannerAcceptanceValidation, ex.Stage);
+    }
+
+    [Fact]
+    public void Map_InvalidWorkItemType_IsTaggedAsASchemaFailure()
+    {
+        const string data = """{"plan":{"version":1,"tasks":[{"planKey":"a","title":"A","type":"Teleportation"}]}}""";
+
+        var ex = Assert.Throws<PlannerCandidatePlanException>(() => Mapper.Map(ProjectId, Succeeded(data)));
+
+        Assert.Equal(PlannerDiagnosticStage.PlannerSchemaValidation, ex.Stage);
+    }
+
     [Fact]
     public void Map_MissingPlanKey_Rejected()
     {

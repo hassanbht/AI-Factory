@@ -110,13 +110,15 @@ public sealed class PlannerResultMapper : IPlannerResultMapper
         {
             throw new PlannerCandidatePlanException(
                 $"Candidate task '{task.PlanKey}' is missing required field 'acceptanceCriteria'. " +
-                "Every planned task must state machine-checkable evidence of completion.");
+                "Every planned task must state machine-checkable evidence of completion.",
+                PlannerDiagnosticStage.PlannerAcceptanceValidation);
         }
 
         if (element.ValueKind != JsonValueKind.Object)
         {
             throw new PlannerCandidatePlanException(
-                $"Candidate task '{task.PlanKey}' has an 'acceptanceCriteria' value that is not an object.");
+                $"Candidate task '{task.PlanKey}' has an 'acceptanceCriteria' value that is not an object.",
+                PlannerDiagnosticStage.PlannerAcceptanceValidation);
         }
 
         var raw = element.GetRawText();
@@ -126,13 +128,15 @@ public sealed class PlannerResultMapper : IPlannerResultMapper
         {
             AcceptanceCriteriaParseStatus.Valid => raw,
             AcceptanceCriteriaParseStatus.Invalid => throw new PlannerCandidatePlanException(
-                $"Candidate task '{task.PlanKey}' has invalid acceptance criteria: {parsed.Error}"),
+                $"Candidate task '{task.PlanKey}' has invalid acceptance criteria: {parsed.Error}",
+                PlannerDiagnosticStage.PlannerAcceptanceValidation),
             // Structurally present but not recognizable as a contract at all —
             // e.g. an object with no "criteria" array. Never treated as "none
             // specified", which would silently defeat the whole requirement.
             _ => throw new PlannerCandidatePlanException(
                 $"Candidate task '{task.PlanKey}' has an 'acceptanceCriteria' object that is not a valid " +
-                "acceptance contract (expected a version and a criteria array).")
+                "acceptance contract (expected a version and a criteria array).",
+                PlannerDiagnosticStage.PlannerAcceptanceValidation)
         };
     }
 

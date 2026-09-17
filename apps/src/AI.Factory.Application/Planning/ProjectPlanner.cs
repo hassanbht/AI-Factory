@@ -22,6 +22,14 @@ public sealed class ProjectPlanner : IProjectPlanner
     /// <summary>The AgentDefinition.AgentType value that marks an AgentDefinition as usable for Planner execution — distinct from any WorkItemType value (Phase 18.6 §4).</summary>
     public const string PlannerAgentType = "Planner";
 
+    /// <summary>
+    /// Phase 18.23 §4/§12 — the task ceiling stated in the Planner prompt. Not
+    /// a validation rule (the Factory never rejects a plan for being large);
+    /// purely guidance, because every observed malformed live plan was one the
+    /// model ran out of budget to finish.
+    /// </summary>
+    public const int MaxRecommendedTasks = 3;
+
     private readonly IProjectRepository _projects;
     private readonly IAgentDefinitionRepository _agentDefinitions;
     private readonly IAgentRunRepository _agentRuns;
@@ -136,7 +144,8 @@ public sealed class ProjectPlanner : IProjectPlanner
         if (run.Status != AgentRunStatus.Succeeded)
         {
             _logger.LogInformation(
-                "PlannerRuntimeFailed AgentRunId={AgentRunId} Status={Status}", run.Id, run.Status);
+                "PlannerStageFailed Stage={Stage} AgentRunId={AgentRunId} Status={Status}",
+                PlannerDiagnosticStage.PlannerExecution, run.Id, run.Status);
             return new PlannerMaterializationResult(
                 PlannerMaterializationOutcome.RuntimeFailed, null,
                 run.ErrorMessage ?? $"Planner AgentRun ended in status '{run.Status}'.");
@@ -147,15 +156,38 @@ public sealed class ProjectPlanner : IProjectPlanner
             return PlannerMaterializationResult.Skip($"Planner AgentRun '{agentRunId}' has no ProjectId.");
         }
 
+        // §6 — every stage below logs the stage it reached, so a failed Planner
+        // run says WHERE the chain broke. What is logged is the Factory's own
+        // classification plus the parser's/validator's own message; the raw
+        // model output itself is never written to these logs (§6 again) — it
+        // stays on AgentRun.Output for deliberate inspection.
+        if (string.IsNullOrWhiteSpace(run.Output))
+        {
+            _logger.LogWarning(
+                "PlannerStageFailed Stage={Stage} AgentRunId={AgentRunId} Reason=NoRawOutput",
+                PlannerDiagnosticStage.PlannerRawOutputReceived, run.Id);
+            return new PlannerMaterializationResult(
+                PlannerMaterializationOutcome.CandidateInvalid, null,
+                "Planner AgentRun succeeded but produced no output at all.");
+        }
+
         var structuredResult = TryDeserializeStructuredResult(run.StructuredResult);
 
         if (structuredResult is null || structuredResult.Status == StructuredResultStatus.Invalid)
         {
+            // The parser already recorded WHY, as a warning on the structured
+            // result the orchestrator persisted — surface it instead of the
+            // uninformative "no valid structured result" this used to report.
+            var reason = structuredResult?.Warnings.FirstOrDefault()
+                ?? "no structured-result envelope could be read from the agent's output";
+
             _logger.LogWarning(
-                "PlannerCandidateInvalid AgentRunId={AgentRunId} Reason=NoValidStructuredResult", run.Id);
+                "PlannerStageFailed Stage={Stage} AgentRunId={AgentRunId} Reason={Reason}",
+                PlannerDiagnosticStage.PlannerStructuredParse, run.Id, reason);
+
             return new PlannerMaterializationResult(
                 PlannerMaterializationOutcome.CandidateInvalid, null,
-                "Planner AgentRun succeeded but produced no valid structured result.");
+                $"Planner AgentRun succeeded but produced no valid structured result: {reason}");
         }
 
         ProjectPlanRequest candidate;
@@ -167,7 +199,8 @@ public sealed class ProjectPlanner : IProjectPlanner
         catch (PlannerCandidatePlanException ex)
         {
             _logger.LogWarning(
-                "PlannerCandidateInvalid AgentRunId={AgentRunId} Reason={Reason}", run.Id, ex.Message);
+                "PlannerStageFailed Stage={Stage} AgentRunId={AgentRunId} Reason={Reason}",
+                ex.Stage, run.Id, ex.Message);
             return new PlannerMaterializationResult(PlannerMaterializationOutcome.CandidateInvalid, null, ex.Message);
         }
 
@@ -188,7 +221,8 @@ public sealed class ProjectPlanner : IProjectPlanner
             // guarantees that); this is a Factory validation failure, kept
             // distinct from RuntimeFailed/CandidateInvalid above.
             _logger.LogWarning(
-                "PlannerPlanValidationFailed AgentRunId={AgentRunId} Reason={Reason}", run.Id, ex.Message);
+                "PlannerStageFailed Stage={Stage} AgentRunId={AgentRunId} Reason={Reason}",
+                PlannerDiagnosticStage.PlannerPlanValidation, run.Id, ex.Message);
             return new PlannerMaterializationResult(PlannerMaterializationOutcome.PlanValidationFailed, null, ex.Message);
         }
     }
@@ -223,62 +257,109 @@ public sealed class ProjectPlanner : IProjectPlanner
         var workItemTypes = string.Join(", ", Enum.GetNames<WorkItemType>());
         var priorities = string.Join(", ", ProjectPlanService.ValidPriorities);
 
-        var criterionTypes = string.Join(", ", Enum.GetNames<AcceptanceCriterionType>());
+        // Every list below is projected from the code that will actually judge
+        // the answer (§3/§4) — a criterion type the model is told about is by
+        // construction one AcceptanceCriteriaContract accepts, and vice versa.
+        var pathOnly = string.Join(", ", new[]
+        {
+            AcceptanceCriterionType.FileExists, AcceptanceCriterionType.FileAbsent
+        });
 
-        var jsonShape =
+        var pathAndValue = string.Join(", ", new[]
+        {
+            AcceptanceCriterionType.ExpectedTextPresent,
+            AcceptanceCriterionType.ExpectedTextAbsent,
+            AcceptanceCriterionType.ExpectedFileContent
+        });
+
+        var neither = string.Join(", ", new[]
+        {
+            AcceptanceCriterionType.BuildPasses, AcceptanceCriterionType.TestsPass
+        });
+
+        var envelopeShape =
+            """{"version":1,"status":"Succeeded","summary":"<one line>","output":"","data":{"plan":{"version":1,"summary":"<one line>","tasks":[<task>,...]}},"warnings":[],"errors":[],"artifacts":[],"metadata":{}}""";
+
+        var taskShape =
+            """{"planKey":"<short.dotted.key>","title":"<short title>","description":"<one sentence>","type":"<type>","priority":"<priority>","dependsOn":[],"acceptanceCriteria":{"version":1,"criteria":[<criterion>,...]}}""";
+
+        var criterionShapes =
             """
-            {"plan":{"version":1,"summary":"<one-line plan summary>","tasks":[
-              {"planKey":"<stable.dotted.key>","title":"<task title>","description":"<task description>",
-                "type":"<one of: WORK_ITEM_TYPES>","priority":"<one of: PRIORITIES>",
-                "dependsOn":["<planKey of a prerequisite task>", "..."],
-                "acceptanceCriteria":{"version":1,"criteria":[
-                  {"type":"<one of: CRITERION_TYPES>","path":"<repository-relative file path>","value":"<expected text>"}
-                ]}}
-            ]}}
-            """
-            .Replace("WORK_ITEM_TYPES", workItemTypes)
-            .Replace("PRIORITIES", priorities)
-            .Replace("CRITERION_TYPES", criterionTypes);
+            {"type":"FileExists","path":"<repository-relative path>"}
+            {"type":"FileAbsent","path":"<repository-relative path>"}
+            {"type":"ExpectedTextPresent","path":"<repository-relative path>","value":"<exact text>"}
+            {"type":"ExpectedTextAbsent","path":"<repository-relative path>","value":"<exact text>"}
+            {"type":"ExpectedFileContent","path":"<repository-relative path>","value":"<exact full file text>"}
+            {"type":"BuildPasses"}
+            {"type":"TestsPass"}
+            """;
 
         return $"""
-            You are the Planner Agent for AI Factory. Produce a candidate software
-            execution plan for the project described below. Your output is
-            UNTRUSTED input to the Factory: it will be independently validated,
-            normalized, and persisted — you do not create WorkItems yourself.
+            You are the Planner Agent for AI Factory. You are not talking to a
+            person: your answer is parsed by a program. Produce ONE JSON object
+            and nothing else — no greeting, no explanation, no markdown, no code
+            fence.
+
+            Your output is UNTRUSTED input to the Factory: it is independently
+            validated and either accepted whole or rejected whole. You do not
+            create WorkItems yourself, and a single malformed character rejects
+            the entire plan — so keep the JSON small and finish it.
 
             Project name: {project.Name}
             Project description: {project.Description}
 
-            Respond using the standard structured-JSON output contract (see the
-            Output contract section below), with your candidate plan placed under
-            the top-level "data" object as:
+            Emit exactly this envelope, with the plan under "data":
 
-            {jsonShape}
+            {envelopeShape}
 
-            Rules:
-            - Every task needs a short, stable, human-readable "planKey" (e.g.
-              "api.authentication") — never a random id or GUID.
-            - "dependsOn" entries must be "planKey" values of other tasks in this
-              same plan, describing real prerequisite relationships — never invent
-              a dependency that is not actually required.
-            - Use only the listed "type" and "priority" values above.
-            - EVERY task must carry "acceptanceCriteria" stating observable
-              evidence that the task is done. The Factory verifies these itself
-              against the real repository — a task whose completion cannot be
-              observed will be rejected and the whole plan refused.
-            - Use only the listed criterion types above. "path" is always a
-              repository-relative file path. "value" is the exact expected text
-              and is required for ExpectedTextPresent, ExpectedTextAbsent and
-              ExpectedFileContent; BuildPasses and TestsPass take neither.
-            - Prefer criteria that cannot be satisfied by accident: name the
-              specific file the task changes and the specific text it must (or
-              must no longer) contain.
-            - Never put a shell command, script, regular expression or
-              natural-language assertion in a criterion — only the listed types.
-            - Do not write implementation code.
-            - Do not include any prose outside the single structured JSON object.
-            - Do not attempt to execute tools, modify files, run shell commands, or
-              perform any Git operation — your only job is to produce the plan.
+            Each <task> is exactly:
+
+            {taskShape}
+
+            Each <criterion> is exactly one of:
+
+            {criterionShapes}
+
+            Hard rules:
+            - PLAN SIZE: emit the SMALLEST plan that covers the work — at most
+              {MaxRecommendedTasks} tasks. One task per concrete change to the
+              repository. Never add a task for analysing, reviewing, verifying or
+              documenting the plan itself.
+            - Never add a task whose job is to build the project, run its tests,
+              or check that earlier tasks worked. The Factory already builds and
+              tests the repository itself after every single task, and refuses
+              the task unless that passes — such a task would repeat work that
+              has already happened. If a task's result depends on the build or
+              the tests, say so with a {neither} criterion ON THAT TASK instead.
+            - "type" is one of: {workItemTypes}.
+            - "priority" is one of: {priorities}.
+            - "planKey" is short, stable and human-readable (e.g. "docs.readme") —
+              never a random id or GUID.
+            - "dependsOn" holds "planKey" values of OTHER tasks in this same plan,
+              and only where one task genuinely cannot start before another
+              finishes. Never invent a dependency that is not actually required,
+              and never let a task depend on itself.
+            - EVERY task must carry "acceptanceCriteria" with at least one
+              criterion stating observable evidence that the task is done. The
+              Factory checks these itself against the real repository after the
+              work runs — a task whose completion cannot be observed is rejected
+              and the whole plan refused.
+            - {pathOnly} need "path" only. {pathAndValue} need both "path" and
+              "value". {neither} take neither.
+            - Never use {neither} as a task's ONLY criterion: they already passed
+              before the task started, so they prove nothing about it. Name the
+              file the task creates or changes and the exact text it must (or must
+              no longer) contain.
+            - "path" is always repository-relative — never absolute, never
+              outside the repository.
+            - Never put a shell command, script, regular expression, glob or
+              natural-language sentence in "type", "path" or "value".
+            - Keep every "description" to one short sentence. Long prose spends
+              the budget the JSON needs in order to stay well-formed.
+            - Do not write implementation code. Do not run tools, edit files, run
+              shell commands or perform any Git operation — producing the plan is
+              your whole job.
+            - "status" is "Succeeded" only if the plan under "data" is complete.
             """;
     }
 }

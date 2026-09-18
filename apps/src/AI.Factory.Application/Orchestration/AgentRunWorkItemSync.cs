@@ -1,7 +1,5 @@
 using System.Text.Json;
-using System.Text.Json;
 using AI.Factory.Application.Abstractions;
-using AI.Factory.Application.Agents;
 using AI.Factory.Application.Agents;
 using AI.Factory.Application.Exceptions;
 using AI.Factory.Domain.Entities;
@@ -11,15 +9,6 @@ using Microsoft.Extensions.Logging;
 namespace AI.Factory.Application.Orchestration;
 
 /// <summary>
-/// AgentRun -> WorkItem completion mapping (Phase 18.3 §10, extended Phase
-/// 18.7 §7). Runtime-level outcomes (Failed/TimedOut/Cancelled) stay a plain
-/// status map, unchanged since Phase 18.3. A Succeeded AgentRun no longer
-/// blindly means WorkItem.Completed: its StructuredResult is interpreted
-/// through <see cref="IWorkItemExecutionResultMapper"/> first, because "a
-/// successful LLM process must not automatically mean successful software
-/// delivery" (Phase 18.7 §7). No Planner/Coder/Tester/Reviewer-specific
-/// behavior beyond that one deterministic policy — still just the existing
-/// WorkItemTransitions guard underneath.
 /// AgentRun -> WorkItem completion mapping (Phase 18.3 §10, extended Phase
 /// 18.7 §7). Runtime-level outcomes (Failed/TimedOut/Cancelled) stay a plain
 /// status map, unchanged since Phase 18.3. A Succeeded AgentRun no longer
@@ -63,7 +52,6 @@ public sealed class AgentRunWorkItemSync : IAgentRunWorkItemSync
         }
 
         if (!AgentRunTransitions.IsTerminal(agentRun.Status))
-        if (!AgentRunTransitions.IsTerminal(agentRun.Status))
         {
             // Non-terminal AgentRun status — nothing to sync yet.
             return;
@@ -87,10 +75,6 @@ public sealed class AgentRunWorkItemSync : IAgentRunWorkItemSync
             // §11): a second observation of the same terminal AgentRun finds
             // the WorkItem no longer Running and returns here without
             // re-transitioning anything.
-            // This is also this method's idempotency guard (Phase 18.7
-            // §11): a second observation of the same terminal AgentRun finds
-            // the WorkItem no longer Running and returns here without
-            // re-transitioning anything.
             _logger.LogInformation(
                 "AgentRunWorkItemSyncSkipped AgentRunId={AgentRunId} WorkItemId={WorkItemId} Reason=NotRunning CurrentStatus={CurrentStatus}",
                 agentRun.Id, workItemId, workItem.Status);
@@ -106,24 +90,13 @@ public sealed class AgentRunWorkItemSync : IAgentRunWorkItemSync
             return;
         }
 
-        var (target, errorMessage) = DetermineTarget(agentRun);
-
-        if (target is null)
-        {
-            // Defensive — AgentRunTransitions.IsTerminal(agentRun.Status)
-            // already guarantees a mapped target for every terminal status.
-            return;
-        }
-
         if (target != WorkItemStatus.Completed)
         {
-            workItem.CurrentError = errorMessage;
             workItem.CurrentError = errorMessage;
         }
 
         try
         {
-            workItem.TransitionTo(target.Value);
             workItem.TransitionTo(target.Value);
             await _workItems.UpdateAsync(workItem, cancellationToken);
         }

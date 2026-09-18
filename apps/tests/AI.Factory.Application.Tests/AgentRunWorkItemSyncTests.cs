@@ -103,11 +103,7 @@ public sealed class AgentRunWorkItemSyncTests : IDisposable
     [InlineData(AgentRunStatus.Cancelled, WorkItemStatus.Cancelled)]
     [InlineData(AgentRunStatus.TimedOut, WorkItemStatus.Failed)]
     public async Task SyncAsync_TerminalRuntimeFailure_TransitionsWorkItem(AgentRunStatus runStatus, WorkItemStatus expected)
-    public async Task SyncAsync_TerminalRuntimeFailure_TransitionsWorkItem(AgentRunStatus runStatus, WorkItemStatus expected)
     {
-        // Phase 18.7 §12 "Runtime failure" — unchanged since Phase 18.3: the
-        // AgentRun's own terminal status decides these, no StructuredResult
-        // interpretation involved.
         // Phase 18.7 §12 "Runtime failure" — unchanged since Phase 18.3: the
         // AgentRun's own terminal status decides these, no StructuredResult
         // interpretation involved.
@@ -115,7 +111,6 @@ public sealed class AgentRunWorkItemSyncTests : IDisposable
         var run = new AgentRun { WorkItemId = taskId, Status = runStatus };
 
         await using var db = new FactoryDbContext(_options);
-        await CreateSync(db).SyncAsync(run);
         await CreateSync(db).SyncAsync(run);
 
         var workItem = await new WorkItemRepository(db).GetByIdAsync(taskId);
@@ -409,7 +404,6 @@ public sealed class AgentRunWorkItemSyncTests : IDisposable
 
         await using var syncDb = new FactoryDbContext(_options);
         await CreateSync(syncDb).SyncAsync(run);
-        await CreateSync(syncDb).SyncAsync(run);
 
         var workItem = await new WorkItemRepository(syncDb).GetByIdAsync(taskId);
         Assert.Equal(WorkItemStatus.Completed.ToString(), workItem!.Status);
@@ -453,7 +447,6 @@ public sealed class AgentRunWorkItemSyncTests : IDisposable
         var run = new AgentRun { WorkItemId = null, Status = AgentRunStatus.Succeeded };
 
         await using var db = new FactoryDbContext(_options);
-        await CreateSync(db).SyncAsync(run);
         await CreateSync(db).SyncAsync(run);
 
         // No exception, no WorkItem touched — nothing further to assert.

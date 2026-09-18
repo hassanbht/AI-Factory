@@ -35,7 +35,6 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
 
     private readonly IWorkItemRepository _workItems;
     private readonly IProjectRepository _projects;
-    private readonly IProjectRepository _projects;
     private readonly ITaskDependencyResolver _resolver;
     private readonly IAgentRunRepository _agentRuns;
     private readonly IAgentDefinitionRepository _agentDefinitions;
@@ -48,7 +47,6 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
     public TaskDispatchScheduler(
         IWorkItemRepository workItems,
         IProjectRepository projects,
-        IProjectRepository projects,
         ITaskDependencyResolver resolver,
         IAgentRunRepository agentRuns,
         IAgentDefinitionRepository agentDefinitions,
@@ -59,7 +57,6 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
         ILogger<TaskDispatchScheduler> logger)
     {
         _workItems = workItems;
-        _projects = projects;
         _projects = projects;
         _resolver = resolver;
         _agentRuns = agentRuns;
@@ -175,7 +172,6 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
             try
             {
                 outcomes.Add(await DispatchOneAsync(workItem, definitions, project, items, cancellationToken));
-                outcomes.Add(await DispatchOneAsync(workItem, definitions, project, items, cancellationToken));
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -242,11 +238,6 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
         Project? project,
         IReadOnlyList<WorkItem> allProjectItems,
         CancellationToken cancellationToken)
-        WorkItem workItem,
-        IReadOnlyList<AgentDefinition> definitions,
-        Project? project,
-        IReadOnlyList<WorkItem> allProjectItems,
-        CancellationToken cancellationToken)
     {
         // Looked up by convention (AgentType == WorkItem.Type name) — no
         // Planner/Coder-specific agent is created or assumed here; if the
@@ -290,7 +281,6 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
             AgentDefinitionId = definition.Id,
             ProjectId = workItem.ProjectId,
             WorkItemId = workItem.Id,
-            Input = BuildObjective(workItem, project, allProjectItems)
             Input = BuildObjective(workItem, project, allProjectItems)
         };
 

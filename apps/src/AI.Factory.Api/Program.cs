@@ -124,6 +124,16 @@ builder.Services.AddSingleton(plannerOptions);
 builder.Services.AddScoped<AI.Factory.Application.Planning.IPlannerResultMapper, AI.Factory.Application.Planning.PlannerResultMapper>();
 builder.Services.AddScoped<AI.Factory.Application.Planning.IProjectPlanner, AI.Factory.Application.Planning.ProjectPlanner>();
 
+// Phase 18.5 — Deterministic Project Planner & Execution Plan
+builder.Services.AddScoped<IProjectPlanService, AI.Factory.Application.Planning.ProjectPlanService>();
+
+// Phase 18.6 — LLM Planner Agent & Candidate Plan Generation
+var plannerOptions = new AI.Factory.Application.Planning.PlannerOptions();
+builder.Configuration.GetSection(AI.Factory.Application.Planning.PlannerOptions.SectionName).Bind(plannerOptions);
+builder.Services.AddSingleton(plannerOptions);
+builder.Services.AddScoped<AI.Factory.Application.Planning.IPlannerResultMapper, AI.Factory.Application.Planning.PlannerResultMapper>();
+builder.Services.AddScoped<AI.Factory.Application.Planning.IProjectPlanner, AI.Factory.Application.Planning.ProjectPlanner>();
+
 var hermesOptions = new HermesOptions();
 builder.Configuration.GetSection("Hermes").Bind(hermesOptions);
 
@@ -1101,6 +1111,97 @@ app.MapPost("/api/projects/{projectId}/plan", async (
             t.Priority ?? "Normal",
             (IReadOnlyList<string>)(t.DependsOn ?? new List<string>()),
             t.AcceptanceCriteria?.GetRawText());
+    }).ToList();
+
+    var result = await service.CreatePlanAsync(
+        new ProjectPlanRequest(parsedProjectId, request.Summary, tasks), cancellationToken);
+
+    return Results.Ok(ToPlanDto(result));
+}).RequireRateLimiting("GeneralApi");
+
+app.MapGet("/api/projects/{projectId}/plan", async (
+    string projectId,
+    IProjectPlanService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!Guid.TryParse(projectId, out var parsedProjectId) || parsedProjectId == Guid.Empty)
+    {
+        throw new ValidationException("Invalid project identifier.");
+    }
+
+    var result = await service.GetPlanAsync(parsedProjectId, cancellationToken);
+    return result is null ? Results.NotFound() : Results.Ok(ToPlanDto(result));
+}).RequireRateLimiting("GeneralApi");
+
+// Phase 18.6 — initiates Planner Agent execution through the existing
+// AgentRun pipeline; never executes Hermes inside this HTTP request. The
+// resulting plan is later read back through GET /api/projects/{projectId}/plan
+// above (unchanged from Phase 18.5) once AgentRunWorker materializes it.
+app.MapPost("/api/projects/{projectId}/plan/generate", async (
+    string projectId,
+    AI.Factory.Application.Planning.IProjectPlanner planner,
+    CancellationToken cancellationToken) =>
+{
+    if (!Guid.TryParse(projectId, out var parsedProjectId) || parsedProjectId == Guid.Empty)
+    {
+        throw new ValidationException("Invalid project identifier.");
+    }
+
+    var run = await planner.GenerateAsync(parsedProjectId, cancellationToken);
+    return Results.Created($"/api/agents/runs/{run.Id}", ToAgentRunDto(run));
+}).RequireRateLimiting("ExpensiveOperation");
+
+static object ToPlanDto(ProjectPlanResult plan) => new
+{
+    plan.ProjectId,
+    plan.PlanHash,
+    Tasks = plan.Tasks.Select(t => new
+    {
+        t.PlanKey,
+        t.WorkItemId,
+        t.Title,
+        Type = t.Type.ToString(),
+        t.Priority,
+        t.DependsOn,
+        t.Status,
+        Readiness = t.Readiness.ToString()
+    })
+};
+
+// ------------------------------------------------------------
+// Project Planner (Phase 18.5)
+// ------------------------------------------------------------
+
+app.MapPost("/api/projects/{projectId}/plan", async (
+    string projectId,
+    CreatePlanRequest request,
+    IProjectPlanService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!Guid.TryParse(projectId, out var parsedProjectId) || parsedProjectId == Guid.Empty)
+    {
+        throw new ValidationException("Invalid project identifier.");
+    }
+
+    if (request.Tasks is null || request.Tasks.Count == 0)
+    {
+        throw new ValidationException("A plan must contain at least one task.");
+    }
+
+    var tasks = request.Tasks.Select(t =>
+    {
+        if (!Enum.TryParse<WorkItemType>(t.Type, ignoreCase: true, out var type) || !Enum.IsDefined(type))
+        {
+            throw new ValidationException($"Task '{t.PlanKey}' has an invalid type '{t.Type}'.");
+        }
+
+        return new PlannedWorkItemInput(
+            t.PlanKey ?? string.Empty,
+            t.Title ?? string.Empty,
+            t.Description,
+            type,
+            t.Priority ?? "Normal",
+            (IReadOnlyList<string>)(t.DependsOn ?? new List<string>()));
     }).ToList();
 
     var result = await service.CreatePlanAsync(

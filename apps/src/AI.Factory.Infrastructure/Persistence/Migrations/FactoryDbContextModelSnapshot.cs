@@ -787,6 +787,9 @@ namespace AI.Factory.Infrastructure.Persistence.Migrations
                     b.Property<string>("GitRepository")
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTime?>("LifecycleStartedAtUtc")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(200)

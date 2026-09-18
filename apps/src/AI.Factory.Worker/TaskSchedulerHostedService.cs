@@ -1,4 +1,4 @@
-using AI.Factory.Application.Abstractions;
+﻿using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Configuration;
 using AI.Factory.Domain.Enums;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,6 +13,13 @@ namespace AI.Factory.Worker;
 /// AgentRunWorker's poll loop (per-tick failure isolation, shutdown-aware).
 /// Does not execute anything itself — a dispatched WorkItem's actual
 /// execution is picked up by the existing AgentRunWorker.
+///
+/// Phase 18.25 — the same sweep also drives IProjectLifecycleOrchestrator for
+/// each Project, immediately before its dispatch cycle. Reusing this one loop
+/// rather than adding a second poll loop keeps a single periodic sweep over
+/// Projects, and means a Project that advances into Implementation on a tick
+/// is dispatched on that same tick. All lifecycle state lives in the Project
+/// row, so a Worker restart simply resumes the sweep (§8).
 /// </summary>
 public sealed class TaskSchedulerHostedService : BackgroundService
 {
@@ -75,6 +82,7 @@ public sealed class TaskSchedulerHostedService : BackgroundService
         var projects = scope.ServiceProvider.GetRequiredService<IProjectRepository>();
         var scheduler = scope.ServiceProvider.GetRequiredService<ITaskDispatchScheduler>();
         var statusTracker = scope.ServiceProvider.GetRequiredService<ISchedulerStatusTracker>();
+        var lifecycle = scope.ServiceProvider.GetRequiredService<IProjectLifecycleOrchestrator>();
 
         var active = (await projects.ListAsync(cancellationToken))
             .Where(x => !TerminalProjectStatuses.Contains(x.Status))
@@ -89,6 +97,18 @@ public sealed class TaskSchedulerHostedService : BackgroundService
 
             try
             {
+                // Phase 18.25 — a Project that was never explicitly started is
+                // a guaranteed no-op here; only the durable
+                // LifecycleStartedAtUtc marker makes it lifecycle-owned.
+                var lifecycleResult = await lifecycle.AdvanceAsync(project.Id, cancellationToken);
+
+                if (lifecycleResult.Action != ProjectLifecycleAction.None)
+                {
+                    _logger.LogInformation(
+                        "ProjectLifecycleCycle ProjectId={ProjectId} Action={Action} Status={Status} Reason={Reason}",
+                        project.Id, lifecycleResult.Action, lifecycleResult.Status, lifecycleResult.Reason);
+                }
+
                 var result = await scheduler.RunCycleAsync(project.Id, cancellationToken);
                 statusTracker.RecordCycle(result);
 
@@ -106,7 +126,9 @@ public sealed class TaskSchedulerHostedService : BackgroundService
             catch (Exception ex)
             {
                 // One project's cycle failing must not stop the sweep of
-                // the rest — Phase 18.3 §13.
+                // the rest — Phase 18.3 §13. The same isolation covers a
+                // lifecycle step: a Project whose lifecycle advance throws is
+                // left exactly as it was, for the next tick to retry.
                 _logger.LogError(ex, "SchedulerCycleFailed ProjectId={ProjectId}", project.Id);
             }
         }

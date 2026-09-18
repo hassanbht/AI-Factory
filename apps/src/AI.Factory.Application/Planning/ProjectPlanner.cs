@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Orchestration;
 using AI.Factory.Application.Agents;
@@ -115,6 +115,33 @@ public sealed class ProjectPlanner : IProjectPlanner
             projectId, run.Id, plannerDefinition.Id);
 
         return run;
+    }
+
+    public async Task<AgentRun?> GetLatestRunAsync(
+        Guid projectId, CancellationToken cancellationToken = default)
+    {
+        var definitions = await _agentDefinitions.GetAllAsync(cancellationToken);
+
+        // Deliberately NOT filtered on Enabled: a Planner run that already
+        // happened stays a fact about this Project even if the definition was
+        // disabled afterwards, and hiding it would let the lifecycle owner
+        // dispatch a second Planner for the same Project.
+        var plannerDefinitionIds = definitions
+            .Where(d => string.Equals(d.AgentType, PlannerAgentType, StringComparison.OrdinalIgnoreCase))
+            .Select(d => d.Id)
+            .ToHashSet();
+
+        if (plannerDefinitionIds.Count == 0)
+        {
+            return null;
+        }
+
+        // GetPagedAsync already returns newest-first (OrderByDescending on
+        // CreatedAtUtc), so the first match is the latest run.
+        var page = await _agentRuns.GetPagedAsync(
+            new AgentRunQuery(ProjectId: projectId, Page: 1, PageSize: 50), cancellationToken);
+
+        return page.Items.FirstOrDefault(r => plannerDefinitionIds.Contains(r.AgentDefinitionId));
     }
 
     public async Task<PlannerMaterializationResult> MaterializeAsync(

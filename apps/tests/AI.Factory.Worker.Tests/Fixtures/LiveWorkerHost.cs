@@ -1,4 +1,4 @@
-using AI.Factory.Application.Abstractions;
+﻿using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Configuration;
 using AI.Factory.Application.Orchestration;
 using AI.Factory.Infrastructure.Agents;
@@ -111,6 +111,12 @@ public sealed class LiveWorkerHost : IDisposable
         var schedulerOptions = (TaskSchedulerOptions)builder.Services
             .Single(d => d.ServiceType == typeof(TaskSchedulerOptions)).ImplementationInstance!;
         schedulerOptions.MaxConcurrentTasks = 1;
+        // Phase 18.25 — the live lifecycle test runs the real
+        // TaskSchedulerHostedService instead of pumping cycles by hand, so the
+        // shipped 15s tick would dominate the run's wall clock. Only the
+        // interval is shortened; Enabled, MaxConcurrentTasks and every timeout
+        // stay at their production values.
+        schedulerOptions.SchedulingInterval = TimeSpan.FromSeconds(2);
 
         var hermesOptions = (HermesOptions)builder.Services
             .Single(d => d.ServiceType == typeof(HermesOptions)).ImplementationInstance!;

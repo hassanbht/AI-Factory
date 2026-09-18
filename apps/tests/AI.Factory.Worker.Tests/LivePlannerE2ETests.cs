@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Agents;
 using AI.Factory.Application.Exceptions;
@@ -116,7 +116,16 @@ public sealed class LivePlannerE2ETests
         }
 
         var worker = live.Host.Services.GetServices<IHostedService>().OfType<AgentRunWorker>().Single();
+
+        // Phase 18.25 §19 — the real production sweep drives both the lifecycle
+        // orchestrator and the dispatch scheduler. Running it (rather than
+        // pumping cycles from the test) is what makes "the lifecycle owner
+        // produced these transitions" an observation rather than an inference.
+        var scheduler = live.Host.Services.GetServices<IHostedService>()
+            .OfType<TaskSchedulerHostedService>().Single();
+
         await worker.StartAsync(cancellationToken);
+        await scheduler.StartAsync(cancellationToken);
 
         var attempts = new List<PlannerAttempt>();
 
@@ -129,6 +138,7 @@ public sealed class LivePlannerE2ETests
         }
         finally
         {
+            await scheduler.StopAsync(CancellationToken.None);
             await worker.StopAsync(CancellationToken.None);
         }
 
@@ -210,19 +220,26 @@ public sealed class LivePlannerE2ETests
     // ────────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Phase 18.24 §8/§23/§26 — the one run the whole phase exists to observe.
+    /// Phase 18.24 §8/§23/§26 and Phase 18.25 §18/§19/§20 — the one run the
+    /// whole phase exists to observe.
     ///
     /// Everything below happens in a single uninterrupted execution against one
-    /// provider/model: a real Planner AgentRun, the WorkItems it generated (none
-    /// is created by this test — §21), a deterministic acceptance failure and a
-    /// real repair on the first task, a dependent task the scheduler may only
-    /// release afterwards, real project verification, and an explicit human
-    /// approval. The only manual lifecycle actions are the operator-level
-    /// Project transitions the HTTP API also exposes (Analyzing -> … -> Planning
-    /// before planning, Planning -> Implementation after it) and that approval.
+    /// provider/model: autonomous lifecycle progression from Analyzing to
+    /// Planning, a real Planner AgentRun the Factory dispatched itself, the
+    /// WorkItems it generated (none is created by this test — 18.24 §21), a
+    /// deterministic acceptance failure and a real repair on the first task, a
+    /// dependent task the scheduler may only release afterwards, real project
+    /// verification, and an explicit human approval.
+    ///
+    /// Phase 18.25 §20 — this test issues NO intermediate Project status
+    /// transition. Its only Project-level lifecycle actions are: create,
+    /// initialize source, one IProjectLifecycleOrchestrator.StartAsync, and
+    /// ProjectService.ApproveAsync at the end. Everything in between is
+    /// produced by the real Worker loops (TaskSchedulerHostedService +
+    /// AgentRunWorker) and proven from the persisted audit trail.
     /// </summary>
     [Fact]
-    public async Task RealPlanner_ForcedRepair_DependentDispatch_ProjectVerification_HumanApproval()
+    public async Task AutonomousStart_RealPlanner_ForcedRepair_DependentDispatch_ProjectVerification_HumanApproval()
     {
         if (!LiveWorkerHost.Enabled)
         {
@@ -244,7 +261,15 @@ public sealed class LivePlannerE2ETests
         }
 
         var worker = live.Host.Services.GetServices<IHostedService>().OfType<AgentRunWorker>().Single();
+        // Phase 18.25 §19 — the real production sweep drives both the lifecycle
+        // orchestrator and the dispatch scheduler, so every intermediate Project
+        // transition below is produced by the lifecycle owner rather than by
+        // this test pumping cycles by hand.
+        var scheduler = live.Host.Services.GetServices<IHostedService>()
+            .OfType<TaskSchedulerHostedService>().Single();
+
         await worker.StartAsync(cancellationToken);
+        await scheduler.StartAsync(cancellationToken);
 
         Guid projectId;
         IReadOnlyList<ProjectPlanTaskResult> planTasks;
@@ -276,67 +301,78 @@ public sealed class LivePlannerE2ETests
             await AssertPersistedGraphMatchesPlanAsync(live, projectId, planTasks, cancellationToken);
             await AssertEveryWorkItemHasReadableCriteriaAsync(live, projectId, cancellationToken);
 
-            await using (var scope = live.Host.Services.CreateAsyncScope())
-            {
-                await scope.ServiceProvider.GetRequiredService<ProjectService>()
-                    .TransitionStatusAsync(projectId, ProjectStatus.Implementation, cancellationToken);
-            }
+            // Phase 18.25 §18/§20 — Planning -> Implementation is produced by
+            // the lifecycle orchestrator once the plan is persisted, never by
+            // this test.
+            await WaitForProjectStatusAsync(
+                live, projectId, TimeSpan.FromMinutes(3), ProjectStatus.Implementation);
 
             observations = await DriveGeneratedWorkItemsAsync(
                 live, projectId, planTasks, TimeSpan.FromMinutes(60), cancellationToken);
 
             await ReportAgentRunsAsync(live, projectId, cancellationToken);
-        }
-        finally
-        {
-            await worker.StopAsync(CancellationToken.None);
-        }
 
-        // §9/§12 — at least one Planner-generated WorkItem must have gone
+            // §9/§12 — at least one Planner-generated WorkItem must have gone
         // through the real Repairing path. RepairAttemptCount is incremented
         // only inside TaskDispatchScheduler.DispatchRepairAsync, whose sole
         // entry condition is a WorkItem already in Repairing — which in turn is
         // only reachable from Testing on a VerificationGate.Failed result. A
         // non-zero count is therefore proof of a real repair, not of a retry.
-        var repaired = observations.Where(o => o.RepairAttemptCount > 0).ToList();
+            var repaired = observations.Where(o => o.RepairAttemptCount > 0).ToList();
 
-        Assert.True(
-            repaired.Count > 0,
-            "No Planner-generated WorkItem entered the repair path, so the §9 repair leg is unobserved in this run.");
+            Assert.True(
+                repaired.Count > 0,
+                "No Planner-generated WorkItem entered the repair path, so the §9 repair leg is unobserved in this run.");
 
-        foreach (var o in repaired)
-        {
-            _output.WriteLine(
-                $"REPAIR {o.PlanKey} WorkItem={o.WorkItemId} RepairAttemptCount={o.RepairAttemptCount} " +
-                $"timeline={string.Join(" -> ", o.StatusTimeline)}");
+            foreach (var o in repaired)
+            {
+                _output.WriteLine(
+                    $"REPAIR {o.PlanKey} WorkItem={o.WorkItemId} RepairAttemptCount={o.RepairAttemptCount} " +
+                    $"timeline={string.Join(" -> ", o.StatusTimeline)}");
+            }
+
+            // §11 — dependency semantics, from the database rather than from the
+            // polling loop alone: a dependent task's first AgentRun may not have
+            // started before its prerequisite reached Completed.
+            await AssertDependentRunsStartedAfterPrerequisitesAsync(live, projectId, planTasks, cancellationToken);
+
+            // §13 — Implementation -> Testing -> project verification -> Reviewing
+            // -> HumanReview, driven purely by real scheduler cycles. No Project
+            // status is set by hand.
+            //
+            // Phase 18.25 — this wait, and everything below it, MUST stay inside
+            // the try: the real TaskSchedulerHostedService is what drives the
+            // completion gate now, so stopping it before this point leaves the
+            // Project parked in Implementation forever.
+            var humanReview = await WaitForProjectStatusAsync(
+                live, projectId, TimeSpan.FromMinutes(20), ProjectStatus.HumanReview);
+            Assert.Equal(ProjectStatus.HumanReview, humanReview.Status);
+
+            // Phase 18.25 §19 — the intermediate transitions must be shown to have
+            // been produced by the lifecycle owner, from the persisted audit trail
+            // rather than inferred from the final status.
+            await AssertLifecycleEvidenceAsync(live, projectId, cancellationToken);
+
+            // §13.6/§13.7 — the generic transition stays refused; approval is the
+            // one manual step and the only way out.
+            await using (var scope = live.Host.Services.CreateAsyncScope())
+            {
+                var projectService = scope.ServiceProvider.GetRequiredService<ProjectService>();
+
+                await Assert.ThrowsAsync<ConflictException>(() =>
+                    projectService.TransitionStatusAsync(projectId, ProjectStatus.Completed, cancellationToken));
+
+                var completed = await projectService.ApproveAsync(projectId, "qa-lead@factory.local", cancellationToken);
+                Assert.Equal(ProjectStatus.Completed, completed.Status);
+            }
+
+            _output.WriteLine($"Project {projectId} Completed from a Planner-generated plan, after explicit human approval.");
         }
-
-        // §11 — dependency semantics, from the database rather than from the
-        // polling loop alone: a dependent task's first AgentRun may not have
-        // started before its prerequisite reached Completed.
-        await AssertDependentRunsStartedAfterPrerequisitesAsync(live, projectId, planTasks, cancellationToken);
-
-        // §13 — Implementation -> Testing -> project verification -> Reviewing
-        // -> HumanReview, driven purely by real scheduler cycles. No Project
-        // status is set by hand.
-        var humanReview = await WaitForProjectStatusAsync(
-            live, projectId, TimeSpan.FromMinutes(20), ProjectStatus.HumanReview);
-        Assert.Equal(ProjectStatus.HumanReview, humanReview.Status);
-
-        // §13.6/§13.7 — the generic transition stays refused; approval is the
-        // one manual step and the only way out.
-        await using (var scope = live.Host.Services.CreateAsyncScope())
+        finally
         {
-            var projectService = scope.ServiceProvider.GetRequiredService<ProjectService>();
-
-            await Assert.ThrowsAsync<ConflictException>(() =>
-                projectService.TransitionStatusAsync(projectId, ProjectStatus.Completed, cancellationToken));
-
-            var completed = await projectService.ApproveAsync(projectId, "qa-lead@factory.local", cancellationToken);
-            Assert.Equal(ProjectStatus.Completed, completed.Status);
+            await scheduler.StopAsync(CancellationToken.None);
+            await worker.StopAsync(CancellationToken.None);
         }
-
-        _output.WriteLine($"Project {projectId} Completed from a Planner-generated plan, after explicit human approval.");
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -345,10 +381,15 @@ public sealed class LivePlannerE2ETests
 
     /// <summary>
     /// One complete live Planner execution through the production path:
-    /// Project -> workspace -> real Git source -> IProjectPlanner.GenerateAsync
-    /// -> AgentRunWorker -> Hermes -> model -> StructuredAgentResultParser ->
-    /// PlannerResultMapper -> ProjectPlanService -> persisted WorkItems.
-    /// Nothing here reaches into Planner internals (§10).
+    /// Project -> workspace -> real Git source -> ONE
+    /// IProjectLifecycleOrchestrator.StartAsync -> autonomous
+    /// Analyzing/Specification/Architecture/Planning progression ->
+    /// Factory-dispatched Planner AgentRun -> AgentRunWorker -> Hermes ->
+    /// model -> StructuredAgentResultParser -> PlannerResultMapper ->
+    /// ProjectPlanService -> persisted WorkItems.
+    ///
+    /// Phase 18.25 §20 — no intermediate Project status transition is issued
+    /// here. Nothing reaches into Planner internals (18.23 §10).
     /// </summary>
     private async Task<PlannerAttempt> RunPlannerOnceAsync(
         LiveWorkerHost live, int run, CancellationToken cancellationToken)
@@ -369,19 +410,20 @@ public sealed class LivePlannerE2ETests
                 new SourceSpecification(ProjectSourceType.GitRepository, live.BareRepoPath, "main"),
                 cancellationToken);
 
-            await MoveProjectToPlanningAsync(projectService, projectId, cancellationToken);
+            // §18/§20 — the ONE lifecycle action this test performs. Every
+            // Project transition after this point is the Factory's own.
+            await scope.ServiceProvider.GetRequiredService<IProjectLifecycleOrchestrator>()
+                .StartAsync(projectId, "qa-lead@factory.local", cancellationToken);
         }
 
-        Guid agentRunId;
+        // The lifecycle owner walks Analyzing -> Specification -> Architecture
+        // -> Planning and dispatches the Planner itself; the test only watches.
+        await WaitForProjectStatusAsync(live, projectId, TimeSpan.FromMinutes(5), ProjectStatus.Planning);
 
-        await using (var scope = live.Host.Services.CreateAsyncScope())
-        {
-            var plannerRun = await scope.ServiceProvider.GetRequiredService<IProjectPlanner>()
-                .GenerateAsync(projectId, cancellationToken);
-            agentRunId = plannerRun.Id;
-        }
+        var agentRunId = (await WaitForPlannerRunAsync(
+            live, projectId, TimeSpan.FromMinutes(5), cancellationToken)).Id;
 
-        _output.WriteLine($"[run {run}] ProjectId={projectId} Planner AgentRunId={agentRunId}");
+        _output.WriteLine($"[run {run}] ProjectId={projectId} Planner AgentRunId={agentRunId} (dispatched by the lifecycle owner)");
 
         var terminalRun = await WaitForAgentRunTerminalAsync(live, agentRunId, TimeSpan.FromMinutes(12), cancellationToken);
 
@@ -425,6 +467,96 @@ public sealed class LivePlannerE2ETests
             DependencyGraph: graph,
             FailureStage: failureStage,
             Duration: stopwatch.Elapsed);
+    }
+
+    /// <summary>
+    /// Phase 18.25 §19 — reconstructs the lifecycle from the persisted audit
+    /// trail and asserts that the start and every intermediate transition were
+    /// written by the lifecycle owner ("System" /
+    /// <c>ProjectLifecycleOrchestrator</c>), in order, with timestamps. Test
+    /// code issues none of these, so a matching trail can only have come from
+    /// the Factory itself.
+    /// </summary>
+    private async Task AssertLifecycleEvidenceAsync(
+        LiveWorkerHost live, Guid projectId, CancellationToken cancellationToken)
+    {
+        await using var scope = live.Host.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<FactoryDbContext>();
+
+        var entries = await db.AuditLogEntries
+            .Where(e => e.ProjectId == projectId)
+            .OrderBy(e => e.TimestampUtc)
+            .ToListAsync(cancellationToken);
+
+        _output.WriteLine("");
+        _output.WriteLine("| TimestampUtc | Event | Outcome | Actor |");
+        _output.WriteLine("|---|---|---|---|");
+
+        foreach (var e in entries)
+        {
+            _output.WriteLine(
+                $"| {e.TimestampUtc:HH:mm:ss.fff} | {e.EventType} | {e.Outcome} | {e.ActorType}/{e.ActorId ?? "-"} |");
+        }
+
+        _output.WriteLine("");
+
+        var start = entries.SingleOrDefault(e => e.EventType == AuditEventType.WorkflowStarted);
+        Assert.True(start is not null, "No lifecycle-start audit entry was recorded.");
+
+        var automatic = entries
+            .Where(e => e.EventType == AuditEventType.WorkflowStateChanged
+                && e.ActorId == nameof(ProjectLifecycleOrchestrator))
+            .ToList();
+
+        foreach (var expected in new[]
+                 {
+                     ProjectStatus.Specification, ProjectStatus.Architecture,
+                     ProjectStatus.Planning, ProjectStatus.Implementation
+                 })
+        {
+            var entry = automatic.SingleOrDefault(e => e.Outcome == expected.ToString());
+
+            Assert.True(
+                entry is not null,
+                $"No automatic lifecycle transition to {expected} was recorded by the lifecycle owner.");
+
+            Assert.Equal("System", entry!.ActorType);
+            Assert.True(entry.TimestampUtc >= start!.TimestampUtc, $"{expected} predates the lifecycle start.");
+        }
+
+        // The Planner dispatch is the lifecycle owner's too — not the test's.
+        Assert.Contains(
+            entries,
+            e => e.EventType == AuditEventType.AgentStarted && e.ActorId == nameof(ProjectLifecycleOrchestrator));
+    }
+
+    /// <summary>
+    /// Phase 18.25 — waits for the Planner AgentRun the lifecycle orchestrator
+    /// dispatched, read back through the Planner's own production query. The
+    /// test never creates one.
+    /// </summary>
+    private async Task<AgentRun> WaitForPlannerRunAsync(
+        LiveWorkerHost live, Guid projectId, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            await using (var scope = live.Host.Services.CreateAsyncScope())
+            {
+                var run = await scope.ServiceProvider.GetRequiredService<IProjectPlanner>()
+                    .GetLatestRunAsync(projectId, cancellationToken);
+
+                if (run is not null)
+                {
+                    return run;
+                }
+            }
+
+            await Task.Delay(2000, cancellationToken);
+        }
+
+        throw new TimeoutException($"The lifecycle owner never dispatched a Planner AgentRun for project {projectId}.");
     }
 
     /// <summary>
@@ -677,11 +809,8 @@ public sealed class LivePlannerE2ETests
 
         while (DateTime.UtcNow < deadline)
         {
-            await using (var scope = live.Host.Services.CreateAsyncScope())
-            {
-                await scope.ServiceProvider.GetRequiredService<ITaskDispatchScheduler>().RunCycleAsync(projectId);
-            }
-
+            // Phase 18.25 — the real TaskSchedulerHostedService drives the
+            // cycles now; this loop only observes what it produced.
             Dictionary<Guid, WorkItem> snapshot;
 
             await using (var scope = live.Host.Services.CreateAsyncScope())
@@ -819,11 +948,6 @@ public sealed class LivePlannerE2ETests
 
         while (DateTime.UtcNow < deadline)
         {
-            await using (var scope = live.Host.Services.CreateAsyncScope())
-            {
-                await scope.ServiceProvider.GetRequiredService<ITaskDispatchScheduler>().RunCycleAsync(projectId);
-            }
-
             await using (var scope = live.Host.Services.CreateAsyncScope())
             {
                 var project = await scope.ServiceProvider.GetRequiredService<IProjectRepository>().GetByIdAsync(projectId);

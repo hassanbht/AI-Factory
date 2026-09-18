@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Agents;
 using AI.Factory.Application.Planning;
@@ -706,6 +706,9 @@ public sealed class AgentRunWorkerTests
 
         public Task<AgentRun> GenerateAsync(Guid projectId, CancellationToken cancellationToken = default) =>
             throw new NotImplementedException();
+
+        public Task<AgentRun?> GetLatestRunAsync(Guid projectId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<AgentRun?>(null);
 
         public Task<PlannerMaterializationResult> MaterializeAsync(Guid agentRunId, CancellationToken cancellationToken = default)
         {

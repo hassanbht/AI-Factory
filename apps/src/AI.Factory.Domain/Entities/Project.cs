@@ -1,4 +1,4 @@
-using AI.Factory.Domain.Common;
+﻿using AI.Factory.Domain.Common;
 using AI.Factory.Domain.Enums;
 using AI.Factory.Domain.Exceptions;
 
@@ -28,6 +28,17 @@ public sealed class Project : IVersionedEntity
     /// Mirrors WorkItem.CurrentError; never unbounded raw process output.
     /// </summary>
     public string? CurrentError { get; set; }
+
+    /// <summary>
+    /// Phase 18.25 — the authoritative, durable marker that autonomous
+    /// lifecycle execution has been started for this Project. Null means the
+    /// Project is operator-driven only: the lifecycle orchestrator never
+    /// touches it. Deliberately a separate field rather than an inference
+    /// from <see cref="Status"/>, because a status alone cannot distinguish
+    /// "the Factory owns this Project's progression" from "an operator is
+    /// walking it through by hand" (spec 18.25 §3/§7).
+    /// </summary>
+    public DateTime? LifecycleStartedAtUtc { get; set; }
 
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 

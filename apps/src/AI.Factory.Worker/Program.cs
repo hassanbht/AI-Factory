@@ -1,4 +1,4 @@
-using AI.Factory.Application.Abstractions;
+﻿using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Agents;
 using AI.Factory.Application.Configuration;
 using AI.Factory.Application.Learning;
@@ -113,6 +113,11 @@ builder.Services.AddScoped<IAgentRunWorkItemSync, AgentRunWorkItemSync>();
 
 // Phase 18.10 — Deterministic Project Completion & Review Gate.
 builder.Services.AddScoped<IProjectCompletionGate, ProjectCompletionGate>();
+
+// Phase 18.25 — the single Project lifecycle authority (Analyzing -> ... ->
+// Planning -> real Planner -> Implementation). Registered in both composition
+// roots: the Api exposes the start operation, the Worker drives progression.
+builder.Services.AddScoped<IProjectLifecycleOrchestrator, ProjectLifecycleOrchestrator>();
 builder.Services.AddScoped<ITaskDispatchScheduler, TaskDispatchScheduler>();
 
 // Phase 18.5 — Deterministic Project Planner & Execution Plan

@@ -1,4 +1,4 @@
-using AI.Factory.Application.Abstractions;
+﻿using AI.Factory.Application.Abstractions;
 using AI.Factory.Domain.Entities;
 
 namespace AI.Factory.Application.Planning;
@@ -30,6 +30,17 @@ public interface IProjectPlanner
     /// return, never duplicating WorkItems.
     /// </summary>
     Task<PlannerMaterializationResult> MaterializeAsync(Guid agentRunId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Phase 18.25 — read-only query for the lifecycle owner: the newest
+    /// Planner <see cref="AgentRun"/> belonging to a Project, or null if the
+    /// Planner has never been dispatched for it. Exists so the lifecycle
+    /// orchestrator can tell "planner not started yet" from "planner still
+    /// running" from "planner already failed" without duplicating the
+    /// Planner AgentDefinition lookup, and without ever retrying a Planner
+    /// the Factory already ran (spec 18.25 §15 — bounded, fail-closed).
+    /// </summary>
+    Task<AgentRun?> GetLatestRunAsync(Guid projectId, CancellationToken cancellationToken = default);
 }
 
 /// <summary>

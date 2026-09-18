@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Threading.RateLimiting;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Agents;
@@ -312,6 +312,11 @@ builder.Services.AddScoped<IValidationRunRepository, ValidationRunRepository>();
 builder.Services.AddScoped<IWorkItemAcceptanceVerifier, WorkItemAcceptanceVerifier>();
 builder.Services.AddScoped<IVerificationGate, VerificationGate>();
 builder.Services.AddScoped<IProjectCompletionGate, ProjectCompletionGate>();
+
+// Phase 18.25 — the single Project lifecycle authority (Analyzing -> ... ->
+// Planning -> real Planner -> Implementation). Registered in both composition
+// roots: the Api exposes the start operation, the Worker drives progression.
+builder.Services.AddScoped<IProjectLifecycleOrchestrator, ProjectLifecycleOrchestrator>();
 builder.Services.AddScoped<ITaskDispatchScheduler, TaskDispatchScheduler>();
 
 var repairOptions = new RepairOptions();
@@ -879,6 +884,27 @@ app.MapPost("/api/projects/{id}/approve", async (
     return Results.Ok(ToProjectDto(project));
 }).RequireRateLimiting("GeneralApi");
 
+// Phase 18.25 §12 — the ONE authoritative "start this project" operation.
+// The caller says "start this project", never "set this project to
+// Architecture": no target status is accepted, and the generic PATCH
+// /status endpoint keeps its existing, unchanged meaning. Idempotent —
+// starting an already-started Project returns its current persisted
+// lifecycle state rather than starting a second lifecycle execution.
+app.MapPost("/api/projects/{id}/start", async (
+    string id,
+    StartProjectRequest? request,
+    IProjectLifecycleOrchestrator lifecycle,
+    CancellationToken cancellationToken) =>
+{
+    if (!Guid.TryParse(id, out var parsedGuid) || parsedGuid == Guid.Empty)
+    {
+        throw new ValidationException("Invalid project identifier.");
+    }
+
+    var project = await lifecycle.StartAsync(parsedGuid, request?.Actor, cancellationToken);
+    return Results.Ok(ToProjectDto(project));
+}).RequireRateLimiting("GeneralApi");
+
 // Phase 18.16 — the explicit source-initialization operation (spec §18):
 // separate from POST /api/projects because a Git clone/network operation can
 // fail independently of Project metadata creation. Reachable only once, from
@@ -1141,6 +1167,10 @@ static object ToProjectDto(Project project) => new
     Status = project.Status.ToString(),
     project.GitRepository,
     project.GitBranch,
+    // Phase 18.25 §12 — the persisted lifecycle state the start operation
+    // establishes; null means the Project is operator-driven only.
+    project.LifecycleStartedAtUtc,
+    project.CurrentError,
     project.CreatedAtUtc,
     project.UpdatedAtUtc
 };
@@ -1762,6 +1792,9 @@ public sealed record UpdateStatusRequest(string Status);
 /// purely for audit purposes, not a verified identity claim.
 /// </summary>
 public sealed record ApproveProjectRequest(string? Actor);
+
+/// <summary>Phase 18.25 — the start operation takes no target status, only an optional actor for the audit trail.</summary>
+public sealed record StartProjectRequest(string? Actor);
 
 /// <summary>
 /// Phase 18.16 — SourceType is "Empty" or "GitRepository" (parsed against

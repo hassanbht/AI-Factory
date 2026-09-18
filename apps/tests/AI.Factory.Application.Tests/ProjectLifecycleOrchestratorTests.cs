@@ -1,4 +1,4 @@
-using AI.Factory.Application.Abstractions;
+﻿using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Exceptions;
 using AI.Factory.Application.Orchestration;
 using AI.Factory.Application.Planning;
@@ -477,6 +477,79 @@ public sealed class ProjectLifecycleOrchestratorTests : IDisposable
         }
     }
 
+    // ---------------- Phase 18.26 §6/§7 — Planner crash recovery ----------------
+
+    /// <summary>
+    /// A Worker that died mid-Planner is not a Planner failure. WorkItem-backed
+    /// runs get a second chance from the WorkItem repair path; a Planner run
+    /// has no such layer, so without this a routine restart would permanently
+    /// fail a healthy Project.
+    /// </summary>
+    [Fact]
+    public async Task AdvanceAsync_PlannerOrphanedByWorkerCrash_RedispatchesOnce_WithoutFailingTheProject()
+    {
+        await using var db = new FactoryDbContext(_options);
+        var projectId = await SeedAsync(db, ProjectStatus.Planning, lifecycleStarted: true);
+
+        var planner = new FakeProjectPlanner { LatestRun = OrphanedRun() };
+        planner.Runs = new[] { planner.LatestRun! };
+
+        var result = await CreateOrchestrator(db, planner: planner).AdvanceAsync(projectId);
+
+        Assert.Equal(ProjectLifecycleAction.PlannerStarted, result.Action);
+        Assert.Equal(ProjectStatus.Planning, result.Status);
+        Assert.Equal(1, planner.GenerateCalls);
+
+        await using var verify = new FactoryDbContext(_options);
+        Assert.Equal(ProjectStatus.Planning, (await new ProjectRepository(verify).GetByIdAsync(projectId))!.Status);
+    }
+
+    /// <summary>The retry is bounded: a second crash in a row fails closed rather than looping on provider credit.</summary>
+    [Fact]
+    public async Task AdvanceAsync_PlannerOrphanedTwice_FailsClosed()
+    {
+        await using var db = new FactoryDbContext(_options);
+        var projectId = await SeedAsync(db, ProjectStatus.Planning, lifecycleStarted: true);
+
+        var planner = new FakeProjectPlanner { LatestRun = OrphanedRun() };
+        planner.Runs = new[] { planner.LatestRun!, OrphanedRun() };
+
+        var result = await CreateOrchestrator(db, planner: planner).AdvanceAsync(projectId);
+
+        Assert.Equal(ProjectLifecycleAction.Failed, result.Action);
+        Assert.Equal(0, planner.GenerateCalls);
+
+        await using var verify = new FactoryDbContext(_options);
+        Assert.Equal(ProjectStatus.Failed, (await new ProjectRepository(verify).GetByIdAsync(projectId))!.Status);
+    }
+
+    /// <summary>A Planner that genuinely failed is still fail-closed — the retry is crash-scoped, not a general retry.</summary>
+    [Fact]
+    public async Task AdvanceAsync_PlannerFailedOnItsOwn_IsNotRetried()
+    {
+        await using var db = new FactoryDbContext(_options);
+        var projectId = await SeedAsync(db, ProjectStatus.Planning, lifecycleStarted: true);
+
+        var failedRun = RunWith(AgentRunStatus.Failed);
+        failedRun.ErrorMessage = "the agent could not produce a plan";
+
+        var planner = new FakeProjectPlanner { LatestRun = failedRun };
+        planner.Runs = new[] { failedRun };
+
+        var result = await CreateOrchestrator(db, planner: planner).AdvanceAsync(projectId);
+
+        Assert.Equal(ProjectLifecycleAction.Failed, result.Action);
+        Assert.Equal(0, planner.GenerateCalls);
+    }
+
+    private static AgentRun OrphanedRun()
+    {
+        var run = RunWith(AgentRunStatus.Failed);
+        run.ErrorMessage = $"{AgentRunRecovery.OrphanedMarker}: the Worker process restarted while this run was executing.";
+        run.FailureCategory = FailureCategory.Infrastructure;
+        return run;
+    }
+
     // ---------------- Helpers ----------------
 
     private static ProjectLifecycleOrchestrator CreateOrchestrator(
@@ -569,6 +642,14 @@ public sealed class ProjectLifecycleOrchestratorTests : IDisposable
 
         public Task<AgentRun?> GetLatestRunAsync(Guid projectId, CancellationToken cancellationToken = default) =>
             Task.FromResult(LatestRun);
+
+        public Task<IReadOnlyList<AgentRun>> GetRunsAsync(
+            Guid projectId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<AgentRun>>(
+                Runs ?? (LatestRun is null ? Array.Empty<AgentRun>() : new[] { LatestRun }));
+
+        /// <summary>Overrides the run history when a test needs more than "the latest run".</summary>
+        public IReadOnlyList<AgentRun>? Runs { get; set; }
 
         public Task<PlannerMaterializationResult> MaterializeAsync(
             Guid agentRunId, CancellationToken cancellationToken = default)

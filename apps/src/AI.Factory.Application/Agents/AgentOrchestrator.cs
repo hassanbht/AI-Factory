@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Exceptions;
 using AI.Factory.Application.Orchestration;
@@ -158,10 +158,61 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
 
         var availableToolNames = _toolRegistry.GetDescriptors().Select(x => x.Name).ToArray();
 
+        // Phase 18.26 §13 — resolve the role's candidates BEFORE execution and
+        // persist the selected model/provider on the AgentRun itself. Until
+        // now the resolved model only ever reached the runtime via a transient
+        // snapshot, so AgentRun.Model stayed null in the database and no
+        // post-run analysis could say which model actually ran. An explicit
+        // AgentRun.Model still wins and disables fallback entirely: a caller
+        // that named a model chose it deliberately.
+        var explicitModel = !string.IsNullOrWhiteSpace(run.Model);
+        var candidates = explicitModel ? Array.Empty<ModelSelection>() : ResolveRoleCandidates(run);
+
+        if (!explicitModel && candidates.Count > 0)
+        {
+            run.Model = candidates[0].ModelId;
+            run.Provider ??= candidates[0].Provider;
+            await _agentRunRepository.UpdateAsync(run, cancellationToken);
+        }
+
         var memoryEntries = await SearchMemorySafelyAsync(run, cancellationToken);
         var executionRun = BuildExecutionSnapshot(run, availableToolNames, memoryEntries, workspacePath);
 
         var runtimeResult = await _runtime.ExecuteAsync(executionRun, cancellationToken);
+
+        // Phase 18.26 §10 — controlled fallback. Permitted ONLY for
+        // infrastructure/provider/model-availability failures, and only to the
+        // role's next configured candidate. A failed test, a failed acceptance
+        // contract, invalid Planner output or a genuine coding failure is a
+        // result, not an outage: re-running those on another model would be
+        // using fallback to bypass Factory validation, which §10 forbids.
+        var fallbackUsed = false;
+
+        if (!runtimeResult.Success
+            && candidates.Count > 1
+            && IsFallbackEligible(runtimeResult.FailureCategory))
+        {
+            var fallback = candidates[1];
+
+            _logger.LogWarning(
+                "AgentRunModelFallback AgentRunId={AgentRunId} PrimaryModel={PrimaryModel} FallbackModel={FallbackModel} Reason={FailureCategory}",
+                run.Id, run.Model, fallback.ModelId, runtimeResult.FailureCategory);
+
+            run.Attempt++;
+            run.Model = fallback.ModelId;
+            run.Provider = fallback.Provider;
+            await _agentRunRepository.UpdateAsync(run, CancellationToken.None);
+
+            executionRun = BuildExecutionSnapshot(run, availableToolNames, memoryEntries, workspacePath);
+            runtimeResult = await _runtime.ExecuteAsync(executionRun, cancellationToken);
+            fallbackUsed = true;
+        }
+
+        _logger.LogInformation(
+            "AgentRunModelTelemetry AgentRunId={AgentRunId} AgentType={AgentType} Model={Model} Provider={Provider} "
+                + "FallbackUsed={FallbackUsed} Attempt={Attempt} DurationMs={DurationMs} Success={Success}",
+            run.Id, run.AgentDefinition?.AgentType, run.Model, run.Provider,
+            fallbackUsed, run.Attempt, runtimeResult.DurationMs, runtimeResult.Success);
 
         var finalStatus = runtimeResult.Success
             ? AgentRunStatus.Succeeded
@@ -275,7 +326,8 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
             Attempt = run.Attempt,
             CorrelationId = run.CorrelationId,
             Provider = run.Provider,
-            Model = run.Model ?? ResolveRoleModel(run),
+            // Resolved and persisted by ExecuteAsync before this point.
+            Model = run.Model,
             Input = instructionText,
             WorkspacePath = workspacePath,
             CreatedAtUtc = run.CreatedAtUtc,
@@ -295,7 +347,19 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
     /// unusable profile is not an error: the run simply carries no model and
     /// HermesOptions.DefaultModel remains the last-resort fallback.
     /// </summary>
-    private string? ResolveRoleModel(AgentRun run)
+    /// <summary>
+    /// Phase 18.26 §10/§18 — the exact, closed set of failure classes a model
+    /// fallback may answer. Every one of them means "this request never got a
+    /// fair evaluation": the provider, the router or the transport failed.
+    /// Everything else — Validation, Build, Test, Agent, Review, Approval,
+    /// Timeout, Cancelled — is a real result the Factory must keep, because
+    /// re-running it on a second model would launder a failed acceptance
+    /// contract or a failed test into a retry.
+    /// </summary>
+    private static bool IsFallbackEligible(FailureCategory? category) =>
+        category is FailureCategory.Provider or FailureCategory.Model or FailureCategory.Infrastructure;
+
+    private IReadOnlyList<ModelSelection> ResolveRoleCandidates(AgentRun run)
     {
         const int estimatedContextTokens = 16_000;
 
@@ -303,31 +367,32 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
 
         if (_modelRouter is null || _routingOptions is null || string.IsNullOrWhiteSpace(agentType))
         {
-            return null;
+            return Array.Empty<ModelSelection>();
         }
 
         if (!_routingOptions.AgentTypeCategories.TryGetValue(agentType, out var category))
         {
-            return null;
+            return Array.Empty<ModelSelection>();
         }
 
         try
         {
-            var selection = _modelRouter.SelectModel(new ModelRoutingRequest(
+            var selections = _modelRouter.SelectCandidates(new ModelRoutingRequest(
                 category, TaskComplexity.Standard, estimatedContextTokens, CostPreference.Balanced));
 
             _logger.LogInformation(
-                "AgentRunModelResolved AgentRunId={AgentRunId} AgentType={AgentType} Category={Category} ModelId={ModelId}",
-                run.Id, agentType, category, selection.ModelId);
+                "AgentRunModelResolved AgentRunId={AgentRunId} AgentType={AgentType} Category={Category} "
+                    + "PrimaryModel={ModelId} FallbackCount={FallbackCount}",
+                run.Id, agentType, category, selections[0].ModelId, selections.Count - 1);
 
-            return selection.ModelId;
+            return selections;
         }
         catch (NoModelAvailableException ex)
         {
             _logger.LogWarning(
                 "AgentRunModelUnresolved AgentRunId={AgentRunId} AgentType={AgentType} Category={Category} Reason={Reason}",
                 run.Id, agentType, category, ex.Message);
-            return null;
+            return Array.Empty<ModelSelection>();
         }
     }
 

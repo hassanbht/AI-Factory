@@ -1,4 +1,4 @@
-using AI.Factory.Application.Abstractions;
+﻿using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Exceptions;
 using AI.Factory.Application.Planning;
 using AI.Factory.Domain.Entities;
@@ -21,6 +21,13 @@ namespace AI.Factory.Application.Orchestration;
 /// </summary>
 public sealed class ProjectLifecycleOrchestrator : IProjectLifecycleOrchestrator
 {
+    /// <summary>
+    /// Phase 18.26 §7 — how many times a Planner may be re-dispatched purely
+    /// because a Worker crash orphaned its run. One. Anything higher would let
+    /// a crash-looping Worker spend provider credit indefinitely.
+    /// </summary>
+    public const int MaxPlannerCrashRetries = 1;
+
     /// <summary>
     /// The deterministic pre-planning chain. These stages have no executing
     /// agent in the current Factory (no Analysis/Specification/Architecture
@@ -220,7 +227,8 @@ public sealed class ProjectLifecycleOrchestrator : IProjectLifecycleOrchestrator
             return await TransitionAsync(project, ProjectStatus.Implementation, cancellationToken);
         }
 
-        var plannerRun = await _planner.GetLatestRunAsync(project.Id, cancellationToken);
+        var plannerRuns = await _planner.GetRunsAsync(project.Id, cancellationToken);
+        var plannerRun = plannerRuns.FirstOrDefault();
 
         if (plannerRun is null)
         {
@@ -254,6 +262,41 @@ public sealed class ProjectLifecycleOrchestrator : IProjectLifecycleOrchestrator
 
         if (plannerRun.Status != AgentRunStatus.Succeeded)
         {
+            // Phase 18.26 §6/§7 — a Worker that died mid-Planner is not a
+            // Planner failure. WorkItem-backed runs get a second chance from
+            // the existing WorkItem repair path; a Planner run has no such
+            // layer, so without this a routine Worker restart would
+            // permanently fail an otherwise healthy Project.
+            //
+            // Strictly bounded and strictly crash-scoped: only a run that
+            // orphan recovery itself terminated qualifies, and only while this
+            // Project has had exactly one Planner run. A genuinely failed
+            // Planner — and the second crash in a row — still fails closed.
+            if (AgentRunRecovery.WasOrphaned(plannerRun) && plannerRuns.Count < MaxPlannerCrashRetries + 1)
+            {
+                var retry = await _planner.GenerateAsync(project.Id, cancellationToken);
+
+                _logger.LogWarning(
+                    "ProjectLifecyclePlannerRetriedAfterCrash ProjectId={ProjectId} OrphanedAgentRunId={OrphanedId} NewAgentRunId={NewId}",
+                    project.Id, plannerRun.Id, retry.Id);
+
+                await _auditLogger.LogAsync(
+                    Guid.NewGuid(),
+                    AuditEventType.Retry,
+                    AuditSeverity.Warning,
+                    $"Planner re-dispatched for project '{project.Id}' after its previous run was orphaned by a Worker restart.",
+                    projectId: project.Id,
+                    runId: retry.Id,
+                    outcome: ProjectStatus.Planning.ToString(),
+                    actorType: "System",
+                    actorId: nameof(ProjectLifecycleOrchestrator),
+                    cancellationToken: cancellationToken);
+
+                return new ProjectLifecycleAdvanceResult(
+                    ProjectLifecycleAction.PlannerStarted, project.Status,
+                    $"Planner AgentRun '{retry.Id}' re-dispatched after Worker-restart recovery.");
+            }
+
             return await FailClosedAsync(
                 project,
                 $"Planner AgentRun '{plannerRun.Id}' ended in status '{plannerRun.Status}'.",

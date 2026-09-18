@@ -1,4 +1,4 @@
-using AI.Factory.Application.Abstractions;
+﻿using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Exceptions;
 using AI.Factory.Domain.Entities;
 using AI.Factory.Domain.Enums;
@@ -27,17 +27,23 @@ public sealed class ProjectCompletionGate : IProjectCompletionGate
     private readonly IProjectRepository _projects;
     private readonly IAgentRunRepository _agentRuns;
     private readonly IVerificationGate _verificationGate;
+    private readonly IAuditLogger _auditLogger;
     private readonly ILogger<ProjectCompletionGate> _logger;
 
     public ProjectCompletionGate(
         IProjectRepository projects,
         IAgentRunRepository agentRuns,
         IVerificationGate verificationGate,
-        ILogger<ProjectCompletionGate> logger)
+        ILogger<ProjectCompletionGate> logger,
+        IAuditLogger? auditLogger = null)
     {
         _projects = projects;
         _agentRuns = agentRuns;
         _verificationGate = verificationGate;
+        // Phase 18.26 §3 — optional so every pre-existing caller that
+        // constructs this gate directly keeps compiling; DI supplies the real
+        // logger in both composition roots.
+        _auditLogger = auditLogger ?? NullAuditLogger.Instance;
         _logger = logger;
     }
 
@@ -100,6 +106,24 @@ public sealed class ProjectCompletionGate : IProjectCompletionGate
             "ProjectVerificationCompleted ProjectId={ProjectId} Status={Status} DurationMs={DurationMs}",
             project.Id, result.Status, result.Duration.TotalMilliseconds);
 
+        // Phase 18.26 §3/§4 — the verification outcome becomes a durable audit
+        // row, not just a log line. Only the Factory's own bounded summary is
+        // carried (the same text Project.CurrentError already persists) — never
+        // raw process or model output.
+        await _auditLogger.LogAsync(
+            Guid.NewGuid(),
+            AuditEventType.ValidationResult,
+            result.Status == VerificationStatus.Passed ? AuditSeverity.Info : AuditSeverity.Error,
+            result.Status == VerificationStatus.Passed
+                ? $"Project '{project.Id}' verification passed."
+                : $"Project '{project.Id}' verification did not pass ({result.Status}): {result.Summary}",
+            projectId: project.Id,
+            outcome: result.Status.ToString(),
+            actorType: "System",
+            actorId: nameof(ProjectCompletionGate),
+            durationMs: (long)result.Duration.TotalMilliseconds,
+            cancellationToken: cancellationToken);
+
         var (target, message, action) = result.Status switch
         {
             VerificationStatus.Passed =>
@@ -160,10 +184,31 @@ public sealed class ProjectCompletionGate : IProjectCompletionGate
     private async Task<bool> TryTransitionAsync(
         Project project, ProjectStatus target, CancellationToken cancellationToken)
     {
+        var from = project.Status;
+
         try
         {
             project.TransitionTo(target);
             await _projects.SaveChangesAsync(cancellationToken);
+
+            // Phase 18.26 §3 — every gate-owned Project transition
+            // (Testing/Reviewing/HumanReview, and the fail-closed
+            // Failed/Cancelled outcomes) is now reconstructable from the
+            // durable audit trail rather than from transient logs alone.
+            var isFailure = target is ProjectStatus.Failed or ProjectStatus.Cancelled;
+
+            await _auditLogger.LogAsync(
+                Guid.NewGuid(),
+                isFailure ? AuditEventType.WorkflowFailed : AuditEventType.WorkflowStateChanged,
+                isFailure ? AuditSeverity.Error : AuditSeverity.Info,
+                $"Project '{project.Id}' advanced from '{from}' to '{target}'."
+                    + (isFailure && project.CurrentError is { Length: > 0 } ? $" {project.CurrentError}" : string.Empty),
+                projectId: project.Id,
+                outcome: target.ToString(),
+                actorType: "System",
+                actorId: nameof(ProjectCompletionGate),
+                cancellationToken: cancellationToken);
+
             return true;
         }
         catch (ConcurrencyConflictException)

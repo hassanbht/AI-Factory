@@ -1,4 +1,4 @@
-using AI.Factory.Application.Abstractions;
+﻿using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Orchestration;
 using AI.Factory.Application.Projects;
 using AI.Factory.Application.Tasks;
@@ -58,12 +58,130 @@ public sealed class ProjectCompletionGateTests : IDisposable
         }
     }
 
-    private static ProjectCompletionGate CreateGate(FactoryDbContext db, IVerificationGate? verificationGate = null) =>
+    private static ProjectCompletionGate CreateGate(
+        FactoryDbContext db,
+        IVerificationGate? verificationGate = null,
+        IAuditLogger? auditLogger = null) =>
         new(
             new ProjectRepository(db),
             new AgentRunRepository(db),
             verificationGate ?? new FakeVerificationGate(VerificationStatus.Passed),
-            NullLogger<ProjectCompletionGate>.Instance);
+            NullLogger<ProjectCompletionGate>.Instance,
+            auditLogger);
+
+    /// <summary>Phase 18.26 §20 — captures the durable audit rows the gate now writes.</summary>
+    private sealed class RecordingAuditLogger : IAuditLogger
+    {
+        public List<(AuditEventType EventType, string? Outcome, string? ActorType, string? ActorId)> Entries { get; } = new();
+
+        public Task LogAsync(
+            Guid executionId,
+            AuditEventType eventType,
+            AuditSeverity severity,
+            string message,
+            Guid? projectId = null,
+            Guid? workItemId = null,
+            IReadOnlyDictionary<string, string>? metadata = null,
+            Guid? correlationId = null,
+            Guid? operationId = null,
+            Guid? runId = null,
+            string? outcome = null,
+            string? actorType = null,
+            string? actorId = null,
+            long? durationMs = null,
+            CancellationToken cancellationToken = default)
+        {
+            Entries.Add((eventType, outcome, actorType, actorId));
+            return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>
+    /// Phase 18.26 §3/§4 — the gate's own lifecycle milestones must be
+    /// reconstructable from durable audit rows, not only from transient logs.
+    /// </summary>
+    [Fact]
+    public async Task EvaluateAsync_AdvanceToTesting_WritesADurableAuditRow()
+    {
+        var projectId = await SeedProjectAtStatusAsync(ProjectStatus.Implementation, "Audit Testing");
+        await SeedWorkItemAtStatusAsync(projectId, "t1", WorkItemStatus.Completed);
+
+        var audit = new RecordingAuditLogger();
+
+        await using (var db = new FactoryDbContext(_options))
+        {
+            var project = (await new ProjectRepository(db).GetByIdAsync(projectId))!;
+            var items = await new WorkItemRepository(db).GetByProjectIdAsync(projectId);
+            await CreateGate(db, auditLogger: audit).EvaluateAsync(project, items);
+        }
+
+        var entry = Assert.Single(audit.Entries, e => e.Outcome == nameof(ProjectStatus.Testing));
+        Assert.Equal(AuditEventType.WorkflowStateChanged, entry.EventType);
+        Assert.Equal("System", entry.ActorType);
+        Assert.Equal(nameof(ProjectCompletionGate), entry.ActorId);
+    }
+
+    [Fact]
+    public async Task EvaluateAsync_ProjectVerification_WritesAValidationResultAuditRow()
+    {
+        var projectId = await SeedProjectAtStatusAsync(ProjectStatus.Testing, "Audit Verification");
+        var audit = new RecordingAuditLogger();
+
+        await using (var db = new FactoryDbContext(_options))
+        {
+            var project = (await new ProjectRepository(db).GetByIdAsync(projectId))!;
+            var items = await new WorkItemRepository(db).GetByProjectIdAsync(projectId);
+            await CreateGate(db, new FakeVerificationGate(VerificationStatus.Passed), audit)
+                .EvaluateAsync(project, items);
+        }
+
+        Assert.Contains(audit.Entries, e =>
+            e.EventType == AuditEventType.ValidationResult
+            && e.Outcome == nameof(VerificationStatus.Passed)
+            && e.ActorId == nameof(ProjectCompletionGate));
+
+        // …and the resulting transition to Reviewing is audited too.
+        Assert.Contains(audit.Entries, e =>
+            e.EventType == AuditEventType.WorkflowStateChanged && e.Outcome == nameof(ProjectStatus.Reviewing));
+    }
+
+    [Fact]
+    public async Task EvaluateAsync_AdvanceToHumanReview_WritesADurableAuditRow()
+    {
+        var projectId = await SeedProjectAtStatusAsync(ProjectStatus.Reviewing, "Audit HumanReview");
+        await SeedWorkItemAtStatusAsync(projectId, "t1", WorkItemStatus.Completed);
+
+        var audit = new RecordingAuditLogger();
+
+        await using (var db = new FactoryDbContext(_options))
+        {
+            var project = (await new ProjectRepository(db).GetByIdAsync(projectId))!;
+            var items = await new WorkItemRepository(db).GetByProjectIdAsync(projectId);
+            await CreateGate(db, auditLogger: audit).EvaluateAsync(project, items);
+        }
+
+        var entry = Assert.Single(audit.Entries, e => e.Outcome == nameof(ProjectStatus.HumanReview));
+        Assert.Equal(AuditEventType.WorkflowStateChanged, entry.EventType);
+        Assert.Equal("System", entry.ActorType);
+    }
+
+    [Fact]
+    public async Task EvaluateAsync_FailedVerification_WritesAWorkflowFailedAuditRow()
+    {
+        var projectId = await SeedProjectAtStatusAsync(ProjectStatus.Testing, "Audit Failure");
+        var audit = new RecordingAuditLogger();
+
+        await using (var db = new FactoryDbContext(_options))
+        {
+            var project = (await new ProjectRepository(db).GetByIdAsync(projectId))!;
+            var items = await new WorkItemRepository(db).GetByProjectIdAsync(projectId);
+            await CreateGate(db, new FakeVerificationGate(VerificationStatus.Failed, "tests failed"), audit)
+                .EvaluateAsync(project, items);
+        }
+
+        Assert.Contains(audit.Entries, e =>
+            e.EventType == AuditEventType.WorkflowFailed && e.Outcome == nameof(ProjectStatus.Failed));
+    }
 
     private async Task<Guid> SeedProjectAtStatusAsync(ProjectStatus status, string name)
     {

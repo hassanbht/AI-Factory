@@ -1,8 +1,19 @@
-namespace AI.Factory.Application.Abstractions;
+﻿namespace AI.Factory.Application.Abstractions;
 
 public interface IModelRouter
 {
     ModelSelection SelectModel(ModelRoutingRequest request);
+
+    /// <summary>
+    /// Phase 18.26 §9/§10 — the same selection, as the full ordered candidate
+    /// list instead of just the winner: index 0 is the role's primary model and
+    /// the rest are its fallbacks, in configured preference order. No new
+    /// options shape was introduced for this — a category profile was always an
+    /// ordered candidate list; only the winner was being exposed.
+    /// Throws <see cref="NoModelAvailableException"/> under exactly the same
+    /// conditions as <see cref="SelectModel"/>.
+    /// </summary>
+    IReadOnlyList<ModelSelection> SelectCandidates(ModelRoutingRequest request);
 }
 
 public enum TaskComplexity

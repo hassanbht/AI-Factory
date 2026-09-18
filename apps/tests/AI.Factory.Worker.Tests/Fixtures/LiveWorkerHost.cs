@@ -29,13 +29,27 @@ public sealed class LiveWorkerHost : IDisposable
 {
     private readonly string _tempDir;
 
-    private LiveWorkerHost(IHost host, string tempDir, string bareRepoPath, string projectsBaseDirectory)
+    private readonly string _dbPath;
+
+    private LiveWorkerHost(
+        IHost host, string tempDir, string bareRepoPath, string projectsBaseDirectory, string dbPath)
     {
         Host = host;
         _tempDir = tempDir;
+        _dbPath = dbPath;
         BareRepoPath = bareRepoPath;
         ProjectsBaseDirectory = projectsBaseDirectory;
     }
+
+    /// <summary>
+    /// Phase 18.26 §5/§6 — a second, independent Worker composition root over
+    /// the SAME database and workspace: the in-process equivalent of
+    /// restarting the Worker process. Nothing is shared with
+    /// <see cref="Host"/> except the persisted state, which is exactly the
+    /// property the recovery test has to exercise. The caller owns and
+    /// disposes the returned host.
+    /// </summary>
+    public IHost BuildRestartedWorkerHost() => BuildHost(_tempDir, ProjectsBaseDirectory, _dbPath);
 
     public IHost Host { get; }
 
@@ -72,6 +86,37 @@ public sealed class LiveWorkerHost : IDisposable
     public static string ModelForRole(string role) =>
         Environment.GetEnvironmentVariable($"AI_FACTORY_LIVE_{role.ToUpperInvariant()}_MODEL") ?? LiveModel;
 
+    /// <summary>
+    /// Phase 18.26 §10/§11 — the role's FALLBACK model, used only when the
+    /// primary fails for an infrastructure/provider/model-availability reason
+    /// (AgentOrchestrator.IsFallbackEligible). Never used to re-run a failed
+    /// test or a failed acceptance contract.
+    ///
+    /// The defaults are the §11 configuration HYPOTHESIS, not an accepted
+    /// production fact: reasoning/structured-output roles fall back to the
+    /// Auto Router (which charges at whatever model it routes to), and coding
+    /// roles fall back to a cheap coding-specialised model. Laguna advertises
+    /// no response_format, which is exactly why it is a coding fallback and
+    /// never a Planner primary. Set the variable to an empty string to give a
+    /// role no fallback at all.
+    /// </summary>
+    public static string? FallbackModelForRole(string role)
+    {
+        var configured = Environment.GetEnvironmentVariable(
+            $"AI_FACTORY_LIVE_{role.ToUpperInvariant()}_FALLBACK_MODEL");
+
+        if (configured is not null)
+        {
+            return string.IsNullOrWhiteSpace(configured) ? null : configured;
+        }
+
+        return role.ToLowerInvariant() switch
+        {
+            "planner" or "review" => "openrouter/auto-beta",
+            _ => "poolside/laguna-s-2.1"
+        };
+    }
+
     /// <summary>Opt-in gate shared by every real-Hermes test in this repository.</summary>
     public static bool Enabled =>
         bool.TryParse(Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_SMOKE_TEST"), out var enabled) && enabled;
@@ -83,13 +128,28 @@ public sealed class LiveWorkerHost : IDisposable
 
         var bareRepoPath = LiveRepairFixture.CreateBareRepo(tempDir);
         var projectsBaseDir = Path.Combine(tempDir, "workspaces");
-        var hermesData = Path.Combine(tempDir, "hermes-data");
-        var hermesScratch = Path.Combine(tempDir, "hermes-scratch");
         Directory.CreateDirectory(projectsBaseDir);
-        Directory.CreateDirectory(hermesData);
-        Directory.CreateDirectory(hermesScratch);
 
         var dbPath = Path.Combine(tempDir, "factory.db");
+
+        var host = BuildHost(tempDir, projectsBaseDir, dbPath);
+
+        var schemaOptions = new DbContextOptionsBuilder<FactoryDbContext>().UseSqlite($"Data Source={dbPath}").Options;
+        using (var db = new FactoryDbContext(schemaOptions))
+        {
+            db.Database.EnsureCreated();
+            db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL;");
+        }
+
+        return new LiveWorkerHost(host, tempDir, bareRepoPath, projectsBaseDir, dbPath);
+    }
+
+    private static IHost BuildHost(string tempDir, string projectsBaseDir, string dbPath)
+    {
+        var hermesData = Path.Combine(tempDir, "hermes-data");
+        var hermesScratch = Path.Combine(tempDir, "hermes-scratch");
+        Directory.CreateDirectory(hermesData);
+        Directory.CreateDirectory(hermesScratch);
 
         var builder = Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
         {
@@ -152,10 +212,24 @@ public sealed class LiveWorkerHost : IDisposable
 
         foreach (var (role, category) in roleCategories)
         {
-            var modelId = ModelForRole(role);
+            // Phase 18.26 §9/§10 — index 0 is the role's primary, index 1 its
+            // fallback. A category profile was always an ordered candidate
+            // list, so expressing the policy needed no new configuration shape.
+            var profile = new List<string> { ModelForRole(role) };
 
-            if (!routingOptions.Models.Any(m => string.Equals(m.ModelId, modelId, StringComparison.OrdinalIgnoreCase)))
+            if (FallbackModelForRole(role) is { } fallbackId
+                && !string.Equals(fallbackId, profile[0], StringComparison.OrdinalIgnoreCase))
             {
+                profile.Add(fallbackId);
+            }
+
+            foreach (var modelId in profile)
+            {
+                if (routingOptions.Models.Any(m => string.Equals(m.ModelId, modelId, StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
                 routingOptions.Models.Add(new ModelCapability
                 {
                     ModelId = modelId,
@@ -168,7 +242,7 @@ public sealed class LiveWorkerHost : IDisposable
                 });
             }
 
-            routingOptions.CategoryProfiles[category] = new List<string> { modelId };
+            routingOptions.CategoryProfiles[category] = profile;
         }
 
         Assert.Empty(routingOptions.Validate());
@@ -181,16 +255,7 @@ public sealed class LiveWorkerHost : IDisposable
         builder.Services.AddScoped<AI.Factory.Application.Tasks.WorkItemService>();
         builder.Services.AddScoped<AI.Factory.Application.Tasks.TaskDependencyService>();
 
-        var host = builder.Build();
-
-        var schemaOptions = new DbContextOptionsBuilder<FactoryDbContext>().UseSqlite($"Data Source={dbPath}").Options;
-        using (var db = new FactoryDbContext(schemaOptions))
-        {
-            db.Database.EnsureCreated();
-            db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL;");
-        }
-
-        return new LiveWorkerHost(host, tempDir, bareRepoPath, projectsBaseDir);
+        return builder.Build();
     }
 
     private static string FindWorkerProjectDirectory()

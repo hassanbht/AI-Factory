@@ -118,6 +118,10 @@ public sealed class ProjectPlanner : IProjectPlanner
     }
 
     public async Task<AgentRun?> GetLatestRunAsync(
+        Guid projectId, CancellationToken cancellationToken = default) =>
+        (await GetRunsAsync(projectId, cancellationToken)).FirstOrDefault();
+
+    public async Task<IReadOnlyList<AgentRun>> GetRunsAsync(
         Guid projectId, CancellationToken cancellationToken = default)
     {
         var definitions = await _agentDefinitions.GetAllAsync(cancellationToken);
@@ -133,15 +137,15 @@ public sealed class ProjectPlanner : IProjectPlanner
 
         if (plannerDefinitionIds.Count == 0)
         {
-            return null;
+            return Array.Empty<AgentRun>();
         }
 
         // GetPagedAsync already returns newest-first (OrderByDescending on
-        // CreatedAtUtc), so the first match is the latest run.
+        // CreatedAtUtc), so this list is newest-first too.
         var page = await _agentRuns.GetPagedAsync(
             new AgentRunQuery(ProjectId: projectId, Page: 1, PageSize: 50), cancellationToken);
 
-        return page.Items.FirstOrDefault(r => plannerDefinitionIds.Contains(r.AgentDefinitionId));
+        return page.Items.Where(r => plannerDefinitionIds.Contains(r.AgentDefinitionId)).ToList();
     }
 
     public async Task<PlannerMaterializationResult> MaterializeAsync(

@@ -1,4 +1,4 @@
-using AI.Factory.Application.Abstractions;
+﻿using AI.Factory.Application.Abstractions;
 
 namespace AI.Factory.Application.Orchestration;
 
@@ -11,7 +11,9 @@ public sealed class ModelRouter : IModelRouter
         _options = options;
     }
 
-    public ModelSelection SelectModel(ModelRoutingRequest request)
+    public ModelSelection SelectModel(ModelRoutingRequest request) => SelectCandidates(request)[0];
+
+    public IReadOnlyList<ModelSelection> SelectCandidates(ModelRoutingRequest request)
     {
         if (!_options.CategoryProfiles.TryGetValue(request.TaskCategory, out var candidateIds)
             || candidateIds.Count == 0)
@@ -39,19 +41,21 @@ public sealed class ModelRouter : IModelRouter
                 $"with complexity '{request.Complexity}' and context size {request.EstimatedContextTokens}.");
         }
 
-        var chosen = request.CostPreference switch
+        var ordered = request.CostPreference switch
         {
-            CostPreference.Cheapest => candidates.OrderBy(m => m.CostTier).First(),
-            CostPreference.BestQuality => candidates.OrderByDescending(m => m.ReasoningStrength).First(),
+            CostPreference.Cheapest => candidates.OrderBy(m => m.CostTier).ToList(),
+            CostPreference.BestQuality => candidates.OrderByDescending(m => m.ReasoningStrength).ToList(),
             // Balanced: respect the category's own configured preference order.
-            _ => candidates.First()
+            _ => candidates
         };
 
-        return new ModelSelection(
-            chosen.ModelId,
-            chosen.Provider,
-            $"Selected for category '{request.TaskCategory}' " +
-            $"(complexity={request.Complexity}, costPreference={request.CostPreference}).");
+        return ordered
+            .Select((m, index) => new ModelSelection(
+                m.ModelId,
+                m.Provider,
+                $"{(index == 0 ? "Primary" : $"Fallback #{index}")} for category '{request.TaskCategory}' " +
+                $"(complexity={request.Complexity}, costPreference={request.CostPreference})."))
+            .ToList();
     }
 
     private static int MinReasoningFor(TaskComplexity complexity)

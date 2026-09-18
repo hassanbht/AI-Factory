@@ -1,4 +1,4 @@
-using AI.Factory.Application.Abstractions;
+﻿using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Exceptions;
 using AI.Factory.Domain.Entities;
 using AI.Factory.Domain.Enums;
@@ -110,6 +110,45 @@ public sealed class AgentRunRepository : IAgentRunRepository
             // lost race. The next poll will pick up whatever is next.
             return null;
         }
+    }
+
+    public async Task<int> RecoverOrphanedRunsAsync(
+        DateTime? startedBeforeUtc,
+        CancellationToken cancellationToken = default)
+    {
+        var query = _db.AgentRuns.Where(x => x.Status == AgentRunStatus.Running);
+
+        if (startedBeforeUtc is { } cutoffUtc)
+        {
+            // Periodic mode: only a run whose last proof of life predates the
+            // cutoff. A genuinely executing run is left completely untouched.
+            query = query.Where(x => (x.StartedAtUtc ?? x.CreatedAtUtc) < cutoffUtc);
+        }
+
+        var orphaned = await query.ToListAsync(cancellationToken);
+
+        if (orphaned.Count == 0)
+        {
+            return 0;
+        }
+
+        var reason = startedBeforeUtc is null
+            ? "the Worker process restarted while this run was executing"
+            : "no progress before the configured stale-execution timeout";
+
+        foreach (var run in orphaned)
+        {
+            // Running -> Failed is an allowed edge in AgentRunTransitions, so
+            // this goes through the same validated transition every other
+            // writer uses rather than assigning Status directly.
+            run.TransitionTo(AgentRunStatus.Failed);
+            run.ErrorMessage = $"{AgentRunRecovery.OrphanedMarker}: {reason}.";
+            run.FailureCategory = FailureCategory.Infrastructure;
+            run.CompletedAtUtc = DateTime.UtcNow;
+        }
+
+        await _db.SaveChangesAsync(cancellationToken);
+        return orphaned.Count;
     }
 
     public async Task<AgentRunPage> GetPagedAsync(

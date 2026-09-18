@@ -710,6 +710,9 @@ public sealed class AgentRunWorkerTests
         public Task<AgentRun?> GetLatestRunAsync(Guid projectId, CancellationToken cancellationToken = default) =>
             Task.FromResult<AgentRun?>(null);
 
+        public Task<IReadOnlyList<AgentRun>> GetRunsAsync(Guid projectId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<AgentRun>>(Array.Empty<AgentRun>());
+
         public Task<PlannerMaterializationResult> MaterializeAsync(Guid agentRunId, CancellationToken cancellationToken = default)
         {
             MaterializedRunIds.Add(agentRunId);
@@ -754,6 +757,10 @@ public sealed class AgentRunWorkerTests
 
         public Task<bool> HasActiveRunsForProjectAsync(Guid projectId, CancellationToken cancellationToken = default) =>
             throw new NotImplementedException();
+
+        public Task<int> RecoverOrphanedRunsAsync(
+            DateTime? startedBeforeUtc, CancellationToken cancellationToken = default) =>
+            Task.FromResult(0);
     }
 
     private sealed class FakeAgentOrchestrator : IAgentOrchestrator

@@ -41,6 +41,14 @@ public interface IProjectPlanner
     /// the Factory already ran (spec 18.25 §15 — bounded, fail-closed).
     /// </summary>
     Task<AgentRun?> GetLatestRunAsync(Guid projectId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Phase 18.26 §6/§7 — every Planner AgentRun for a Project, newest first.
+    /// The lifecycle owner needs the count, not just the latest, to keep its
+    /// crash-recovery retry strictly bounded: a Planner may be re-dispatched
+    /// only because a Worker died mid-run, and only once.
+    /// </summary>
+    Task<IReadOnlyList<AgentRun>> GetRunsAsync(Guid projectId, CancellationToken cancellationToken = default);
 }
 
 /// <summary>

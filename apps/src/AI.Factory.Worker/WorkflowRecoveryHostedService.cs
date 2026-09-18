@@ -1,4 +1,4 @@
-using AI.Factory.Application.Abstractions;
+﻿using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Orchestration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -85,6 +85,20 @@ public sealed class WorkflowRecoveryHostedService : BackgroundService
         _logger.LogInformation("Workflow recovery: sweeping orphaned Running WorkItems at startup.");
 
         await taskStateManager.RecoverOrphanedTasksAsync(cancellationToken);
+
+        // Phase 18.26 §5/§7 — AgentRuns are swept too. Before this, only
+        // WorkItems and OrchestrationRuns were recovered, so a Worker that
+        // died mid-execution left its AgentRun Running forever and
+        // IProjectCompletionGate's HasActiveRunsForProjectAsync check
+        // deadlocked the owning Project permanently.
+        var agentRuns = scope.ServiceProvider.GetRequiredService<IAgentRunRepository>();
+        var recoveredRuns = await agentRuns.RecoverOrphanedRunsAsync(startedBeforeUtc: null, cancellationToken);
+
+        if (recoveredRuns > 0)
+        {
+            _logger.LogWarning(
+                "AgentRunOrphanRecovery Mode=Startup RecoveredCount={Count}", recoveredRuns);
+        }
     }
 
     private async Task RunStaleSweepAsync(CancellationToken cancellationToken)
@@ -97,6 +111,17 @@ public sealed class WorkflowRecoveryHostedService : BackgroundService
         if (recoveredCount > 0)
         {
             _logger.LogWarning("Workflow recovery: recovered {Count} stale WorkItem(s).", recoveredCount);
+        }
+
+        // Periodic mode is cutoff-bounded, so a genuinely executing AgentRun
+        // in this same live process is never touched.
+        var agentRuns = scope.ServiceProvider.GetRequiredService<IAgentRunRepository>();
+        var recoveredRuns = await agentRuns.RecoverOrphanedRunsAsync(
+            DateTime.UtcNow - _recoveryOptions.StaleExecutionTimeout, cancellationToken);
+
+        if (recoveredRuns > 0)
+        {
+            _logger.LogWarning("AgentRunOrphanRecovery Mode=Stale RecoveredCount={Count}", recoveredRuns);
         }
 
         var runRepository = scope.ServiceProvider.GetRequiredService<IOrchestrationRunRepository>();

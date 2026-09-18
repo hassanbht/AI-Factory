@@ -1,4 +1,4 @@
-using AI.Factory.Domain.Entities;
+﻿using AI.Factory.Domain.Entities;
 using AI.Factory.Domain.Enums;
 
 namespace AI.Factory.Application.Abstractions;
@@ -59,6 +59,46 @@ public interface IAgentRunRepository
     Task<bool> HasActiveRunsForProjectAsync(
         Guid projectId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Phase 18.26 §5/§7 — recovers AgentRuns left in <c>Running</c> by a
+    /// Worker that died mid-execution. Until this existed, such a run stayed
+    /// Running forever, and because <see cref="HasActiveRunsForProjectAsync"/>
+    /// gates the Project completion gate, the owning Project could never reach
+    /// Testing/HumanReview again: a single Worker crash deadlocked it
+    /// permanently.
+    ///
+    /// <paramref name="startedBeforeUtc"/> null means "every Running run" —
+    /// correct only at process startup, where a full-process restart proves
+    /// nothing this process owns is genuinely executing. A value restricts the
+    /// sweep to runs that started before the cutoff, which is what makes it
+    /// safe to run periodically inside a live process. This mirrors
+    /// ITaskStateManager's existing two-mode WorkItem recovery exactly.
+    ///
+    /// Recovery is terminal, never a silent re-execution: the run becomes
+    /// Failed with <see cref="Domain.Enums.FailureCategory.Infrastructure"/>
+    /// and an <see cref="AgentRunRecovery.OrphanedMarker"/>-prefixed reason, so
+    /// deciding what (if anything) runs next stays with the existing
+    /// WorkItem-repair and Project-lifecycle owners rather than being
+    /// duplicated here.
+    /// </summary>
+    Task<int> RecoverOrphanedRunsAsync(
+        DateTime? startedBeforeUtc,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// Phase 18.26 §5 — the one place the "this AgentRun died with its Worker"
+/// signal is spelled, so the lifecycle owner can tell a crash apart from a
+/// genuine agent/provider failure without re-deriving it from prose.
+/// </summary>
+public static class AgentRunRecovery
+{
+    public const string OrphanedMarker = "AgentRunOrphanedByWorkerRestart";
+
+    /// <summary>True when this run was terminated by orphan recovery rather than by its own execution.</summary>
+    public static bool WasOrphaned(AgentRun run) =>
+        run.ErrorMessage?.StartsWith(OrphanedMarker, StringComparison.Ordinal) == true;
 }
 
 public sealed record AgentRunQuery(

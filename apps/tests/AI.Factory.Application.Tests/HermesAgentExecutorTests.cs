@@ -262,4 +262,19 @@ public sealed class HermesAgentExecutorTests
         Assert.Null(runner.LastRequest);
         Assert.Null(result.WorkspacePath);
     }
+
+    [Fact]
+    public async Task ExecuteAsync_PassesHermesWriteSafeRoot_TargetingWorkspace_ByDefault()
+    {
+        var runner = new FakeProcessRunner(_ =>
+            new ProcessRunResult(0, "ok", string.Empty, TimedOut: false));
+
+        var executor = new HermesAgentExecutor(MakeOptions(), runner, NullLogger<HermesAgentExecutor>.Instance);
+
+        await executor.ExecuteAsync(new AgentExecutionRequest("coder", null, "do the task", string.Empty));
+
+        Assert.NotNull(runner.LastRequest);
+        Assert.Contains("-e", runner.LastRequest!.Arguments);
+        Assert.Contains("HERMES_WRITE_SAFE_ROOT=/workspace", runner.LastRequest.Arguments);
+    }
 }

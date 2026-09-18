@@ -187,8 +187,16 @@ public sealed class VerificationGate : IVerificationGate
         return new VerificationResult(status, summary, exitCode, stopwatch.Elapsed);
     }
 
-    private static string Tail(string standardOutput, string standardError) =>
-        string.IsNullOrWhiteSpace(standardError) ? standardOutput : standardError;
+    private static string Tail(string standardOutput, string standardError)
+    {
+        var text = string.IsNullOrWhiteSpace(standardError)
+            ? (standardOutput ?? string.Empty)
+            : string.IsNullOrWhiteSpace(standardOutput)
+                ? standardError
+                : $"{standardOutput}\n{standardError}";
+
+        return text.Length <= 2000 ? text : text[^2000..];
+    }
 
     private static string Truncate(string value) => value.Length <= 2000 ? value : value[..2000] + " …(truncated)";
 }

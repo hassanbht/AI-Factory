@@ -427,11 +427,10 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
         // failure summary (an acceptance-criteria miss, ~150 chars) completed
         // in ~84s live; the same model on the same tiny workspace, handed a
         // 2000-char raw `dotnet test` dump, exceeded the 5-minute execution
-        // budget on every attempt across Phases 18.20-18.21. The decisive
-        // lines (failing test name and assertion) sit at the tail that
-        // VerificationGate already selected, so a tighter bound keeps the
-        // signal and drops the noise that was costing the whole repair.
-        const int maxFailureSummaryLength = 600;
+        // Phase 18.24 — allow sufficient budget for the failing test name,
+        // assertion details and line number from VerificationGate without cutting
+        // off the decisive signal.
+        const int maxFailureSummaryLength = 2000;
 
         var failureSummary = workItem.CurrentError ?? "(no verification failure summary recorded)";
 
@@ -445,10 +444,11 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
 
         return $"""
             You are repairing one WorkItem for AI Factory whose previous
-            implementation failed independent verification. Work only on the
-            WorkItem described below — do not silently expand scope to other
-            files, features, or WorkItems, and do not modify functionality
-            unrelated to the reported failure.
+            implementation failed independent verification. Your goal is to
+            repair the repository so that independent verification succeeds
+            and the WorkItem requirements are satisfied. You may modify the
+            necessary source and test files to resolve the verification
+            failure, but do not make changes unrelated to the reported failure.
 
             Project name: {project?.Name}
             Project description: {project?.Description}

@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Agents;
 using AI.Factory.Application.Exceptions;
@@ -438,7 +438,7 @@ public sealed class LivePlannerE2ETests
     {
         var project = await projectService.GetAsync(projectId, cancellationToken);
 
-        if (project.Status == ProjectStatus.Created)
+        if (project is not null && project.Status == ProjectStatus.Created)
         {
             await projectService.TransitionStatusAsync(projectId, ProjectStatus.Analyzing, cancellationToken);
         }

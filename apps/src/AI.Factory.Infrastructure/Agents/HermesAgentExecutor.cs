@@ -121,6 +121,16 @@ public sealed class HermesAgentExecutor : IAgentExecutor
             arguments.Add($"{key}={value}");
         }
 
+        // Phase 18.24 — Hermes tool safety restricts write_file/edit_file to
+        // HERMES_WRITE_SAFE_ROOT (defaulting to /opt/data). Without /workspace
+        // in that root, any agent write tool targeting the mounted workspace
+        // is rejected by Hermes. Default to /workspace if not overridden.
+        if (!_options.AdditionalEnvironmentVariables.ContainsKey("HERMES_WRITE_SAFE_ROOT"))
+        {
+            arguments.Add("-e");
+            arguments.Add("HERMES_WRITE_SAFE_ROOT=/workspace");
+        }
+
         if (!string.IsNullOrWhiteSpace(_options.ProviderApiKeyEnvironmentVariable)
             && !string.IsNullOrWhiteSpace(_options.ProviderApiKeySecretName)
             && _secretProvider is not null)
@@ -211,6 +221,14 @@ public sealed class HermesAgentExecutor : IAgentExecutor
                 request.Agent,
                 result.ExitCode,
                 stopwatch.ElapsedMilliseconds);
+
+            if (!string.IsNullOrWhiteSpace(result.StandardOutput))
+            {
+                var preview = result.StandardOutput.Length <= 1000
+                    ? result.StandardOutput
+                    : result.StandardOutput[^1000..];
+                _logger.LogInformation("Hermes agent {Agent} output tail: {Output}", request.Agent, preview);
+            }
 
             string? error = null;
 

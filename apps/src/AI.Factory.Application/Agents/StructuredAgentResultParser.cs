@@ -117,12 +117,58 @@ public sealed class StructuredAgentResultParser : IStructuredAgentResultParser
             envelope.Summary,
             envelope.Output,
             envelope.Data?.GetRawText(),
-            (IReadOnlyList<string>?)envelope.Warnings ?? Array.Empty<string>(),
-            (IReadOnlyList<string>?)envelope.Errors ?? Array.Empty<string>(),
-            (IReadOnlyList<string>?)envelope.Artifacts ?? Array.Empty<string>(),
+            ReadStringList(envelope.Warnings),
+            ReadStringList(envelope.Errors),
+            ReadStringList(envelope.Artifacts),
             ReadMetadata(envelope.Metadata));
 
         return StructuredResultParseOutcome.Valid(result);
+    }
+
+    /// <summary>
+    /// Reads a list of strings or objects representing strings (e.g. artifacts with path/file),
+    /// preserving values rather than discarding the entire structured envelope when an LLM outputs objects.
+    /// </summary>
+    private static IReadOnlyList<string> ReadStringList(List<JsonElement>? elements)
+    {
+        if (elements is null || elements.Count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        var list = new List<string>(elements.Count);
+        foreach (var item in elements)
+        {
+            if (item.ValueKind == JsonValueKind.String)
+            {
+                var str = item.GetString();
+                if (!string.IsNullOrWhiteSpace(str))
+                {
+                    list.Add(str);
+                }
+            }
+            else if (item.ValueKind == JsonValueKind.Object)
+            {
+                if (item.TryGetProperty("path", out var pathEl) && pathEl.ValueKind == JsonValueKind.String)
+                {
+                    list.Add(pathEl.GetString()!);
+                }
+                else if (item.TryGetProperty("file", out var fileEl) && fileEl.ValueKind == JsonValueKind.String)
+                {
+                    list.Add(fileEl.GetString()!);
+                }
+                else
+                {
+                    list.Add(item.GetRawText());
+                }
+            }
+            else
+            {
+                list.Add(item.GetRawText());
+            }
+        }
+
+        return list;
     }
 
     /// <summary>
@@ -158,7 +204,7 @@ public sealed class StructuredAgentResultParser : IStructuredAgentResultParser
     /// after it — that swallowing is the boundary defect Phase 18.23 §24
     /// traced live. Nested objects are collected too; they are cheap to reject
     /// in <see cref="ParseCandidate"/> and keep this a single linear pass with
-    /// no guessing about which brace "looks like" the envelope.
+    /// no backtracking.
     /// </summary>
     private static List<string> ExtractJsonObjects(string text)
     {
@@ -171,29 +217,30 @@ public sealed class StructuredAgentResultParser : IStructuredAgentResultParser
         {
             var c = text[i];
 
-            if (inString)
+            if (escaped)
             {
-                if (escaped)
-                {
-                    escaped = false;
-                }
-                else if (c == '\\')
-                {
-                    escaped = true;
-                }
-                else if (c == '"')
-                {
-                    inString = false;
-                }
+                escaped = false;
+                continue;
+            }
 
+            if (c == '\\' && inString)
+            {
+                escaped = true;
                 continue;
             }
 
             if (c == '"')
             {
-                inString = true;
+                inString = !inString;
+                continue;
             }
-            else if (c == '{')
+
+            if (inString)
+            {
+                continue;
+            }
+
+            if (c == '{')
             {
                 openPositions.Push(i);
             }
@@ -213,9 +260,9 @@ public sealed class StructuredAgentResultParser : IStructuredAgentResultParser
         public string? Summary { get; set; }
         public string? Output { get; set; }
         public JsonElement? Data { get; set; }
-        public List<string>? Warnings { get; set; }
-        public List<string>? Errors { get; set; }
-        public List<string>? Artifacts { get; set; }
+        public List<JsonElement>? Warnings { get; set; }
+        public List<JsonElement>? Errors { get; set; }
+        public List<JsonElement>? Artifacts { get; set; }
         public Dictionary<string, JsonElement>? Metadata { get; set; }
     }
 }

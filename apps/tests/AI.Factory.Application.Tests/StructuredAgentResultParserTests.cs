@@ -270,4 +270,21 @@ public sealed class StructuredAgentResultParserTests
         Assert.True(outcome.IsValid);
         Assert.Equal("wrote a { and a } into the file", outcome.Result!.Summary);
     }
+
+    /// <summary>
+    /// Phase 18.24 — agents frequently report artifacts as objects with a "path" or "file"
+    /// property. The envelope should extract these values rather than failing closed as Malformed.
+    /// </summary>
+    [Fact]
+    public void Parse_ObjectValuedArtifacts_ExtractsPathOrContent_NotTreatedAsMalformed()
+    {
+        var outcome = _parser.Parse(
+            """{"version":1,"status":"Succeeded","summary":"done","artifacts":[{"path":"src/Demo.cs"},{"file":"tests/DemoTests.cs"},"plain/path.md"]}""");
+
+        Assert.True(outcome.IsValid);
+        Assert.Equal(3, outcome.Result!.Artifacts.Count);
+        Assert.Equal("src/Demo.cs", outcome.Result.Artifacts[0]);
+        Assert.Equal("tests/DemoTests.cs", outcome.Result.Artifacts[1]);
+        Assert.Equal("plain/path.md", outcome.Result.Artifacts[2]);
+    }
 }

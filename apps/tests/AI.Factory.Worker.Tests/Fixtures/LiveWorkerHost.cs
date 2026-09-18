@@ -123,6 +123,7 @@ public sealed class LiveWorkerHost : IDisposable
         hermesOptions.ProviderApiKeyEnvironmentVariable = "OPENROUTER_API_KEY";
         hermesOptions.ProviderApiKeySecretName = LiveApiKeySecretName;
         hermesOptions.AdditionalEnvironmentVariables["OPENROUTER_BASE_URL"] = LiveBaseUrl;
+        hermesOptions.AdditionalEnvironmentVariables["HERMES_WRITE_SAFE_ROOT"] = "/workspace";
         hermesOptions.DefaultModel = LiveModel;
 
         // Per-role routing through the existing catalog rather than any

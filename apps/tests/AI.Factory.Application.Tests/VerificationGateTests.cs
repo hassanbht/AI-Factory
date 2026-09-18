@@ -272,4 +272,24 @@ public sealed class VerificationGateTests
 
         Assert.Equal(VerificationStatus.InfrastructureError, result.Status);
     }
+
+    [Fact]
+    public async Task VerifyAsync_TestsFailWithFailureMarker_TailPreservesFailureSectionOverBanner()
+    {
+        var (project, workItem) = MakeSubjects();
+        var bannerNoise = new string('x', 600);
+        var failureDetails = "[FAIL] TestName Assert.Equal() Failure: Expected: A, Actual: B";
+        var testOutput = $"{bannerNoise}\n{failureDetails}";
+
+        var gate = new VerificationGate(
+            new FakeBuildExecutor(new BuildResult(true, "", "", 0)),
+            new FakeTestExecutor(new TestExecutionResult(false, testOutput, "", 1)),
+            new FakeWorkspaceResolver(),
+            Acceptance, Limits, NullLogger<VerificationGate>.Instance);
+
+        var result = await gate.VerifyAsync(project, workItem);
+
+        Assert.Equal(VerificationStatus.Failed, result.Status);
+        Assert.Contains(failureDetails, result.Summary);
+    }
 }

@@ -1,4 +1,4 @@
-﻿using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Exceptions;
 using AI.Factory.Domain.Entities;
 using AI.Factory.Domain.Enums;
@@ -112,6 +112,28 @@ public sealed class AgentRunRepository : IAgentRunRepository
         }
     }
 
+    public async Task HeartbeatAsync(
+        Guid agentRunId,
+        CancellationToken cancellationToken = default)
+    {
+        var run = await _db.AgentRuns.FirstOrDefaultAsync(x => x.Id == agentRunId, cancellationToken);
+        if (run is null || AgentRunTransitions.IsTerminal(run.Status))
+        {
+            return;
+        }
+
+        run.UpdatedAtUtc = DateTime.UtcNow;
+
+        try
+        {
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+        catch (ConcurrencyConflictException)
+        {
+            // Transient collision on optimistic concurrency token — safe to ignore on heartbeat
+        }
+    }
+
     public async Task<int> RecoverOrphanedRunsAsync(
         DateTime? startedBeforeUtc,
         CancellationToken cancellationToken = default)
@@ -120,9 +142,10 @@ public sealed class AgentRunRepository : IAgentRunRepository
 
         if (startedBeforeUtc is { } cutoffUtc)
         {
-            // Periodic mode: only a run whose last proof of life predates the
-            // cutoff. A genuinely executing run is left completely untouched.
-            query = query.Where(x => (x.StartedAtUtc ?? x.CreatedAtUtc) < cutoffUtc);
+            // Multi-worker safe: only a run whose proof of life (both UpdatedAtUtc heartbeat
+            // and StartedAtUtc/CreatedAtUtc) predates the cutoff. A genuinely executing run
+            // being heartbeated by another worker is left completely untouched.
+            query = query.Where(x => x.UpdatedAtUtc < cutoffUtc && (x.StartedAtUtc ?? x.CreatedAtUtc) < cutoffUtc);
         }
 
         var orphaned = await query.ToListAsync(cancellationToken);
@@ -147,8 +170,16 @@ public sealed class AgentRunRepository : IAgentRunRepository
             run.CompletedAtUtc = DateTime.UtcNow;
         }
 
-        await _db.SaveChangesAsync(cancellationToken);
-        return orphaned.Count;
+        try
+        {
+            await _db.SaveChangesAsync(cancellationToken);
+            return orphaned.Count;
+        }
+        catch (ConcurrencyConflictException)
+        {
+            // Race with another recovering worker: exactly one worker wins the Version update.
+            return 0;
+        }
     }
 
     public async Task<AgentRunPage> GetPagedAsync(

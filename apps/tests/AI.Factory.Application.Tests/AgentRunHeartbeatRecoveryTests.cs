@@ -1,7 +1,9 @@
+using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Exceptions;
 using AI.Factory.Application.Orchestration;
 using AI.Factory.Application.Projects;
 using AI.Factory.Application.Tasks;
+using AI.Factory.Domain.Entities;
 using AI.Factory.Domain.Enums;
 using AI.Factory.Infrastructure.Persistence;
 using Microsoft.Data.Sqlite;
@@ -159,6 +161,102 @@ public sealed class AgentRunHeartbeatRecoveryTests : IDisposable
             workItem!.Status is nameof(WorkItemStatus.Running)
                 or nameof(WorkItemStatus.Repairing) or nameof(WorkItemStatus.Failed),
             $"WorkItem ended in an unexpected status: {workItem.Status}");
+    }
+
+    private async Task<Guid> SeedRunningAgentRunAsync(DateTime? updatedAtUtc = null)
+    {
+        await using var db = new FactoryDbContext(_options);
+        var def = new AgentDefinition
+        {
+            Id = Guid.NewGuid(),
+            Name = "WorkerAgent",
+            AgentType = "Implementation",
+            Enabled = true
+        };
+        db.AgentDefinitions.Add(def);
+        var run = new AgentRun
+        {
+            Id = Guid.NewGuid(),
+            AgentDefinitionId = def.Id,
+            Status = AgentRunStatus.Running,
+            StartedAtUtc = DateTime.UtcNow.AddMinutes(-5),
+            CreatedAtUtc = DateTime.UtcNow.AddMinutes(-5),
+            UpdatedAtUtc = updatedAtUtc ?? DateTime.UtcNow
+        };
+        db.AgentRuns.Add(run);
+        await db.SaveChangesAsync();
+        return run.Id;
+    }
+
+    [Fact]
+    public async Task RecoverOrphanedRunsAsync_WithCutoff_LeavesHealthyPeerWorkerRunUntouched()
+    {
+        // Peer worker A is actively running and heartbeating right now (recent UpdatedAtUtc)
+        var runId = await SeedRunningAgentRunAsync(updatedAtUtc: DateTime.UtcNow);
+
+        var cutoffUtc = DateTime.UtcNow - TimeSpan.FromSeconds(30);
+
+        await using var db = new FactoryDbContext(_options);
+        var repo = new AgentRunRepository(db);
+
+        // Worker B starts up and runs recovery sweep
+        var recovered = await repo.RecoverOrphanedRunsAsync(cutoffUtc);
+
+        Assert.Equal(0, recovered);
+
+        await using var verifyDb = new FactoryDbContext(_options);
+        var run = await new AgentRunRepository(verifyDb).GetByIdAsync(runId);
+        Assert.NotNull(run);
+        Assert.Equal(AgentRunStatus.Running, run!.Status);
+    }
+
+    [Fact]
+    public async Task RecoverOrphanedRunsAsync_WithCutoff_RecoversStaleDeadWorkerRun()
+    {
+        // Interrupted/dead worker run: heartbeat stopped 10 minutes ago
+        var runId = await SeedRunningAgentRunAsync(updatedAtUtc: DateTime.UtcNow.AddMinutes(-10));
+
+        var cutoffUtc = DateTime.UtcNow - TimeSpan.FromMinutes(2);
+
+        await using var db = new FactoryDbContext(_options);
+        var repo = new AgentRunRepository(db);
+
+        var recovered = await repo.RecoverOrphanedRunsAsync(cutoffUtc);
+
+        Assert.Equal(1, recovered);
+
+        await using var verifyDb = new FactoryDbContext(_options);
+        var run = await new AgentRunRepository(verifyDb).GetByIdAsync(runId);
+        Assert.NotNull(run);
+        Assert.Equal(AgentRunStatus.Failed, run!.Status);
+        Assert.Equal(FailureCategory.Infrastructure, run.FailureCategory);
+        Assert.Contains(AgentRunRecovery.OrphanedMarker, run.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task RecoverOrphanedRunsAsync_ConcurrentWorkerRace_ResolvesSafely()
+    {
+        // Stale run eligible for recovery
+        var runId = await SeedRunningAgentRunAsync(updatedAtUtc: DateTime.UtcNow.AddMinutes(-10));
+        var cutoffUtc = DateTime.UtcNow - TimeSpan.FromMinutes(2);
+
+        await using var db1 = new FactoryDbContext(_options);
+        await using var db2 = new FactoryDbContext(_options);
+
+        var repo1 = new AgentRunRepository(db1);
+        var repo2 = new AgentRunRepository(db2);
+
+        var task1 = SafeRunAsync(() => repo1.RecoverOrphanedRunsAsync(cutoffUtc));
+        var task2 = SafeRunAsync(() => repo2.RecoverOrphanedRunsAsync(cutoffUtc));
+
+        var results = await Task.WhenAll(task1, task2);
+        Assert.Null(results[0]);
+        Assert.Null(results[1]);
+
+        await using var verifyDb = new FactoryDbContext(_options);
+        var run = await new AgentRunRepository(verifyDb).GetByIdAsync(runId);
+        Assert.NotNull(run);
+        Assert.Equal(AgentRunStatus.Failed, run!.Status);
     }
 
     private static async Task<Exception?> SafeRunAsync(Func<Task> action)

@@ -1,4 +1,4 @@
-﻿using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Orchestration;
 using AI.Factory.Application.Planning;
 using AI.Factory.Application.Projects;
@@ -130,6 +130,9 @@ public sealed class LiveWorkerRecoveryE2ETests
 
         var orphanCandidate = await ReadAgentRunAsync(live, beforeStop.Id, cancellationToken);
         _output.WriteLine($"AgentRun after stop = {orphanCandidate.Status}");
+
+        // Wait past StaleExecutionTimeout (3s) so the interrupted worker's run becomes stale
+        await Task.Delay(3500, cancellationToken);
 
         // ── Restart: a brand new composition root over the same persisted state ──
         using var restarted = live.BuildRestartedWorkerHost();

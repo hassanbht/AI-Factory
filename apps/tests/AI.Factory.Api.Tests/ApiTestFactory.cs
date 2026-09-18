@@ -12,18 +12,22 @@ namespace AI.Factory.Api.Tests;
 /// </summary>
 public sealed class ApiTestFactory : WebApplicationFactory<Program>
 {
-    private readonly SqliteConnection _connection = new("Data Source=:memory:");
+    private readonly string _tempDbDir;
+    private readonly string _dbPath;
 
     public ApiTestFactory()
     {
-        _connection.Open();
+        _tempDbDir = Path.Combine(Path.GetTempPath(), "api-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_tempDbDir);
+        _dbPath = Path.Combine(_tempDbDir, "factory.db");
 
         // Schema must exist before Program.Main runs (WebApplicationFactory
         // executes Main for real) — Main's own startup-recovery step reads
         // WorkItems before the pipeline (and this factory's CreateHost) ever runs.
-        var options = new DbContextOptionsBuilder<FactoryDbContext>().UseSqlite(_connection).Options;
+        var options = new DbContextOptionsBuilder<FactoryDbContext>().UseSqlite($"Data Source={_dbPath}").Options;
         using var db = new FactoryDbContext(options);
         db.Database.EnsureCreated();
+        db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL;");
     }
 
     protected override void ConfigureWebHost(Microsoft.AspNetCore.Hosting.IWebHostBuilder builder)
@@ -38,7 +42,7 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
                 services.Remove(descriptor);
             }
 
-            services.AddDbContext<FactoryDbContext>(options => options.UseSqlite(_connection));
+            services.AddDbContext<FactoryDbContext>(options => options.UseSqlite($"Data Source={_dbPath}"));
         });
     }
 
@@ -48,7 +52,17 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
 
         if (disposing)
         {
-            _connection.Dispose();
+            SqliteConnection.ClearAllPools();
+            try
+            {
+                if (Directory.Exists(_tempDbDir))
+                {
+                    Directory.Delete(_tempDbDir, recursive: true);
+                }
+            }
+            catch
+            {
+            }
         }
     }
 }

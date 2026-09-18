@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Agents;
 using AI.Factory.Application.Planning;
@@ -567,12 +567,17 @@ public sealed class AgentRunWorkerTests
         var runA = NewRunWithWorkItem(workItemIdA);
         var runB = NewRunWithWorkItem(workItemIdB);
         var repository = new FakeAgentRunRepository(new[] { runA, runB });
+        var taskStateManager = new FakeTaskStateManager();
         var orchestrator = new FakeAgentOrchestrator(async (id, ct) =>
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(60), ct);
+            var targetId = id == runA.Id ? workItemIdA : workItemIdB;
+            var spin = Stopwatch.StartNew();
+            while (taskStateManager.CallCountFor(targetId) == 0 && spin.ElapsedMilliseconds < 1000 && !ct.IsCancellationRequested)
+            {
+                await Task.Delay(5, ct);
+            }
             return SuccessResult(Guid.NewGuid());
         });
-        var taskStateManager = new FakeTaskStateManager();
         using var shutdown = new ApplicationShutdownCoordinator();
         var tracker = new BackgroundOperationTracker();
         var metrics = new OperationalMetrics();
@@ -757,6 +762,9 @@ public sealed class AgentRunWorkerTests
 
         public Task<bool> HasActiveRunsForProjectAsync(Guid projectId, CancellationToken cancellationToken = default) =>
             throw new NotImplementedException();
+
+        public Task HeartbeatAsync(Guid agentRunId, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
 
         public Task<int> RecoverOrphanedRunsAsync(
             DateTime? startedBeforeUtc, CancellationToken cancellationToken = default) =>

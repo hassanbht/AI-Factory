@@ -29,14 +29,16 @@ public sealed class ModelRoutingConfigurationTests
             Model("impl-model"),
             Model("repair-model"),
             Model("review-model", reasoning: 5),
-            Model("planner-model", reasoning: 5)
+            Model("planner-model", reasoning: 5),
+            Model("doc-model")
         },
         CategoryProfiles =
         {
             ["coding"] = new List<string> { "impl-model" },
             ["debugging"] = new List<string> { "repair-model" },
             ["code-review"] = new List<string> { "review-model" },
-            ["planning"] = new List<string> { "planner-model" }
+            ["planning"] = new List<string> { "planner-model" },
+            ["documentation"] = new List<string> { "doc-model" }
         }
     };
 
@@ -53,6 +55,7 @@ public sealed class ModelRoutingConfigurationTests
     [InlineData("Repair", "repair-model")]
     [InlineData("Review", "review-model")]
     [InlineData("Planner", "planner-model")]
+    [InlineData("Documentation", "doc-model")]
     public void EachRole_SelectsItsOwnConfiguredModel(string agentType, string expectedModelId)
     {
         // §14 — the whole point: Repair can be pointed at a different (e.g.
@@ -69,6 +72,7 @@ public sealed class ModelRoutingConfigurationTests
         Assert.Equal("debugging", options.AgentTypeCategories["Repair"]);
         Assert.Equal("code-review", options.AgentTypeCategories["Review"]);
         Assert.Equal("planning", options.AgentTypeCategories["Planner"]);
+        Assert.Equal("documentation", options.AgentTypeCategories["Documentation"]);
     }
 
     [Fact]
@@ -84,12 +88,14 @@ public sealed class ModelRoutingConfigurationTests
                 ["debugging"] = new List<string> { "one-model-for-everything" },
                 ["code-review"] = new List<string> { "one-model-for-everything" },
                 ["planning"] = new List<string> { "one-model-for-everything" },
-                ["testing"] = new List<string> { "one-model-for-everything" }
+                ["testing"] = new List<string> { "one-model-for-everything" },
+                ["documentation"] = new List<string> { "one-model-for-everything" }
             }
         };
 
         Assert.Equal("one-model-for-everything", SelectFor(options, "Implementation"));
         Assert.Equal("one-model-for-everything", SelectFor(options, "Repair"));
+        Assert.Equal("one-model-for-everything", SelectFor(options, "Documentation"));
         Assert.Empty(options.Validate());
     }
 

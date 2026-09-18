@@ -104,7 +104,14 @@ public sealed class TaskStateManager : ITaskStateManager
 
         if (orphaned.Count > 0)
         {
-            await _db.SaveChangesAsync(cancellationToken);
+            try
+            {
+                await _db.SaveChangesAsync(cancellationToken);
+            }
+            catch (ConcurrencyConflictException)
+            {
+                // Another worker won the race to recover or update
+            }
         }
     }
 
@@ -122,7 +129,14 @@ public sealed class TaskStateManager : ITaskStateManager
             item.LastCheckpoint = checkpoint;
         }
 
-        await _db.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+        catch (ConcurrencyConflictException)
+        {
+            // Transient collision on optimistic concurrency token — safe to ignore on heartbeat
+        }
     }
 
     public async Task<int> RecoverStaleExecutionsAsync(CancellationToken cancellationToken = default)
@@ -147,7 +161,15 @@ public sealed class TaskStateManager : ITaskStateManager
 
         if (stale.Count > 0)
         {
-            await _db.SaveChangesAsync(cancellationToken);
+            try
+            {
+                await _db.SaveChangesAsync(cancellationToken);
+            }
+            catch (ConcurrencyConflictException)
+            {
+                // Lost race with another recovering worker or concurrent heartbeat/update
+                return 0;
+            }
         }
 
         return stale.Count;

@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Threading.RateLimiting;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Agents;
@@ -1184,6 +1184,10 @@ static object ToWorkItemDto(WorkItem workItem) => new
     workItem.Description,
     workItem.Status,
     workItem.Priority,
+    workItem.AttemptCount,
+    workItem.RepairAttemptCount,
+    workItem.CurrentError,
+    workItem.LastHeartbeatAtUtc,
     workItem.CreatedAtUtc,
     workItem.UpdatedAtUtc
 };
@@ -1338,6 +1342,20 @@ app.MapGet("/api/operations/{correlationId}", async (
 }).RequireRateLimiting("OperationalApi");
 
 app.MapGet("/api/projects/{projectId}/diagnostics", async (
+    string projectId,
+    IOperationalDiagnosticsService diagnostics,
+    CancellationToken cancellationToken) =>
+{
+    if (!Guid.TryParse(projectId, out var parsedProjectId) || parsedProjectId == Guid.Empty)
+    {
+        throw new ValidationException("Invalid project identifier.");
+    }
+
+    var summary = await diagnostics.GetProjectSummaryAsync(parsedProjectId, cancellationToken);
+    return summary is null ? Results.NotFound() : Results.Ok(summary);
+}).RequireRateLimiting("OperationalApi");
+
+app.MapGet("/api/operations/projects/{projectId}/diagnostics", async (
     string projectId,
     IOperationalDiagnosticsService diagnostics,
     CancellationToken cancellationToken) =>
@@ -1549,6 +1567,7 @@ static object ToAgentRunDto(AgentRun run) => new
     run.WorkItemId,
     run.AgentDefinitionId,
     Status = run.Status.ToString(),
+    run.Attempt,
     run.CreatedAtUtc,
     run.StartedAtUtc,
     run.CompletedAtUtc,

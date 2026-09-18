@@ -280,23 +280,20 @@ public sealed class DatabaseResiliencePolicyTests
             EnableRetries = true,
             MaxRetryAttempts = 5,
             InitialRetryDelay = TimeSpan.FromMilliseconds(500), // comfortably longer than the cancel-after window below
-            MaxRetryDelay = TimeSpan.FromSeconds(2),
         };
         var policy = new DatabaseResiliencePolicy(options, _metrics, NullLogger<DatabaseResiliencePolicy>.Instance);
         var attempts = 0;
-
         using var cts = new CancellationTokenSource();
-        cts.CancelAfter(TimeSpan.FromMilliseconds(50));
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             policy.ExecuteAsync<string>("CancelledDuringBackoff", ct =>
             {
                 attempts++;
+                cts.Cancel();
                 throw new SqliteException("database is locked", 5);
             }, cts.Token));
 
-        // Only the first attempt ran — cancellation fired while awaiting the backoff delay
-        // before a second attempt could start.
+        // Only the first attempt ran — cancellation fired during backoff delay before second attempt
         Assert.Equal(1, attempts);
     }
 

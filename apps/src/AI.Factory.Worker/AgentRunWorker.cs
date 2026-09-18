@@ -158,10 +158,12 @@ public sealed class AgentRunWorker : BackgroundService
         // it does not touch executionCts/the orchestrator call, only stops
         // this loop.
         using var heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(executionCts.Token);
-        var heartbeatTask = run.WorkItemId is { } workItemId
-            ? RunHeartbeatLoopAsync(
-                executionScope.ServiceProvider.GetRequiredService<ITaskStateManager>(), workItemId, heartbeatCts.Token)
-            : null;
+        var heartbeatTask = RunHeartbeatLoopAsync(
+            executionScope.ServiceProvider.GetRequiredService<ITaskStateManager>(),
+            executionScope.ServiceProvider.GetRequiredService<IAgentRunRepository>(),
+            run.Id,
+            run.WorkItemId,
+            heartbeatCts.Token);
 
         try
         {
@@ -248,18 +250,40 @@ public sealed class AgentRunWorker : BackgroundService
     }
 
     /// <summary>
-    /// Periodically refreshes WorkItem.LastHeartbeatAtUtc through the
-    /// existing ITaskStateManager.HeartbeatAsync (purely observational —
-    /// never touches Status/AttemptCount, so it cannot resurrect a terminal
-    /// WorkItem or bypass WorkItemTransitions) for as long as
+    /// Periodically refreshes WorkItem.LastHeartbeatAtUtc and AgentRun.UpdatedAtUtc
+    /// (purely observational — never touches Status/AttemptCount, so it cannot resurrect
+    /// a terminal WorkItem or bypass WorkItemTransitions) for as long as
     /// cancellationToken allows. A transient heartbeat failure (e.g. a lost
     /// race with a concurrent recovery sweep) is logged and counted but
     /// never terminates the loop — the AgentRun execution itself remains
     /// authoritative (Phase 18.4 §10).
     /// </summary>
     private async Task RunHeartbeatLoopAsync(
-        ITaskStateManager taskStateManager, Guid workItemId, CancellationToken cancellationToken)
+        ITaskStateManager taskStateManager,
+        IAgentRunRepository agentRunRepository,
+        Guid agentRunId,
+        Guid? workItemId,
+        CancellationToken cancellationToken)
     {
+        // Immediate initial heartbeat upon starting execution
+        try
+        {
+            await agentRunRepository.HeartbeatAsync(agentRunId, cancellationToken);
+            if (workItemId is { } wid)
+            {
+                await taskStateManager.HeartbeatAsync(wid, "AgentExecutionInProgress", cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Initial AgentRunHeartbeatFailed AgentRunId={AgentRunId} WorkItemId={WorkItemId}", agentRunId, workItemId);
+            _metrics.RecordAgentRunHeartbeatFailure();
+        }
+
         try
         {
             while (true)
@@ -268,15 +292,19 @@ public sealed class AgentRunWorker : BackgroundService
 
                 try
                 {
-                    await taskStateManager.HeartbeatAsync(workItemId, "AgentExecutionInProgress", cancellationToken);
+                    await agentRunRepository.HeartbeatAsync(agentRunId, cancellationToken);
+                    if (workItemId is { } wid)
+                    {
+                        await taskStateManager.HeartbeatAsync(wid, "AgentExecutionInProgress", cancellationToken);
+                    }
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     throw;
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "AgentRunHeartbeatFailed WorkItemId={WorkItemId}", workItemId);
+                    _logger.LogWarning(ex, "AgentRunHeartbeatFailed AgentRunId={AgentRunId} WorkItemId={WorkItemId}", agentRunId, workItemId);
                     _metrics.RecordAgentRunHeartbeatFailure();
                 }
             }

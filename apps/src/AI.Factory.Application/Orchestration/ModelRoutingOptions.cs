@@ -48,7 +48,8 @@ public sealed class ModelRoutingOptions
             ["Repair"] = "debugging",
             ["Test"] = "testing",
             ["Review"] = "code-review",
-            ["Planner"] = "planning"
+            ["Planner"] = "planning",
+            ["Documentation"] = "documentation"
         };
 
     /// <summary>

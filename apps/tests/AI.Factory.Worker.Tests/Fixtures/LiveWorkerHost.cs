@@ -1,4 +1,5 @@
-﻿using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Agents;
 using AI.Factory.Application.Configuration;
 using AI.Factory.Application.Orchestration;
 using AI.Factory.Infrastructure.Agents;
@@ -83,8 +84,21 @@ public sealed class LiveWorkerHost : IDisposable
         Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_API_KEY_SECRET") ?? "OMNIROUTE_API_KEY";
 
     /// <summary>Each role may be pointed at its own model; by default they share one.</summary>
-    public static string ModelForRole(string role) =>
-        Environment.GetEnvironmentVariable($"AI_FACTORY_LIVE_{role.ToUpperInvariant()}_MODEL") ?? LiveModel;
+    public static string ModelForRole(string role)
+    {
+        var configured = Environment.GetEnvironmentVariable($"AI_FACTORY_LIVE_{role.ToUpperInvariant()}_MODEL");
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            return configured;
+        }
+
+        if (string.Equals(role, "documentation", StringComparison.OrdinalIgnoreCase))
+        {
+            return Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_IMPLEMENTATION_MODEL") ?? LiveModel;
+        }
+
+        return LiveModel;
+    }
 
     /// <summary>
     /// Phase 18.26 §10/§11 — the role's FALLBACK model, used only when the
@@ -178,6 +192,15 @@ public sealed class LiveWorkerHost : IDisposable
         // stay at their production values.
         schedulerOptions.SchedulingInterval = TimeSpan.FromSeconds(2);
 
+        var agentWorkerOptions = (AgentWorkerOptions)builder.Services
+            .Single(d => d.ServiceType == typeof(AgentWorkerOptions)).ImplementationInstance!;
+        agentWorkerOptions.HeartbeatInterval = TimeSpan.FromSeconds(1);
+
+        var recoveryOptions = (RecoveryOptions)builder.Services
+            .Single(d => d.ServiceType == typeof(RecoveryOptions)).ImplementationInstance!;
+        recoveryOptions.StaleExecutionTimeout = TimeSpan.FromSeconds(3);
+        recoveryOptions.PeriodicSweepInterval = TimeSpan.FromSeconds(2);
+
         var hermesOptions = (HermesOptions)builder.Services
             .Single(d => d.ServiceType == typeof(HermesOptions)).ImplementationInstance!;
         hermesOptions.DockerImage = Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_IMAGE")
@@ -204,7 +227,8 @@ public sealed class LiveWorkerHost : IDisposable
             ("repair", "debugging"),
             ("review", "code-review"),
             ("planner", "planning"),
-            ("test", "testing")
+            ("test", "testing"),
+            ("documentation", "documentation")
         };
 
         routingOptions.Models.Clear();

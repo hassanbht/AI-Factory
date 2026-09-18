@@ -1,4 +1,4 @@
-﻿using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Orchestration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -82,17 +82,19 @@ public sealed class WorkflowRecoveryHostedService : BackgroundService
         using var scope = _scopeFactory.CreateScope();
         var taskStateManager = scope.ServiceProvider.GetRequiredService<ITaskStateManager>();
 
-        _logger.LogInformation("Workflow recovery: sweeping orphaned Running WorkItems at startup.");
+        _logger.LogInformation("Workflow recovery: sweeping stale/orphaned Running executions at startup.");
 
-        await taskStateManager.RecoverOrphanedTasksAsync(cancellationToken);
+        // Multi-worker safe: do not kill healthy peer workers that are actively heartbeating.
+        // Only recover items whose heartbeat/progress is older than StaleExecutionTimeout.
+        var recoveredTasks = await taskStateManager.RecoverStaleExecutionsAsync(cancellationToken);
+        if (recoveredTasks > 0)
+        {
+            _logger.LogWarning("Workflow recovery: recovered {Count} stale WorkItem(s) at startup.", recoveredTasks);
+        }
 
-        // Phase 18.26 §5/§7 — AgentRuns are swept too. Before this, only
-        // WorkItems and OrchestrationRuns were recovered, so a Worker that
-        // died mid-execution left its AgentRun Running forever and
-        // IProjectCompletionGate's HasActiveRunsForProjectAsync check
-        // deadlocked the owning Project permanently.
         var agentRuns = scope.ServiceProvider.GetRequiredService<IAgentRunRepository>();
-        var recoveredRuns = await agentRuns.RecoverOrphanedRunsAsync(startedBeforeUtc: null, cancellationToken);
+        var cutoffUtc = DateTime.UtcNow - _recoveryOptions.StaleExecutionTimeout;
+        var recoveredRuns = await agentRuns.RecoverOrphanedRunsAsync(cutoffUtc, cancellationToken);
 
         if (recoveredRuns > 0)
         {

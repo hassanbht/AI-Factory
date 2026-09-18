@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Exceptions;
 using AI.Factory.Application.Orchestration;
@@ -167,12 +167,35 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
         // that named a model chose it deliberately.
         var explicitModel = !string.IsNullOrWhiteSpace(run.Model);
         var candidates = explicitModel ? Array.Empty<ModelSelection>() : ResolveRoleCandidates(run);
+        var category = run.AgentDefinition?.AgentType is { } at && _routingOptions?.AgentTypeCategories.TryGetValue(at, out var cat) == true ? cat : null;
+        string? primaryModel = null;
 
-        if (!explicitModel && candidates.Count > 0)
+        if (!explicitModel)
         {
-            run.Model = candidates[0].ModelId;
-            run.Provider ??= candidates[0].Provider;
-            await _agentRunRepository.UpdateAsync(run, cancellationToken);
+            if (candidates.Count > 0)
+            {
+                run.Model = candidates[0].ModelId;
+                run.Provider ??= candidates[0].Provider;
+                primaryModel = candidates[0].ModelId;
+                await _agentRunRepository.UpdateAsync(run, cancellationToken);
+            }
+            else if (_modelRouter is not null && _routingOptions is not null)
+            {
+                var roleName = run.AgentDefinition?.AgentType ?? "(unspecified)";
+                _logger.LogWarning(
+                    "AgentOrchestratorRejected AgentRunId={AgentRunId} AgentType={AgentType} Reason=NoModelRouteResolved",
+                    run.Id, roleName);
+
+                return await FailRunningAsync(
+                    run,
+                    $"No explicit model or routing decision resolved for AgentType '{roleName}'. Silent DefaultModel fallback is forbidden.",
+                    FailureCategory.Validation,
+                    cancellationToken);
+            }
+        }
+        else
+        {
+            primaryModel = run.Model;
         }
 
         var memoryEntries = await SearchMemorySafelyAsync(run, cancellationToken);
@@ -187,12 +210,14 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
         // result, not an outage: re-running those on another model would be
         // using fallback to bypass Factory validation, which §10 forbids.
         var fallbackUsed = false;
+        string? fallbackReason = null;
 
         if (!runtimeResult.Success
             && candidates.Count > 1
             && IsFallbackEligible(runtimeResult.FailureCategory))
         {
             var fallback = candidates[1];
+            fallbackReason = runtimeResult.FailureCategory?.ToString();
 
             _logger.LogWarning(
                 "AgentRunModelFallback AgentRunId={AgentRunId} PrimaryModel={PrimaryModel} FallbackModel={FallbackModel} Reason={FailureCategory}",
@@ -218,7 +243,7 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
             ? AgentRunStatus.Succeeded
             : MapFailureStatus(runtimeResult.FailureCategory);
 
-        var structuredResult = BuildStructuredResult(runtimeResult, finalStatus);
+        var structuredResult = BuildStructuredResult(runtimeResult, finalStatus, run, category, primaryModel, fallbackUsed, fallbackReason);
 
         run.Output = runtimeResult.Output;
         run.ErrorMessage = runtimeResult.ErrorMessage;
@@ -402,11 +427,20 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
     /// result directly from the already-known outcome rather than attempting
     /// to parse LLM text that was never produced (or is irrelevant).
     /// </summary>
-    private StructuredAgentResult BuildStructuredResult(AgentRunExecutionResult runtimeResult, AgentRunStatus finalStatus)
+    private StructuredAgentResult BuildStructuredResult(
+        AgentRunExecutionResult runtimeResult,
+        AgentRunStatus finalStatus,
+        AgentRun run,
+        string? category,
+        string? primaryModel,
+        bool fallbackUsed,
+        string? fallbackReason)
     {
+        StructuredAgentResult baseResult;
+
         if (!runtimeResult.Success)
         {
-            return new StructuredAgentResult(
+            baseResult = new StructuredAgentResult(
                 Version: StructuredAgentResult.CurrentVersion,
                 Status: MapToStructuredStatus(finalStatus),
                 Summary: null,
@@ -417,33 +451,80 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
                 Artifacts: runtimeResult.ArtifactReferences,
                 Metadata: null);
         }
-
-        var parseOutcome = _structuredResultParser.Parse(runtimeResult.Output);
-
-        if (parseOutcome.IsValid)
+        else
         {
-            return parseOutcome.Result!;
+            var parseOutcome = _structuredResultParser.Parse(runtimeResult.Output);
+
+            if (parseOutcome.IsValid)
+            {
+                baseResult = parseOutcome.Result!;
+            }
+            else
+            {
+                // The runtime call itself succeeded (real completion, real exit code
+                // 0) but the agent's own output did not honor the structured-output
+                // contract — never silently accepted (Phase 18.1.8 §4). AgentRun's
+                // own Status is untouched by this; it stays whatever the runtime
+                // reported.
+                _logger.LogWarning(
+                    "StructuredAgentResultInvalid Reason={Reason} Message={Message}",
+                    parseOutcome.FailureReason, parseOutcome.Message);
+
+                baseResult = new StructuredAgentResult(
+                    Version: StructuredAgentResult.CurrentVersion,
+                    Status: StructuredResultStatus.Invalid,
+                    Summary: null,
+                    Output: runtimeResult.Output,
+                    Data: null,
+                    Warnings: new[] { parseOutcome.Message ?? "Structured result could not be validated." },
+                    Errors: Array.Empty<string>(),
+                    Artifacts: runtimeResult.ArtifactReferences,
+                    Metadata: null);
+            }
         }
 
-        // The runtime call itself succeeded (real completion, real exit code
-        // 0) but the agent's own output did not honor the structured-output
-        // contract — never silently accepted (Phase 18.1.8 §4). AgentRun's
-        // own Status is untouched by this; it stays whatever the runtime
-        // reported.
-        _logger.LogWarning(
-            "StructuredAgentResultInvalid Reason={Reason} Message={Message}",
-            parseOutcome.FailureReason, parseOutcome.Message);
+        var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (baseResult.Metadata is not null)
+        {
+            foreach (var kvp in baseResult.Metadata)
+            {
+                metadata[kvp.Key] = kvp.Value;
+            }
+        }
 
-        return new StructuredAgentResult(
-            Version: StructuredAgentResult.CurrentVersion,
-            Status: StructuredResultStatus.Invalid,
-            Summary: null,
-            Output: runtimeResult.Output,
-            Data: null,
-            Warnings: new[] { parseOutcome.Message ?? "Structured result could not be validated." },
-            Errors: Array.Empty<string>(),
-            Artifacts: runtimeResult.ArtifactReferences,
-            Metadata: null);
+        if (run.AgentDefinition?.AgentType is { } agentType)
+        {
+            metadata["AgentType"] = agentType;
+        }
+
+        if (!string.IsNullOrWhiteSpace(category))
+        {
+            metadata["Category"] = category;
+        }
+
+        if (!string.IsNullOrWhiteSpace(primaryModel))
+        {
+            metadata["PrimaryModel"] = primaryModel;
+        }
+
+        if (!string.IsNullOrWhiteSpace(run.Model))
+        {
+            metadata["SelectedModel"] = run.Model;
+        }
+
+        if (!string.IsNullOrWhiteSpace(run.Provider))
+        {
+            metadata["Provider"] = run.Provider;
+        }
+
+        metadata["FallbackUsed"] = fallbackUsed ? "true" : "false";
+        if (fallbackReason is not null)
+        {
+            metadata["FallbackReason"] = fallbackReason;
+        }
+        metadata["Attempt"] = run.Attempt.ToString();
+
+        return baseResult with { Metadata = metadata };
     }
 
     private static StructuredResultStatus MapToStructuredStatus(AgentRunStatus status) => status switch

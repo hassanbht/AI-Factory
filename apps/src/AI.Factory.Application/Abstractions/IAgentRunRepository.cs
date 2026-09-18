@@ -1,4 +1,4 @@
-﻿using AI.Factory.Domain.Entities;
+using AI.Factory.Domain.Entities;
 using AI.Factory.Domain.Enums;
 
 namespace AI.Factory.Application.Abstractions;
@@ -84,6 +84,15 @@ public interface IAgentRunRepository
     /// </summary>
     Task<int> RecoverOrphanedRunsAsync(
         DateTime? startedBeforeUtc,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Phase 18.27 — periodic heartbeat for an active AgentRun. Updates
+    /// UpdatedAtUtc under optimistic concurrency so that multi-worker recovery
+    /// can distinguish healthy, executing runs from dead worker orphans.
+    /// </summary>
+    Task HeartbeatAsync(
+        Guid agentRunId,
         CancellationToken cancellationToken = default);
 }
 

@@ -1,3 +1,4 @@
+using AI.Factory.Application.Abstractions;
 using AI.Factory.Infrastructure.Agents;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -28,27 +29,54 @@ public sealed class HermesSmokeTest
             return;
         }
 
+        var dataVolume = Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_DATA");
+        if (string.IsNullOrWhiteSpace(dataVolume))
+        {
+            dataVolume = Directory.Exists(@"D:\Project\.hermes")
+                ? @"D:\Project\.hermes"
+                : Path.Combine(Path.GetTempPath(), "ai-factory-hermes-smoke-data");
+        }
+
+        var liveBaseUrl = Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_BASE_URL");
+        var liveSecretName = Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_API_KEY_SECRET") ?? "OPENROUTER_API_KEY";
+        var liveModel = Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_MODEL");
+
         var options = new HermesOptions
         {
             DockerImage = Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_IMAGE") ?? "nousresearch/hermes-agent:latest",
-            DataVolume = Path.Combine(Path.GetTempPath(), "ai-factory-hermes-smoke-data"),
+            DataVolume = dataVolume,
             WorkspaceRoot = Path.Combine(Path.GetTempPath(), "ai-factory-hermes-smoke-workspace"),
             TimeoutSeconds = 120,
             MaxOutputLength = 20_000,
-            NetworkMode = "none"
+            NetworkMode = string.IsNullOrWhiteSpace(liveBaseUrl) ? "none" : "bridge",
+            Provider = "openrouter",
+            ProviderApiKeyEnvironmentVariable = "OPENROUTER_API_KEY",
+            ProviderApiKeySecretName = liveSecretName,
+            DefaultModel = liveModel
         };
+
+        if (!string.IsNullOrWhiteSpace(liveBaseUrl))
+        {
+            options.AdditionalEnvironmentVariables["OPENROUTER_BASE_URL"] = liveBaseUrl;
+        }
 
         Directory.CreateDirectory(options.DataVolume);
         Directory.CreateDirectory(options.WorkspaceRoot);
 
+        var secretProvider = new AI.Factory.Infrastructure.Configuration.EnvironmentSecretProvider(
+            NullLogger<AI.Factory.Infrastructure.Configuration.EnvironmentSecretProvider>.Instance);
         var executor = new HermesAgentExecutor(
-            options, new SystemProcessRunner(), NullLogger<HermesAgentExecutor>.Instance);
+            options,
+            new SystemProcessRunner(),
+            NullLogger<HermesAgentExecutor>.Instance,
+            NullAuditLogger.Instance,
+            secretProvider);
 
         var request = new AI.Factory.Application.Abstractions.AgentExecutionRequest(
             "coder",
-            null,
+            liveModel,
             "Create a text file named hello.txt containing exactly: Hello AI Factory",
-            "/ignored");
+            string.Empty);
 
         var result = await executor.ExecuteAsync(request);
 
@@ -56,7 +84,7 @@ public sealed class HermesSmokeTest
         Assert.False(string.IsNullOrWhiteSpace(result.WorkspacePath));
 
         var filePath = Path.Combine(result.WorkspacePath!, "hello.txt");
-        Assert.True(File.Exists(filePath), $"Expected file not found: {filePath}");
+        Assert.True(File.Exists(filePath), $"Expected file not found: {filePath}. Output: {result.Output}. Error: {result.Error}");
 
         var content = (await File.ReadAllTextAsync(filePath)).Trim();
         Assert.Equal("Hello AI Factory", content);

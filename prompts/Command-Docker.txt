@@ -1,5 +1,5 @@
 docker run --rm --network bridge \
-  -e OPENROUTER_API_KEY="sk-f7b4138479aef150-4765d9-76d0fb96" \
+  -e OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" \
   -e OPENROUTER_BASE_URL="http://host.docker.internal:20128/v1" \
   -v "<DataVolume>:/opt/data" \
   -v "<Workspace>:/workspace" \

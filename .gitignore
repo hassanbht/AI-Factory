@@ -206,5 +206,6 @@ Document/
 backend/.env.example
 opencode.json
 .env.example
-prompts/
+prompts/*
 .env.live
+prompts/Before prompt.txt

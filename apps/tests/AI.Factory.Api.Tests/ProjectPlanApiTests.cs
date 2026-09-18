@@ -23,7 +23,8 @@ public sealed class ProjectPlanApiTests : IClassFixture<ApiTestFactory>
 
         foreach (var status in new[] { "Analyzing", "Specification", "Architecture", "Planning" })
         {
-            await _client.PatchAsJsonAsync($"/api/projects/{id}/status", new { Status = status });
+            var patchRes = await _client.PatchAsJsonAsync($"/api/projects/{id}/status", new { Status = status });
+            patchRes.EnsureSuccessStatusCode();
         }
 
         return id;

@@ -22,9 +22,14 @@ public static class SensitiveDataSanitizer
         @"(Bearer\s+)[A-Za-z0-9_\-\.]+",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    // Regex for key-value secrets (e.g., apiKey=xyz, secret: "abc")
+    // Regex for key-value secrets (e.g., apiKey=xyz, secret: "abc", key sk-xyz)
     private static readonly Regex KeyValueSecretRegex = new(
-        @"(api[-_]?key|password|token|secret|credential|access[-_]?key)\s*([:=])\s*[""']?([^""'\s,;]+)[""']?",
+        @"(api[-_]?key|password|token|secret|credential|access[-_]?key)\s*([:=]|\s+)\s*[""']?([^""'\s,;]+)[""']?",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    // Regex for raw API key tokens (e.g., sk-or-v1-..., sk-ant-..., sk-proj-...)
+    private static readonly Regex RawApiKeyRegex = new(
+        @"\b(sk-[a-zA-Z0-9_\-]{16,})\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     // Regex for Connection string parameters
@@ -57,7 +62,7 @@ public static class SensitiveDataSanitizer
 
     /// <summary>
     /// Sanitizes free-form text by redacting bearer tokens, secret key-value pairs,
-    /// connection strings, and local file system paths.
+    /// raw API keys, connection strings, and local file system paths.
     /// </summary>
     public static string Sanitize(string? text)
     {
@@ -68,6 +73,7 @@ public static class SensitiveDataSanitizer
 
         var result = BearerTokenRegex.Replace(text, $"$1{RedactedPlaceholder}");
         result = KeyValueSecretRegex.Replace(result, $"$1$2{RedactedPlaceholder}");
+        result = RawApiKeyRegex.Replace(result, RedactedPlaceholder);
         result = ConnectionStringRegex.Replace(result, $"$1={RedactedPlaceholder}");
         result = WindowsPathRegex.Replace(result, RedactedPathPlaceholder);
         result = UnixPathRegex.Replace(result, RedactedPathPlaceholder);

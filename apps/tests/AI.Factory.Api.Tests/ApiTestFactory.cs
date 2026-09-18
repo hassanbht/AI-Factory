@@ -24,10 +24,11 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
         // Schema must exist before Program.Main runs (WebApplicationFactory
         // executes Main for real) — Main's own startup-recovery step reads
         // WorkItems before the pipeline (and this factory's CreateHost) ever runs.
-        var options = new DbContextOptionsBuilder<FactoryDbContext>().UseSqlite($"Data Source={_dbPath}").Options;
+        var options = new DbContextOptionsBuilder<FactoryDbContext>().UseSqlite($"Data Source={_dbPath};Default Timeout=5").Options;
         using var db = new FactoryDbContext(options);
         db.Database.EnsureCreated();
         db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL;");
+        db.Database.ExecuteSqlRaw("PRAGMA busy_timeout=5000;");
     }
 
     protected override void ConfigureWebHost(Microsoft.AspNetCore.Hosting.IWebHostBuilder builder)
@@ -42,7 +43,7 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
                 services.Remove(descriptor);
             }
 
-            services.AddDbContext<FactoryDbContext>(options => options.UseSqlite($"Data Source={_dbPath}"));
+            services.AddDbContext<FactoryDbContext>(options => options.UseSqlite($"Data Source={_dbPath};Default Timeout=5"));
         });
     }
 

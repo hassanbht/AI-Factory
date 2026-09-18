@@ -96,6 +96,8 @@ public sealed class WorkerCompositionRootTests : IDisposable
     [InlineData(typeof(IOrchestrationProgressReporter))]
     [InlineData(typeof(ITaskDispatchScheduler))]
     [InlineData(typeof(IProjectCompletionGate))]
+    [InlineData(typeof(IProjectWorkspaceProvisioner))]
+    [InlineData(typeof(IProjectLifecycleOrchestrator))]
     [InlineData(typeof(IVerificationGate))]
     [InlineData(typeof(IWorkItemCompletionProcessor))]
     [InlineData(typeof(OrchestrationRunExecutionEngine))]

@@ -11,19 +11,22 @@ public sealed class OperationalDiagnosticsService : IOperationalDiagnosticsServi
     private readonly IApprovalRepository _approvalRepository;
     private readonly IOrchestrationRunRepository _orchestrationRunRepository;
     private readonly IAuditLogRepository _auditLogRepository;
+    private readonly IAgentRunRepository? _agentRunRepository;
 
     public OperationalDiagnosticsService(
         IProjectRepository projectRepository,
         IWorkItemRepository workItemRepository,
         IApprovalRepository approvalRepository,
         IOrchestrationRunRepository orchestrationRunRepository,
-        IAuditLogRepository auditLogRepository)
+        IAuditLogRepository auditLogRepository,
+        IAgentRunRepository? agentRunRepository = null)
     {
         _projectRepository = projectRepository;
         _workItemRepository = workItemRepository;
         _approvalRepository = approvalRepository;
         _orchestrationRunRepository = orchestrationRunRepository;
         _auditLogRepository = auditLogRepository;
+        _agentRunRepository = agentRunRepository;
     }
 
     public async Task<ProjectDiagnosticSummary?> GetProjectSummaryAsync(
@@ -61,19 +64,59 @@ public sealed class OperationalDiagnosticsService : IOperationalDiagnosticsServi
 
         var latestApproval = await _approvalRepository.GetLatestForProjectAsync(projectId, cancellationToken);
 
+        var statusCounts = workItems
+            .GroupBy(w => w.Status ?? "Unknown")
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        var activeAgentRuns = 0;
+        var staleAgentRuns = 0;
+        long? executionDurationMs = null;
+
+        if (_agentRunRepository is not null)
+        {
+            var runsPage = await _agentRunRepository.GetPagedAsync(
+                new AgentRunQuery(ProjectId: projectId, Page: 1, PageSize: 100), cancellationToken);
+
+            activeAgentRuns = runsPage.Items.Count(r => r.Status == AgentRunStatus.Running);
+            var staleCutoffUtc = DateTime.UtcNow - TimeSpan.FromMinutes(5);
+            staleAgentRuns = runsPage.Items.Count(r => r.Status == AgentRunStatus.Running && r.UpdatedAtUtc < staleCutoffUtc);
+
+            var latestAgentRun = runsPage.Items.OrderByDescending(r => r.CreatedAtUtc).FirstOrDefault();
+            if (latestAgentRun?.CompletedAtUtc is not null && latestAgentRun.StartedAtUtc is not null)
+            {
+                executionDurationMs = (long)(latestAgentRun.CompletedAtUtc.Value - latestAgentRun.StartedAtUtc.Value).TotalMilliseconds;
+            }
+        }
+
+        var attemptCount = latestTask?.AttemptCount ?? 0;
+        var repairAttemptCount = latestTask?.RepairAttemptCount ?? 0;
+        if (repairAttemptCount == 0 && latestTask is not null && latestTask.Status == WorkItemStatus.Repairing.ToString())
+        {
+            repairAttemptCount = latestTask.AttemptCount;
+        }
+
+        var sanitizedErrorMessage = lastFailure?.Message is not null
+            ? AI.Factory.Application.Security.SensitiveDataSanitizer.Sanitize(lastFailure.Message)
+            : null;
+
         return new ProjectDiagnosticSummary(
             ProjectId: projectId,
             ProjectStatus: project.Status.ToString(),
             LatestTaskId: latestTask?.Id,
             LatestTaskStatus: latestTask?.Status,
-            RepairAttemptCount: latestTask?.AttemptCount ?? 0,
+            RepairAttemptCount: repairAttemptCount,
             LatestRunId: latestRun?.Id,
             LatestRunStatus: latestRun?.Status.ToString(),
             LastSuccessAtUtc: lastSuccess?.TimestampUtc,
             LastFailureAtUtc: lastFailure?.TimestampUtc,
             LastFailureCategory: lastFailure?.FailureCategory,
-            LastFailureMessage: lastFailure?.Message,
-            LatestApprovalDecision: latestApproval?.Decision);
+            LastFailureMessage: sanitizedErrorMessage,
+            LatestApprovalDecision: latestApproval?.Decision,
+            WorkItemStatusCounts: statusCounts,
+            ActiveAgentRuns: activeAgentRuns,
+            StaleAgentRuns: staleAgentRuns,
+            ExecutionDurationMs: executionDurationMs,
+            AttemptCount: attemptCount);
     }
 
     public async Task<CorrelationSummary?> GetCorrelationSummaryAsync(

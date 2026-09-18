@@ -32,7 +32,12 @@ public sealed record ProjectDiagnosticSummary(
     DateTime? LastFailureAtUtc,
     FailureCategory? LastFailureCategory,
     string? LastFailureMessage,
-    ApprovalDecision? LatestApprovalDecision);
+    ApprovalDecision? LatestApprovalDecision,
+    IReadOnlyDictionary<string, int>? WorkItemStatusCounts = null,
+    int ActiveAgentRuns = 0,
+    int StaleAgentRuns = 0,
+    long? ExecutionDurationMs = null,
+    int AttemptCount = 0);
 
 public sealed record CorrelationSummary(
     Guid CorrelationId,

@@ -1,4 +1,4 @@
-﻿using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Agents;
 using AI.Factory.Application.Configuration;
 using AI.Factory.Application.Learning;
@@ -89,319 +89,320 @@ public partial class Program
         executionLimits.Validate();
         builder.Services.AddSingleton(executionLimits);
 
-var recoveryOptions = new RecoveryOptions();
-builder.Configuration.GetSection("Recovery").Bind(recoveryOptions);
-builder.Services.AddSingleton(recoveryOptions);
+        var recoveryOptions = new RecoveryOptions();
+        builder.Configuration.GetSection("Recovery").Bind(recoveryOptions);
+        builder.Services.AddSingleton(recoveryOptions);
 
-builder.Services.AddScoped<IProjectRepository, ProjectRepository>();
+        builder.Services.AddScoped<IProjectRepository, ProjectRepository>();
 
-builder.Services.AddScoped<IWorkItemRepository, WorkItemRepository>();
-builder.Services.AddSingleton<ITaskDependencyResolver, TaskDependencyResolver>();
-builder.Services.AddScoped<ITaskStateManager, TaskStateManager>();
+        builder.Services.AddScoped<IWorkItemRepository, WorkItemRepository>();
+        builder.Services.AddSingleton<ITaskDependencyResolver, TaskDependencyResolver>();
+        builder.Services.AddScoped<ITaskStateManager, TaskStateManager>();
 
-// Phase 18.3 — Deterministic Task Scheduler & Dispatch Engine.
-var taskSchedulerOptions = new TaskSchedulerOptions();
-builder.Configuration.GetSection(TaskSchedulerOptions.SectionName).Bind(taskSchedulerOptions);
-builder.Services.AddSingleton(taskSchedulerOptions);
-builder.Services.AddSingleton<ISchedulerStatusTracker, SchedulerStatusTracker>();
-builder.Services.AddScoped<IWorkItemExecutionResultMapper, WorkItemExecutionResultMapper>();
-// Phase 18.21 — deterministic, Factory-owned acceptance criteria, evaluated
-// by VerificationGate after (never instead of) the mandatory build/test run.
-builder.Services.AddScoped<IWorkItemAcceptanceVerifier, WorkItemAcceptanceVerifier>();
-builder.Services.AddScoped<IVerificationGate, VerificationGate>();
-builder.Services.AddScoped<IAgentRunWorkItemSync, AgentRunWorkItemSync>();
+        // Phase 18.3 — Deterministic Task Scheduler & Dispatch Engine.
+        var taskSchedulerOptions = new TaskSchedulerOptions();
+        builder.Configuration.GetSection(TaskSchedulerOptions.SectionName).Bind(taskSchedulerOptions);
+        builder.Services.AddSingleton(taskSchedulerOptions);
+        builder.Services.AddSingleton<ISchedulerStatusTracker, SchedulerStatusTracker>();
+        builder.Services.AddScoped<IWorkItemExecutionResultMapper, WorkItemExecutionResultMapper>();
+        // Phase 18.21 — deterministic, Factory-owned acceptance criteria, evaluated
+        // by VerificationGate after (never instead of) the mandatory build/test run.
+        builder.Services.AddScoped<IWorkItemAcceptanceVerifier, WorkItemAcceptanceVerifier>();
+        builder.Services.AddScoped<IVerificationGate, VerificationGate>();
+        builder.Services.AddScoped<IAgentRunWorkItemSync, AgentRunWorkItemSync>();
 
-// Phase 18.10 — Deterministic Project Completion & Review Gate.
-builder.Services.AddScoped<IProjectCompletionGate, ProjectCompletionGate>();
+        // Phase 18.10 — Deterministic Project Completion & Review Gate.
+        builder.Services.AddScoped<IProjectCompletionGate, ProjectCompletionGate>();
 
-// Phase 18.25 — the single Project lifecycle authority (Analyzing -> ... ->
-// Planning -> real Planner -> Implementation). Registered in both composition
-// roots: the Api exposes the start operation, the Worker drives progression.
-builder.Services.AddScoped<IProjectLifecycleOrchestrator, ProjectLifecycleOrchestrator>();
-builder.Services.AddScoped<ITaskDispatchScheduler, TaskDispatchScheduler>();
+        // Phase 18.25 — the single Project lifecycle authority (Analyzing -> ... ->
+        // Planning -> real Planner -> Implementation). Registered in both composition
+        // roots: the Api exposes the start operation, the Worker drives progression.
+        builder.Services.AddScoped<IProjectLifecycleOrchestrator, ProjectLifecycleOrchestrator>();
+        builder.Services.AddScoped<ITaskDispatchScheduler, TaskDispatchScheduler>();
 
-// Phase 18.5 — Deterministic Project Planner & Execution Plan
-builder.Services.AddScoped<IProjectPlanService, AI.Factory.Application.Planning.ProjectPlanService>();
+        // Phase 18.5 — Deterministic Project Planner & Execution Plan
+        builder.Services.AddScoped<IProjectPlanService, AI.Factory.Application.Planning.ProjectPlanService>();
 
-// Phase 18.6 — LLM Planner Agent & Candidate Plan Generation
-var plannerOptions = new AI.Factory.Application.Planning.PlannerOptions();
-builder.Configuration.GetSection(AI.Factory.Application.Planning.PlannerOptions.SectionName).Bind(plannerOptions);
-builder.Services.AddSingleton(plannerOptions);
-builder.Services.AddScoped<AI.Factory.Application.Planning.IPlannerResultMapper, AI.Factory.Application.Planning.PlannerResultMapper>();
-// ProjectPlanner depends on IAgentRunService, which this root registered
-// IProjectPlanner without — so resolving the planner in the Worker process
-// threw "Unable to resolve service for type 'IAgentRunService'". The Api root
-// has always registered it; the Worker's omission only surfaced when the
-// Phase 18.22 real-Planner E2E first tried to resolve the planner here.
-builder.Services.AddScoped<IAgentRunService, AgentRunService>();
-builder.Services.AddScoped<AI.Factory.Application.Planning.IProjectPlanner, AI.Factory.Application.Planning.ProjectPlanner>();
+        // Phase 18.6 — LLM Planner Agent & Candidate Plan Generation
+        var plannerOptions = new AI.Factory.Application.Planning.PlannerOptions();
+        builder.Configuration.GetSection(AI.Factory.Application.Planning.PlannerOptions.SectionName).Bind(plannerOptions);
+        builder.Services.AddSingleton(plannerOptions);
+        builder.Services.AddScoped<AI.Factory.Application.Planning.IPlannerResultMapper, AI.Factory.Application.Planning.PlannerResultMapper>();
+        // ProjectPlanner depends on IAgentRunService, which this root registered
+        // IProjectPlanner without — so resolving the planner in the Worker process
+        // threw "Unable to resolve service for type 'IAgentRunService'". The Api root
+        // has always registered it; the Worker's omission only surfaced when the
+        // Phase 18.22 real-Planner E2E first tried to resolve the planner here.
+        builder.Services.AddScoped<IAgentRunService, AgentRunService>();
+        builder.Services.AddScoped<AI.Factory.Application.Planning.IProjectPlanner, AI.Factory.Application.Planning.ProjectPlanner>();
 
-var hermesOptions = new HermesOptions();
-builder.Configuration.GetSection("Hermes").Bind(hermesOptions);
+        var hermesOptions = new HermesOptions();
+        builder.Configuration.GetSection("Hermes").Bind(hermesOptions);
 
-if (string.IsNullOrWhiteSpace(hermesOptions.DataVolume))
-{
-    hermesOptions.DataVolume = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".hermes");
-}
-
-if (string.IsNullOrWhiteSpace(hermesOptions.WorkspaceRoot))
-{
-    hermesOptions.WorkspaceRoot = "../../../sandbox/agent-workspace";
-}
-
-builder.Services.AddSingleton(hermesOptions);
-
-var commandPolicyOptions = new CommandPolicyOptions();
-builder.Configuration.GetSection("CommandPolicy").Bind(commandPolicyOptions);
-builder.Services.AddSingleton(commandPolicyOptions);
-builder.Services.AddSingleton<IProcessRunner, SystemProcessRunner>();
-builder.Services.AddScoped<HermesAgentExecutor>();
-
-var resilienceOptions = new ResilienceOptions();
-builder.Configuration.GetSection(ResilienceOptions.SectionName).Bind(resilienceOptions);
-resilienceOptions.Validate();
-builder.Services.AddSingleton(resilienceOptions);
-builder.Services.AddSingleton<IBackoffCalculator, ExponentialBackoffCalculator>();
-builder.Services.AddSingleton<IDelayProvider, DefaultDelayProvider>();
-builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<ICircuitBreakerRegistry, CircuitBreakerRegistry>();
-builder.Services.AddSingleton<IBulkheadRegistry, BulkheadRegistry>();
-builder.Services.AddScoped<IResilienceExecutor, ResilienceExecutor>();
-
-// Decorates HermesAgentExecutor with centralized resilience (bulkhead, circuit breaker, retry, and timeout)
-builder.Services.AddScoped<IAgentExecutor>(sp =>
-{
-    var hermes = sp.GetRequiredService<HermesAgentExecutor>();
-    return new ResilienceAgentExecutorDecorator(
-        hermes,
-        sp.GetRequiredService<IResilienceExecutor>(),
-        sp.GetRequiredService<IFailureClassifier>(),
-        sp.GetRequiredService<ILogger<ResilienceAgentExecutorDecorator>>());
-});
-
-// Phase 18.1.3 — first real IAgentRuntime, adapting the canonical AgentRun
-// model onto the same (already resilience-decorated) Hermes execution path
-// above. Does not replace or bypass IAgentExecutor.
-builder.Services.AddScoped<IAgentRuntime, HermesAgentRuntime>();
-
-var modelRoutingOptions = new ModelRoutingOptions();
-builder.Configuration.GetSection("ModelRouting").Bind(modelRoutingOptions);
-builder.Services.AddSingleton(modelRoutingOptions);
-
-// Phase 18.21 §15 — deterministic, offline configuration validation (never a
-// provider call). A placeholder or incoherent catalog is reported loudly
-// rather than only surfacing much later as an unexplained agent failure, as
-// the shipped placeholder ids did for the review stage in Phase 18.20.
-foreach (var problem in modelRoutingOptions.Validate())
-{
-    Console.Error.WriteLine($"[ModelRouting] {problem}");
-}
-builder.Services.AddSingleton<IModelRouter, ModelRouter>();
-
-// ------------------------------------------------------------
-// AI provider abstraction & routing (Phase 18.1.1) — provider-neutral
-// execution built on top of the AiProviders/ModelRouting catalogs above.
-// Each enabled provider is wrapped with the same ProviderCall resilience
-// profile used elsewhere, then registered into a scoped, in-memory registry.
-// ------------------------------------------------------------
-
-builder.Services.AddHttpClient();
-
-foreach (var (providerId, providerSettings) in aiProviderOptions.Providers)
-{
-    if (!providerSettings.Enabled)
-    {
-        continue;
-    }
-
-    builder.Services.AddHttpClient(providerId, client =>
-    {
-        if (!string.IsNullOrWhiteSpace(providerSettings.BaseUrl))
+        if (string.IsNullOrWhiteSpace(hermesOptions.DataVolume))
         {
-            client.BaseAddress = new Uri(providerSettings.BaseUrl.TrimEnd('/') + "/");
+            hermesOptions.DataVolume = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".hermes");
         }
 
-        client.Timeout = TimeSpan.FromSeconds(providerSettings.TimeoutSeconds);
-    });
-}
-
-builder.Services.AddScoped<IAiModelProviderRegistry>(sp =>
-{
-    var registry = new AiModelProviderRegistry();
-    var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
-    var secretProvider = sp.GetRequiredService<ISecretProvider>();
-    var resilienceExecutor = sp.GetRequiredService<IResilienceExecutor>();
-    var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
-
-    foreach (var (providerId, providerSettings) in aiProviderOptions.Providers)
-    {
-        if (!providerSettings.Enabled)
+        if (string.IsNullOrWhiteSpace(hermesOptions.WorkspaceRoot))
         {
-            continue;
+            hermesOptions.WorkspaceRoot = "../../../sandbox/agent-workspace";
         }
 
-        var providerCapabilities = modelRoutingOptions.Models
-            .Where(m => string.Equals(m.Provider, providerId, StringComparison.OrdinalIgnoreCase))
-            .SelectMany(m => m.Capabilities)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        builder.Services.AddSingleton(hermesOptions);
 
-        IModelProvider inner = providerSettings.ProviderType == AiModelProviderKind.Fake
-            ? new FakeModelProvider(providerId, providerCapabilities)
-            : new OpenAiCompatibleModelProvider(
-                providerId,
-                providerCapabilities,
-                httpClientFactory.CreateClient(providerId),
-                secretProvider,
-                providerSettings.ApiKeySecretName,
-                loggerFactory.CreateLogger<OpenAiCompatibleModelProvider>());
+        var commandPolicyOptions = new CommandPolicyOptions();
+        builder.Configuration.GetSection("CommandPolicy").Bind(commandPolicyOptions);
+        builder.Services.AddSingleton(commandPolicyOptions);
+        builder.Services.AddSingleton<IProcessRunner, SystemProcessRunner>();
+        builder.Services.AddScoped<HermesAgentExecutor>();
 
-        registry.RegisterProvider(new ResilienceModelProviderDecorator(
-            inner, resilienceExecutor, loggerFactory.CreateLogger<ResilienceModelProviderDecorator>()));
-    }
+        var resilienceOptions = new ResilienceOptions();
+        builder.Configuration.GetSection(ResilienceOptions.SectionName).Bind(resilienceOptions);
+        resilienceOptions.Validate();
+        builder.Services.AddSingleton(resilienceOptions);
+        builder.Services.AddSingleton<IBackoffCalculator, ExponentialBackoffCalculator>();
+        builder.Services.AddSingleton<IDelayProvider, DefaultDelayProvider>();
+        builder.Services.AddSingleton(TimeProvider.System);
+        builder.Services.AddSingleton<ICircuitBreakerRegistry, CircuitBreakerRegistry>();
+        builder.Services.AddSingleton<IBulkheadRegistry, BulkheadRegistry>();
+        builder.Services.AddScoped<IResilienceExecutor, ResilienceExecutor>();
 
-    foreach (var model in modelRoutingOptions.Models)
-    {
-        if (model.Capabilities.Count == 0)
+        // Decorates HermesAgentExecutor with centralized resilience (bulkhead, circuit breaker, retry, and timeout)
+        builder.Services.AddScoped<IAgentExecutor>(sp =>
         {
-            continue;
+            var hermes = sp.GetRequiredService<HermesAgentExecutor>();
+            return new ResilienceAgentExecutorDecorator(
+                hermes,
+                sp.GetRequiredService<IResilienceExecutor>(),
+                sp.GetRequiredService<IFailureClassifier>(),
+                sp.GetRequiredService<ILogger<ResilienceAgentExecutorDecorator>>());
+        });
+
+        // Phase 18.1.3 — first real IAgentRuntime, adapting the canonical AgentRun
+        // model onto the same (already resilience-decorated) Hermes execution path
+        // above. Does not replace or bypass IAgentExecutor.
+        builder.Services.AddScoped<IAgentRuntime, HermesAgentRuntime>();
+
+        var modelRoutingOptions = new ModelRoutingOptions();
+        builder.Configuration.GetSection("ModelRouting").Bind(modelRoutingOptions);
+        builder.Services.AddSingleton(modelRoutingOptions);
+
+        // Phase 18.21 §15 — deterministic, offline configuration validation (never a
+        // provider call). A placeholder or incoherent catalog is reported loudly
+        // rather than only surfacing much later as an unexplained agent failure, as
+        // the shipped placeholder ids did for the review stage in Phase 18.20.
+        foreach (var problem in modelRoutingOptions.Validate())
+        {
+            Console.Error.WriteLine($"[ModelRouting] {problem}");
+        }
+        builder.Services.AddSingleton<IModelRouter, ModelRouter>();
+
+        // ------------------------------------------------------------
+        // AI provider abstraction & routing (Phase 18.1.1) — provider-neutral
+        // execution built on top of the AiProviders/ModelRouting catalogs above.
+        // Each enabled provider is wrapped with the same ProviderCall resilience
+        // profile used elsewhere, then registered into a scoped, in-memory registry.
+        // ------------------------------------------------------------
+
+        builder.Services.AddHttpClient();
+
+        foreach (var (providerId, providerSettings) in aiProviderOptions.Providers)
+        {
+            if (!providerSettings.Enabled)
+            {
+                continue;
+            }
+
+            builder.Services.AddHttpClient(providerId, client =>
+            {
+                if (!string.IsNullOrWhiteSpace(providerSettings.BaseUrl))
+                {
+                    client.BaseAddress = new Uri(providerSettings.BaseUrl.TrimEnd('/') + "/");
+                }
+
+                client.Timeout = TimeSpan.FromSeconds(providerSettings.TimeoutSeconds);
+            });
         }
 
-        if (registry.TryGetProvider(model.Provider, out _))
+        builder.Services.AddScoped<IAiModelProviderRegistry>(sp =>
         {
-            registry.RegisterModel(model.ModelId, model.Provider);
+            var registry = new AiModelProviderRegistry();
+            var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
+            var secretProvider = sp.GetRequiredService<ISecretProvider>();
+            var resilienceExecutor = sp.GetRequiredService<IResilienceExecutor>();
+            var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
+
+            foreach (var (providerId, providerSettings) in aiProviderOptions.Providers)
+            {
+                if (!providerSettings.Enabled)
+                {
+                    continue;
+                }
+
+                var providerCapabilities = modelRoutingOptions.Models
+                    .Where(m => string.Equals(m.Provider, providerId, StringComparison.OrdinalIgnoreCase))
+                    .SelectMany(m => m.Capabilities)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                IModelProvider inner = providerSettings.ProviderType == AiModelProviderKind.Fake
+                    ? new FakeModelProvider(providerId, providerCapabilities)
+                    : new OpenAiCompatibleModelProvider(
+                        providerId,
+                        providerCapabilities,
+                        httpClientFactory.CreateClient(providerId),
+                        secretProvider,
+                        providerSettings.ApiKeySecretName,
+                        loggerFactory.CreateLogger<OpenAiCompatibleModelProvider>());
+
+                registry.RegisterProvider(new ResilienceModelProviderDecorator(
+                    inner, resilienceExecutor, loggerFactory.CreateLogger<ResilienceModelProviderDecorator>()));
+            }
+
+            foreach (var model in modelRoutingOptions.Models)
+            {
+                if (model.Capabilities.Count == 0)
+                {
+                    continue;
+                }
+
+                if (registry.TryGetProvider(model.Provider, out _))
+                {
+                    registry.RegisterModel(model.ModelId, model.Provider);
+                }
+            }
+
+            return registry;
+        });
+
+        var aiRoutingOptions = new AiRoutingOptions();
+        builder.Configuration.GetSection(AiRoutingOptions.SectionName).Bind(aiRoutingOptions);
+        aiRoutingOptions.Validate();
+        builder.Services.AddSingleton(aiRoutingOptions);
+        builder.Services.AddScoped<IAiModelRouter, AiModelRouter>();
+
+        var retryOptions = new RetryOptions();
+        builder.Configuration.GetSection("Retry").Bind(retryOptions);
+        builder.Services.AddSingleton(retryOptions);
+        builder.Services.AddSingleton<RetryExecutor>();
+
+        var openVikingOptions = new OpenVikingOptions();
+        builder.Configuration.GetSection("OpenViking").Bind(openVikingOptions);
+        builder.Services.AddSingleton(openVikingOptions);
+
+        if (openVikingOptions.Enabled)
+        {
+            builder.Services.AddHttpClient<IOpenVikingClient, HttpOpenVikingClient>(client =>
+            {
+                client.BaseAddress = new Uri(openVikingOptions.BaseUrl);
+                client.Timeout = TimeSpan.FromSeconds(openVikingOptions.TimeoutSeconds);
+            });
+            builder.Services.AddScoped<IContextProvider, OpenVikingContextProvider>();
         }
-    }
+        else
+        {
+            builder.Services.AddScoped<IContextProvider, LocalContextProvider>();
+        }
 
-    return registry;
-});
+        builder.Services.AddScoped<IAgentDefinitionRepository, AgentDefinitionRepository>();
+        builder.Services.AddScoped<IAgentRunRepository, AgentRunRepository>();
+        builder.Services.AddScoped<IArtifactRecorder, FileSystemArtifactRecorder>();
 
-var aiRoutingOptions = new AiRoutingOptions();
-builder.Configuration.GetSection(AiRoutingOptions.SectionName).Bind(aiRoutingOptions);
-aiRoutingOptions.Validate();
-builder.Services.AddSingleton(aiRoutingOptions);
-builder.Services.AddScoped<IAiModelRouter, AiModelRouter>();
+        builder.Services.AddScoped<IBuildExecutor, DotNetBuildExecutor>();
+        builder.Services.AddScoped<ITestExecutor, DotNetTestExecutor>();
+        builder.Services.AddScoped<IValidationRunRepository, ValidationRunRepository>();
 
-var retryOptions = new RetryOptions();
-builder.Configuration.GetSection("Retry").Bind(retryOptions);
-builder.Services.AddSingleton(retryOptions);
-builder.Services.AddSingleton<RetryExecutor>();
+        var repairOptions = new RepairOptions();
+        builder.Configuration.GetSection("Repair").Bind(repairOptions);
+        builder.Services.AddSingleton(repairOptions);
 
-var openVikingOptions = new OpenVikingOptions();
-builder.Configuration.GetSection("OpenViking").Bind(openVikingOptions);
-builder.Services.AddSingleton(openVikingOptions);
+        builder.Services.AddScoped<IArtifactRepository, ArtifactRepository>();
 
-if (openVikingOptions.Enabled)
-{
-    builder.Services.AddHttpClient<IOpenVikingClient, HttpOpenVikingClient>(client =>
-    {
-        client.BaseAddress = new Uri(openVikingOptions.BaseUrl);
-        client.Timeout = TimeSpan.FromSeconds(openVikingOptions.TimeoutSeconds);
-    });
-    builder.Services.AddScoped<IContextProvider, OpenVikingContextProvider>();
-}
-else
-{
-    builder.Services.AddScoped<IContextProvider, LocalContextProvider>();
-}
+        // Phase 18.1.4 — Agent Tools & Memory Layer. Tools are collected by IEnumerable<IAgentTool>
+        // into the registry; add new built-in tools by registering another IAgentTool here.
+        builder.Services.AddScoped<IAgentTool, ReadArtifactTool>();
+        builder.Services.AddScoped<IAgentToolRegistry, AgentToolRegistry>();
+        builder.Services.AddScoped<IAgentMemory, LocalAgentMemoryProvider>();
 
-builder.Services.AddScoped<IAgentDefinitionRepository, AgentDefinitionRepository>();
-builder.Services.AddScoped<IAgentRunRepository, AgentRunRepository>();
-builder.Services.AddScoped<IArtifactRecorder, FileSystemArtifactRecorder>();
+        // Phase 18.14 — Deterministic Agent Workspace & Execution Context. Unset
+        // AllowedRoot (default) preserves the prior implicit trust model for
+        // Project.RootPath; when configured, ProjectWorkspaceResolver enforces it via
+        // the existing WorkspacePathGuard.
+        var agentWorkspaceOptions = new AgentWorkspaceOptions();
+        builder.Configuration.GetSection("AgentWorkspace").Bind(agentWorkspaceOptions);
+        agentWorkspaceOptions.Validate();
+        builder.Services.AddSingleton(agentWorkspaceOptions);
+        builder.Services.AddScoped<IWorkspaceResolver, ProjectWorkspaceResolver>();
+        builder.Services.AddScoped<IProjectWorkspaceProvisioner, ProjectWorkspaceProvisioner>();
 
-builder.Services.AddScoped<IBuildExecutor, DotNetBuildExecutor>();
-builder.Services.AddScoped<ITestExecutor, DotNetTestExecutor>();
-builder.Services.AddScoped<IValidationRunRepository, ValidationRunRepository>();
+        // Phase 18.1.5 — Agent Orchestration Service + Worker.
+        builder.Services.AddScoped<IAgentInstructionBuilder, AgentInstructionBuilder>();
+        builder.Services.AddSingleton<IStructuredAgentResultParser, StructuredAgentResultParser>();
+        builder.Services.AddScoped<IAgentOrchestrator, AgentOrchestrator>();
 
-var repairOptions = new RepairOptions();
-builder.Configuration.GetSection("Repair").Bind(repairOptions);
-builder.Services.AddSingleton(repairOptions);
+        var agentWorkerOptions = new AgentWorkerOptions();
+        builder.Configuration.GetSection("AgentWorker").Bind(agentWorkerOptions);
+        agentWorkerOptions.Validate();
+        builder.Services.AddSingleton(agentWorkerOptions);
 
-builder.Services.AddScoped<IArtifactRepository, ArtifactRepository>();
+        builder.Services.AddScoped<IReviewRunRepository, ReviewRunRepository>();
+        builder.Services.AddScoped<IReviewContextBuilder, ReviewContextBuilder>();
+        builder.Services.AddScoped<ICodeReviewer, AgentCodeReviewer>();
 
-// Phase 18.1.4 — Agent Tools & Memory Layer. Tools are collected by IEnumerable<IAgentTool>
-// into the registry; add new built-in tools by registering another IAgentTool here.
-builder.Services.AddScoped<IAgentTool, ReadArtifactTool>();
-builder.Services.AddScoped<IAgentToolRegistry, AgentToolRegistry>();
-builder.Services.AddScoped<IAgentMemory, LocalAgentMemoryProvider>();
+        var reviewOptions = new ReviewOptions();
+        builder.Configuration.GetSection("Review").Bind(reviewOptions);
+        builder.Services.AddSingleton(reviewOptions);
 
-// Phase 18.14 — Deterministic Agent Workspace & Execution Context. Unset
-// AllowedRoot (default) preserves the prior implicit trust model for
-// Project.RootPath; when configured, ProjectWorkspaceResolver enforces it via
-// the existing WorkspacePathGuard.
-var agentWorkspaceOptions = new AgentWorkspaceOptions();
-builder.Configuration.GetSection("AgentWorkspace").Bind(agentWorkspaceOptions);
-agentWorkspaceOptions.Validate();
-builder.Services.AddSingleton(agentWorkspaceOptions);
-builder.Services.AddScoped<IWorkspaceResolver, ProjectWorkspaceResolver>();
+        builder.Services.AddScoped<IApprovalRepository, ApprovalRepository>();
 
-// Phase 18.1.5 — Agent Orchestration Service + Worker.
-builder.Services.AddScoped<IAgentInstructionBuilder, AgentInstructionBuilder>();
-builder.Services.AddSingleton<IStructuredAgentResultParser, StructuredAgentResultParser>();
-builder.Services.AddScoped<IAgentOrchestrator, AgentOrchestrator>();
+        builder.Services.AddScoped<IEvaluationEngine, EvaluationEngine>();
+        builder.Services.AddScoped<IEvaluationRunRepository, EvaluationRunRepository>();
+        builder.Services.AddScoped<ILearningStore, LearningStore>();
+        builder.Services.AddScoped<LearningService>();
+        builder.Services.AddScoped<IWorkItemCompletionProcessor, WorkItemCompletionProcessor>();
 
-var agentWorkerOptions = new AgentWorkerOptions();
-builder.Configuration.GetSection("AgentWorker").Bind(agentWorkerOptions);
-agentWorkerOptions.Validate();
-builder.Services.AddSingleton(agentWorkerOptions);
+        var taskPlannerOptions = new ModelTaskPlannerOptions();
+        builder.Configuration.GetSection("TaskPlanner").Bind(taskPlannerOptions);
+        builder.Services.AddSingleton(taskPlannerOptions);
+        builder.Services.AddScoped<ITaskPlanner, ModelTaskPlanner>();
 
-builder.Services.AddScoped<IReviewRunRepository, ReviewRunRepository>();
-builder.Services.AddScoped<IReviewContextBuilder, ReviewContextBuilder>();
-builder.Services.AddScoped<ICodeReviewer, AgentCodeReviewer>();
+        var auditOptions = new AuditOptions();
+        builder.Configuration.GetSection("Audit").Bind(auditOptions);
+        builder.Services.AddSingleton(auditOptions);
+        builder.Services.AddScoped<IAuditLogRepository, AuditLogRepository>();
+        builder.Services.AddScoped<IAuditLogger, AuditLogger>();
 
-var reviewOptions = new ReviewOptions();
-builder.Configuration.GetSection("Review").Bind(reviewOptions);
-builder.Services.AddSingleton(reviewOptions);
+        builder.Services.AddSingleton<OperationContextAccessor>();
+        builder.Services.AddSingleton<IOperationContextAccessor>(sp => sp.GetRequiredService<OperationContextAccessor>());
+        builder.Services.AddSingleton<IOperationalMetrics, OperationalMetrics>();
+        builder.Services.AddSingleton<IBackgroundOperationTracker, BackgroundOperationTracker>();
+        builder.Services.AddSingleton<IApplicationShutdown, ApplicationShutdownCoordinator>();
+        builder.Services.AddSingleton<IOperationScopeFactory, OperationScopeFactory>();
+        builder.Services.AddSingleton<IFailureClassifier, FailureClassifier>();
+        builder.Services.AddScoped<IOperationalDiagnosticsService, OperationalDiagnosticsService>();
 
-builder.Services.AddScoped<IApprovalRepository, ApprovalRepository>();
+        var shutdownOptions = new ShutdownOptions();
+        builder.Configuration.GetSection(ShutdownOptions.SectionName).Bind(shutdownOptions);
+        shutdownOptions.Validate();
+        builder.Services.AddSingleton(shutdownOptions);
 
-builder.Services.AddScoped<IEvaluationEngine, EvaluationEngine>();
-builder.Services.AddScoped<IEvaluationRunRepository, EvaluationRunRepository>();
-builder.Services.AddScoped<ILearningStore, LearningStore>();
-builder.Services.AddScoped<LearningService>();
-builder.Services.AddScoped<IWorkItemCompletionProcessor, WorkItemCompletionProcessor>();
+        var orchestrationOptions = new OrchestrationOptions();
+        builder.Configuration.GetSection("Orchestration").Bind(orchestrationOptions);
 
-var taskPlannerOptions = new ModelTaskPlannerOptions();
-builder.Configuration.GetSection("TaskPlanner").Bind(taskPlannerOptions);
-builder.Services.AddSingleton(taskPlannerOptions);
-builder.Services.AddScoped<ITaskPlanner, ModelTaskPlanner>();
+        if (string.IsNullOrWhiteSpace(orchestrationOptions.WorkspaceRoot))
+        {
+            orchestrationOptions.WorkspaceRoot = "../../../sandbox/agent-workspace";
+        }
 
-var auditOptions = new AuditOptions();
-builder.Configuration.GetSection("Audit").Bind(auditOptions);
-builder.Services.AddSingleton(auditOptions);
-builder.Services.AddScoped<IAuditLogRepository, AuditLogRepository>();
-builder.Services.AddScoped<IAuditLogger, AuditLogger>();
+        orchestrationOptions.Validate();
+        builder.Services.AddSingleton(orchestrationOptions);
 
-builder.Services.AddSingleton<OperationContextAccessor>();
-builder.Services.AddSingleton<IOperationContextAccessor>(sp => sp.GetRequiredService<OperationContextAccessor>());
-builder.Services.AddSingleton<IOperationalMetrics, OperationalMetrics>();
-builder.Services.AddSingleton<IBackgroundOperationTracker, BackgroundOperationTracker>();
-builder.Services.AddSingleton<IApplicationShutdown, ApplicationShutdownCoordinator>();
-builder.Services.AddSingleton<IOperationScopeFactory, OperationScopeFactory>();
-builder.Services.AddSingleton<IFailureClassifier, FailureClassifier>();
-builder.Services.AddScoped<IOperationalDiagnosticsService, OperationalDiagnosticsService>();
-
-var shutdownOptions = new ShutdownOptions();
-builder.Configuration.GetSection(ShutdownOptions.SectionName).Bind(shutdownOptions);
-shutdownOptions.Validate();
-builder.Services.AddSingleton(shutdownOptions);
-
-var orchestrationOptions = new OrchestrationOptions();
-builder.Configuration.GetSection("Orchestration").Bind(orchestrationOptions);
-
-if (string.IsNullOrWhiteSpace(orchestrationOptions.WorkspaceRoot))
-{
-    orchestrationOptions.WorkspaceRoot = "../../../sandbox/agent-workspace";
-}
-
-orchestrationOptions.Validate();
-builder.Services.AddSingleton(orchestrationOptions);
-
-builder.Services.AddScoped<IOrchestrationRunRepository, OrchestrationRunRepository>();
-builder.Services.AddScoped<IOrchestrationProgressReporter, OrchestrationProgressReporter>();
-builder.Services.AddScoped<IOrchestrationRunTraceService, OrchestrationRunTraceService>();
-builder.Services.AddScoped<OrchestrationRunExecutionEngine>();
+        builder.Services.AddScoped<IOrchestrationRunRepository, OrchestrationRunRepository>();
+        builder.Services.AddScoped<IOrchestrationProgressReporter, OrchestrationProgressReporter>();
+        builder.Services.AddScoped<IOrchestrationRunTraceService, OrchestrationRunTraceService>();
+        builder.Services.AddScoped<OrchestrationRunExecutionEngine>();
 
         builder.Services.AddHostedService<WorkflowRecoveryHostedService>();
         builder.Services.AddHostedService<OrchestrationRunWorker>();

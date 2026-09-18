@@ -207,3 +207,4 @@ backend/.env.example
 opencode.json
 .env.example
 prompts/
+.env.live

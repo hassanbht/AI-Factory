@@ -30,6 +30,16 @@ using Microsoft.EntityFrameworkCore;
 var builder = WebApplication.CreateBuilder(args);
 
 // ------------------------------------------------------------
+// Platform overlay — appsettings.{Environment}.{Windows|Linux|OSX}.json
+// ------------------------------------------------------------
+// appsettings.Production.json describes the containerized deployment, whose
+// paths (/var/lib/ai-factory/...) exist only inside the image. A Windows host
+// deployment (IIS / Windows Service) loads its own paths from the overlay;
+// on Linux the file is simply absent. Environment variables and command-line
+// arguments still win over it — see PlatformConfigurationExtensions.
+builder.Configuration.AddPlatformSpecificOverlay(builder.Environment);
+
+// ------------------------------------------------------------
 // Services
 // ------------------------------------------------------------
 
@@ -49,6 +59,12 @@ if (string.IsNullOrWhiteSpace(databaseOptions.ConnectionString))
         ?? "Data Source=../../../data/factory.db";
 }
 databaseOptions.Validate();
+
+// Resolve the SQLite file against the content root, never the ambient current
+// directory (under IIS the two differ), and expand any %VARIABLE% in it.
+databaseOptions.ConnectionString = SqliteStorageInitializer.NormalizeConnectionString(
+    databaseOptions.ConnectionString, builder.Environment.ContentRootPath);
+
 builder.Services.AddSingleton(databaseOptions);
 
 var databaseResilienceOptions = new DatabaseResilienceOptions();
@@ -58,6 +74,7 @@ builder.Services.AddSingleton(databaseResilienceOptions);
 
 var backupOptions = new BackupOptions();
 builder.Configuration.GetSection(BackupOptions.SectionName).Bind(backupOptions);
+backupOptions.BackupDirectory = DeploymentPaths.Expand(backupOptions.BackupDirectory);
 backupOptions.Validate();
 builder.Services.AddSingleton(backupOptions);
 builder.Services.AddScoped<IDatabaseBackupService, DatabaseBackupService>();
@@ -347,6 +364,8 @@ builder.Services.AddScoped<IAgentMemory, LocalAgentMemoryProvider>();
 // the existing WorkspacePathGuard.
 var agentWorkspaceOptions = new AgentWorkspaceOptions();
 builder.Configuration.GetSection("AgentWorkspace").Bind(agentWorkspaceOptions);
+agentWorkspaceOptions.ProjectsBaseDirectory = DeploymentPaths.Expand(agentWorkspaceOptions.ProjectsBaseDirectory);
+agentWorkspaceOptions.AllowedRoot = DeploymentPaths.Expand(agentWorkspaceOptions.AllowedRoot);
 agentWorkspaceOptions.Validate();
 builder.Services.AddSingleton(agentWorkspaceOptions);
 builder.Services.AddScoped<IWorkspaceResolver, ProjectWorkspaceResolver>();

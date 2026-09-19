@@ -1,0 +1,286 @@
+{
+  "app": {
+    "title": "AI Factory",
+    "subtitle": "Operator console"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "projects": "Projects",
+    "operations": "Operations",
+    "settings": "Settings",
+    "expandMenu": "Expand navigation",
+    "collapseMenu": "Collapse navigation",
+    "mainNavigation": "Main navigation"
+  },
+  "common": {
+    "cancel": "Cancel",
+    "close": "Close",
+    "retry": "Retry",
+    "save": "Save",
+    "loading": "Loading",
+    "refresh": "Refresh",
+    "copy": "Copy",
+    "copied": "Copied",
+    "details": "Details",
+    "notAvailable": "Not available",
+    "notImplemented": "Not implemented yet",
+    "back": "Back",
+    "clear": "Clear",
+    "open": "Open"
+  },
+  "state": {
+    "loading": {
+      "title": "Loading",
+      "message": "Fetching data from the AI Factory API."
+    },
+    "empty": {
+      "title": "Nothing here yet",
+      "message": "There is no data to show for this view."
+    },
+    "error": {
+      "title": "Something went wrong",
+      "technicalDetails": "Technical details",
+      "correlationId": "Correlation ID"
+    }
+  },
+  "error": {
+    "network": "No connection to the AI Factory API. Check the base URL and whether the service is running.",
+    "authentication": "An operational key is required for this area.",
+    "forbidden": "Access to this resource is not permitted.",
+    "validation": "The request was rejected as invalid.",
+    "notFound": "The requested resource no longer exists.",
+    "conflict": "The resource changed in the meantime. Reload and try again.",
+    "timeout": "The operation timed out.",
+    "cancelled": "The request was cancelled.",
+    "providerFailure": "An external service or provider is temporarily unavailable.",
+    "rateLimited": "Too many requests. Updates are being slowed down.",
+    "server": "The server reported an unexpected error.",
+    "unknown": "An unexpected error occurred."
+  },
+  "placeholder": {
+    "comingSoon": "Coming in a later phase",
+    "operations": "Diagnostics, deployment, database, configuration and the audit log will live here."
+  },
+  "settings": {
+    "title": "Settings",
+    "appearance": {
+      "section": "Appearance and language",
+      "language": "Language",
+      "languageHint": "Applies immediately, without restarting the application.",
+      "languageSystem": "System default",
+      "languageEnglish": "English",
+      "languageGerman": "Deutsch",
+      "activeLanguage": "Active language: {}",
+      "resetToSystem": "Use system default",
+      "theme": "Theme",
+      "themeSystem": "System",
+      "themeLight": "Light",
+      "themeDark": "Dark"
+    },
+    "connection": {
+      "section": "Connection",
+      "environment": "Environment",
+      "baseUrl": "API base URL",
+      "hint": "Configured at build time with --dart-define. Editing from the UI arrives in a later phase."
+    },
+    "about": {
+      "section": "About",
+      "appVersion": "Client version",
+      "backendTarget": "Target backend"
+    }
+  },
+  "enums": {
+    "unknown": "Unknown ({})",
+    "projectStatus": {
+      "created": "Created",
+      "analyzing": "Analyzing",
+      "specification": "Specification",
+      "architecture": "Architecture",
+      "planning": "Planning",
+      "implementation": "Implementation",
+      "paused": "Paused",
+      "testing": "Testing",
+      "repairing": "Repairing",
+      "reviewing": "Reviewing",
+      "humanReview": "Human review",
+      "completed": "Completed",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    },
+    "workItemStatus": {
+      "draft": "Draft",
+      "ready": "Ready",
+      "running": "Running",
+      "testing": "Testing",
+      "repairing": "Repairing",
+      "reviewing": "Reviewing",
+      "completed": "Completed",
+      "blocked": "Blocked",
+      "cancelled": "Cancelled",
+      "failed": "Failed"
+    },
+    "agentRunStatus": {
+      "created": "Created",
+      "queued": "Queued",
+      "running": "Running",
+      "waiting": "Waiting",
+      "succeeded": "Succeeded",
+      "failed": "Failed",
+      "timedOut": "Timed out",
+      "cancelled": "Cancelled"
+    },
+    "failureCategory": {
+      "unknown": "Unknown",
+      "validation": "Validation",
+      "build": "Build",
+      "test": "Test",
+      "agent": "Agent",
+      "model": "Model",
+      "provider": "Provider",
+      "timeout": "Timeout",
+      "cancelled": "Cancelled",
+      "infrastructure": "Infrastructure",
+      "approval": "Approval",
+      "review": "Review"
+    }
+  },
+  "time": {
+    "justNow": "Just now",
+    "minutesAgo": "{} min ago",
+    "hoursAgo": "{} h ago",
+    "daysAgo": "{} d ago"
+  },
+  "validation": {
+    "nameRequired": "A project name is required.",
+    "nameTooLong": "The project name cannot exceed 200 characters.",
+    "nameInvalidCharacters": "The project name cannot contain “..” or any of < > : \" / \\ | ? *",
+    "descriptionRequired": "A description is required. The Factory plans against it, and a project without one cannot be started.",
+    "descriptionTooLong": "The description cannot exceed 2000 characters.",
+    "repositoryRequired": "A repository URL is required for a Git source."
+  },
+  "dashboard": {
+    "needsAttention": {
+      "title": "Needs attention",
+      "subtitle": "Projects waiting for a human decision, failed projects, and projects the backend recorded an error for.",
+      "empty": "Nothing needs your attention."
+    },
+    "projects": {
+      "title": "Projects",
+      "subtitle": "Counted by this client from the full project list the API returns.",
+      "total": "Total",
+      "active": "Active",
+      "humanReview": "Human review",
+      "notStarted": "Not started",
+      "paused": "Paused",
+      "completed": "Completed",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    },
+    "recent": {
+      "title": "Recently updated",
+      "empty": "No projects yet.",
+      "viewAll": "View all"
+    },
+    "platform": {
+      "title": "Platform",
+      "subtitle": "The state of the AI Factory service itself. It says nothing about whether a project succeeded.",
+      "api": "API",
+      "reachable": "Reachable",
+      "unreachable": "Unreachable",
+      "readiness": "Readiness",
+      "ready": "Ready",
+      "notReady": "Not ready",
+      "scheduler": "Scheduler",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "lastCycle": "Last cycle {}",
+      "noCycleYet": "No cycle run since the service started.",
+      "agentRuns": "Agent runs in flight",
+      "agentRunsDetail": "{} queued, {} running",
+      "operationalKeyRequired": "Agent run counters require an operational key, which this client cannot supply yet. Entering one arrives in a later phase.",
+      "workerHealth": "Worker health",
+      "workerHealthNote": "The API exposes no worker health endpoint. Scheduler activity above is the nearest available signal, and it is activity rather than health.",
+      "versions": "Client {} · built against backend v{}"
+    },
+    "partial": {
+      "title": "Some information could not be loaded",
+      "message": "The project data below is complete. One or more platform sources did not answer, so their tiles show no value."
+    }
+  },
+  "projects": {
+    "search": "Search",
+    "searchHint": "Project name or slug",
+    "clearFilter": "Clear filter",
+    "sourceNotInitialized": "Source not initialized",
+    "filter": {
+      "all": "All",
+      "notStarted": "Not started",
+      "active": "Active",
+      "humanReview": "Human review",
+      "paused": "Paused",
+      "completed": "Completed",
+      "failed": "Failed or cancelled"
+    },
+    "field": {
+      "name": "Project",
+      "status": "Status",
+      "updated": "Updated",
+      "created": "Created",
+      "actions": "Actions"
+    },
+    "action": {
+      "open": "Open",
+      "start": "Start",
+      "create": "New project"
+    },
+    "empty": {
+      "title": "No projects yet",
+      "message": "Create a project to give the Factory something to work on."
+    },
+    "noMatches": {
+      "title": "No project matches this filter",
+      "message": "There are projects, but none of them match what you are filtering for."
+    },
+    "unpaged": {
+      "title": "Large project list",
+      "message": "The API returns all {} projects in one response — it has no paging. Filter to keep this screen fast."
+    },
+    "create": {
+      "title": "New project",
+      "name": "Name",
+      "nameHelp": "Also used to name the workspace folder.",
+      "description": "Description",
+      "descriptionHelp": "What should be built. The Factory plans against this text, and a project without it cannot be started.",
+      "submit": "Create",
+      "source": "Source",
+      "sourceHelp": "How the project workspace is set up. This is a separate backend step and can be retried on its own.",
+      "sourceEmpty": "Empty workspace",
+      "sourceEmptyHelp": "Start from nothing.",
+      "sourceGit": "Git repository",
+      "sourceGitHelp": "Clone an existing repository into the workspace.",
+      "repository": "Repository URL",
+      "branch": "Branch",
+      "branchHelp": "Optional. The repository default is used when left empty.",
+      "initializeSource": "Initialize source",
+      "createdAs": "Created as “{}”.",
+      "success": "Project created and its source initialized.",
+      "startHint": "Start it from the project list when you are ready.",
+      "stepOf": "Step {} of {}"
+    }
+  },
+  "project": {
+    "title": "Project",
+    "notStarted": "Not started",
+    "currentError": "Error recorded by the backend",
+    "field": {
+      "identifier": "Identifier",
+      "started": "Lifecycle started"
+    },
+    "placeholder": {
+      "title": "Project detail",
+      "message": "This screen shows what the API returns for the project itself. The rest of it is not built yet.",
+      "plannedTitle": "Arriving in later phases",
+      "planned": "Lifecycle visualization, work items and their dependency tree, agent runs, acceptance, artifacts, and human review with approval."
+    }
+  }
+}

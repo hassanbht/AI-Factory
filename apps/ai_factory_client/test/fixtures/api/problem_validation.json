@@ -1,0 +1,1 @@
+{"type":"https://httpstatuses.com/400","title":"Validation failed","status":400,"detail":"Invalid project identifier.","instance":"/api/projects/not-a-guid","correlationId":"1e2b068a-4a96-4385-9d8d-6ec255182677","code":"validation_error","traceId":"1e2b068a-4a96-4385-9d8d-6ec255182677","message":"Invalid project identifier."}

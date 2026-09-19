@@ -1,12 +1,54 @@
 {
   "Version": 1,
   "WorkspaceRootPath": "D:\\Project\\AI-Factory\\apps\\",
-  "Documents": [],
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{E525A769-01A1-DCE3-FDAB-66973FBA5F2C}|src\\AI.Factory.Worker\\AI.Factory.Worker.csproj|d:\\project\\ai-factory\\apps\\src\\ai.factory.worker\\agentrunworker.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{E525A769-01A1-DCE3-FDAB-66973FBA5F2C}|src\\AI.Factory.Worker\\AI.Factory.Worker.csproj|solutionrelative:src\\ai.factory.worker\\agentrunworker.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{E525A769-01A1-DCE3-FDAB-66973FBA5F2C}|src\\AI.Factory.Worker\\AI.Factory.Worker.csproj|d:\\project\\ai-factory\\apps\\src\\ai.factory.worker\\orchestrationrunworker.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{E525A769-01A1-DCE3-FDAB-66973FBA5F2C}|src\\AI.Factory.Worker\\AI.Factory.Worker.csproj|solutionrelative:src\\ai.factory.worker\\orchestrationrunworker.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    }
+  ],
   "DocumentGroupContainers": [
     {
       "Orientation": 0,
       "VerticalTabListWidth": 256,
-      "DocumentGroups": []
+      "DocumentGroups": [
+        {
+          "DockedWidth": 200,
+          "SelectedChildIndex": 0,
+          "Children": [
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "AgentRunWorker.cs",
+              "DocumentMoniker": "D:\\Project\\AI-Factory\\apps\\src\\AI.Factory.Worker\\AgentRunWorker.cs",
+              "RelativeDocumentMoniker": "src\\AI.Factory.Worker\\AgentRunWorker.cs",
+              "ToolTip": "D:\\Project\\AI-Factory\\apps\\src\\AI.Factory.Worker\\AgentRunWorker.cs",
+              "RelativeToolTip": "src\\AI.Factory.Worker\\AgentRunWorker.cs",
+              "ViewState": "AgIAAEEBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-09-19T19:44:23.304Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "OrchestrationRunWorker.cs",
+              "DocumentMoniker": "D:\\Project\\AI-Factory\\apps\\src\\AI.Factory.Worker\\OrchestrationRunWorker.cs",
+              "RelativeDocumentMoniker": "src\\AI.Factory.Worker\\OrchestrationRunWorker.cs",
+              "ToolTip": "D:\\Project\\AI-Factory\\apps\\src\\AI.Factory.Worker\\OrchestrationRunWorker.cs",
+              "RelativeToolTip": "src\\AI.Factory.Worker\\OrchestrationRunWorker.cs",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-09-19T19:44:21.166Z",
+              "EditorCaption": ""
+            }
+          ]
+        }
+      ]
     }
   ]
 }

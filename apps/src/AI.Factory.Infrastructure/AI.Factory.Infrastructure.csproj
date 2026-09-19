@@ -11,6 +11,10 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.11" />
+    <!-- Required by PlatformConfigurationExtensions: the OS-specific appsettings overlay
+         is registered as a JsonConfigurationSource at a controlled position in the
+         configuration source list, which AddJsonFile cannot express. -->
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.11" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.11" />
   </ItemGroup>
 

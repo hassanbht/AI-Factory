@@ -1,0 +1,286 @@
+{
+  "app": {
+    "title": "AI Factory",
+    "subtitle": "Betriebskonsole"
+  },
+  "nav": {
+    "dashboard": "Übersicht",
+    "projects": "Projekte",
+    "operations": "Betrieb",
+    "settings": "Einstellungen",
+    "expandMenu": "Navigation ausklappen",
+    "collapseMenu": "Navigation einklappen",
+    "mainNavigation": "Hauptnavigation"
+  },
+  "common": {
+    "cancel": "Abbrechen",
+    "close": "Schließen",
+    "retry": "Erneut versuchen",
+    "save": "Speichern",
+    "loading": "Wird geladen",
+    "refresh": "Aktualisieren",
+    "copy": "Kopieren",
+    "copied": "Kopiert",
+    "details": "Details",
+    "notAvailable": "Nicht verfügbar",
+    "notImplemented": "Noch nicht implementiert",
+    "back": "Zurück",
+    "clear": "Zurücksetzen",
+    "open": "Öffnen"
+  },
+  "state": {
+    "loading": {
+      "title": "Wird geladen",
+      "message": "Daten werden von der AI-Factory-API abgerufen."
+    },
+    "empty": {
+      "title": "Noch keine Daten",
+      "message": "Für diese Ansicht liegen keine Daten vor."
+    },
+    "error": {
+      "title": "Es ist ein Fehler aufgetreten",
+      "technicalDetails": "Technische Details",
+      "correlationId": "Korrelations-ID"
+    }
+  },
+  "error": {
+    "network": "Keine Verbindung zur AI-Factory-API. Prüfen Sie die Basis-URL und ob der Dienst läuft.",
+    "authentication": "Für diesen Bereich ist ein Betriebsschlüssel erforderlich.",
+    "forbidden": "Der Zugriff auf diese Ressource ist nicht erlaubt.",
+    "validation": "Die Anfrage wurde als ungültig zurückgewiesen.",
+    "notFound": "Die angeforderte Ressource existiert nicht mehr.",
+    "conflict": "Die Ressource hat sich zwischenzeitlich geändert. Bitte neu laden und erneut versuchen.",
+    "timeout": "Zeitüberschreitung bei der Ausführung.",
+    "cancelled": "Die Anfrage wurde abgebrochen.",
+    "providerFailure": "Ein externer Dienst oder Anbieter ist vorübergehend nicht verfügbar.",
+    "rateLimited": "Zu viele Anfragen. Die Aktualisierung wird verlangsamt.",
+    "server": "Der Server hat einen unerwarteten Fehler gemeldet.",
+    "unknown": "Ein unerwarteter Fehler ist aufgetreten."
+  },
+  "placeholder": {
+    "comingSoon": "Folgt in einer späteren Phase",
+    "operations": "Hier entstehen Diagnose, Deployment, Datenbank, Konfiguration und das Audit-Protokoll."
+  },
+  "settings": {
+    "title": "Einstellungen",
+    "appearance": {
+      "section": "Darstellung und Sprache",
+      "language": "Sprache",
+      "languageHint": "Wird sofort übernommen, ohne Neustart der Anwendung.",
+      "languageSystem": "Systemstandard",
+      "languageEnglish": "English",
+      "languageGerman": "Deutsch",
+      "activeLanguage": "Aktive Sprache: {}",
+      "resetToSystem": "Systemstandard verwenden",
+      "theme": "Design",
+      "themeSystem": "System",
+      "themeLight": "Hell",
+      "themeDark": "Dunkel"
+    },
+    "connection": {
+      "section": "Verbindung",
+      "environment": "Umgebung",
+      "baseUrl": "API-Basis-URL",
+      "hint": "Wird beim Build über --dart-define gesetzt. Die Bearbeitung in der Oberfläche folgt in einer späteren Phase."
+    },
+    "about": {
+      "section": "Über",
+      "appVersion": "Client-Version",
+      "backendTarget": "Ziel-Backend"
+    }
+  },
+  "enums": {
+    "unknown": "Unbekannt ({})",
+    "projectStatus": {
+      "created": "Erstellt",
+      "analyzing": "Analyse",
+      "specification": "Spezifikation",
+      "architecture": "Architektur",
+      "planning": "Planung",
+      "implementation": "Implementierung",
+      "paused": "Pausiert",
+      "testing": "Test",
+      "repairing": "Reparatur",
+      "reviewing": "Prüfung",
+      "humanReview": "Menschliche Freigabe",
+      "completed": "Abgeschlossen",
+      "failed": "Fehlgeschlagen",
+      "cancelled": "Abgebrochen"
+    },
+    "workItemStatus": {
+      "draft": "Entwurf",
+      "ready": "Bereit",
+      "running": "Läuft",
+      "testing": "Test",
+      "repairing": "Reparatur",
+      "reviewing": "Prüfung",
+      "completed": "Abgeschlossen",
+      "blocked": "Blockiert",
+      "cancelled": "Abgebrochen",
+      "failed": "Fehlgeschlagen"
+    },
+    "agentRunStatus": {
+      "created": "Erstellt",
+      "queued": "In Warteschlange",
+      "running": "Läuft",
+      "waiting": "Wartet",
+      "succeeded": "Erfolgreich",
+      "failed": "Fehlgeschlagen",
+      "timedOut": "Zeitüberschreitung",
+      "cancelled": "Abgebrochen"
+    },
+    "failureCategory": {
+      "unknown": "Unbekannt",
+      "validation": "Validierung",
+      "build": "Build",
+      "test": "Test",
+      "agent": "Agent",
+      "model": "Modell",
+      "provider": "Anbieter",
+      "timeout": "Zeitüberschreitung",
+      "cancelled": "Abgebrochen",
+      "infrastructure": "Infrastruktur",
+      "approval": "Freigabe",
+      "review": "Prüfung"
+    }
+  },
+  "time": {
+    "justNow": "Gerade eben",
+    "minutesAgo": "vor {} Min.",
+    "hoursAgo": "vor {} Std.",
+    "daysAgo": "vor {} T."
+  },
+  "validation": {
+    "nameRequired": "Ein Projektname ist erforderlich.",
+    "nameTooLong": "Der Projektname darf höchstens 200 Zeichen lang sein.",
+    "nameInvalidCharacters": "Der Projektname darf weder „..“ noch eines der Zeichen < > : \" / \\ | ? * enthalten.",
+    "descriptionRequired": "Eine Beschreibung ist erforderlich. Die Factory plant auf ihrer Grundlage; ein Projekt ohne Beschreibung lässt sich nicht starten.",
+    "descriptionTooLong": "Die Beschreibung darf höchstens 2000 Zeichen lang sein.",
+    "repositoryRequired": "Für eine Git-Quelle ist eine Repository-URL erforderlich."
+  },
+  "dashboard": {
+    "needsAttention": {
+      "title": "Erfordert Aufmerksamkeit",
+      "subtitle": "Projekte, die auf eine menschliche Entscheidung warten, fehlgeschlagene Projekte und Projekte, für die das Backend einen Fehler vermerkt hat.",
+      "empty": "Es liegt nichts zur Bearbeitung an."
+    },
+    "projects": {
+      "title": "Projekte",
+      "subtitle": "Von dieser Anwendung aus der vollständigen Projektliste der API gezählt.",
+      "total": "Gesamt",
+      "active": "Aktiv",
+      "humanReview": "Menschliche Prüfung",
+      "notStarted": "Nicht gestartet",
+      "paused": "Pausiert",
+      "completed": "Abgeschlossen",
+      "failed": "Fehlgeschlagen",
+      "cancelled": "Abgebrochen"
+    },
+    "recent": {
+      "title": "Zuletzt aktualisiert",
+      "empty": "Noch keine Projekte.",
+      "viewAll": "Alle anzeigen"
+    },
+    "platform": {
+      "title": "Plattform",
+      "subtitle": "Der Zustand des AI-Factory-Diensts selbst. Er sagt nichts darüber aus, ob ein Projekt erfolgreich war.",
+      "api": "API",
+      "reachable": "Erreichbar",
+      "unreachable": "Nicht erreichbar",
+      "readiness": "Betriebsbereitschaft",
+      "ready": "Bereit",
+      "notReady": "Nicht bereit",
+      "scheduler": "Planer",
+      "enabled": "Aktiviert",
+      "disabled": "Deaktiviert",
+      "lastCycle": "Letzter Durchlauf {}",
+      "noCycleYet": "Seit dem Start des Diensts wurde kein Durchlauf ausgeführt.",
+      "agentRuns": "Laufende Agentenläufe",
+      "agentRunsDetail": "{} in Warteschlange, {} laufend",
+      "operationalKeyRequired": "Die Zähler der Agentenläufe erfordern einen Betriebsschlüssel, den diese Anwendung noch nicht übermitteln kann. Die Eingabe folgt in einer späteren Phase.",
+      "workerHealth": "Worker-Zustand",
+      "workerHealthNote": "Die API stellt keinen Endpunkt für den Worker-Zustand bereit. Die Planeraktivität oben ist das nächstliegende verfügbare Signal und zeigt Aktivität, nicht Gesundheit.",
+      "versions": "Client {} · entwickelt für Backend v{}"
+    },
+    "partial": {
+      "title": "Einige Informationen konnten nicht geladen werden",
+      "message": "Die Projektdaten unten sind vollständig. Eine oder mehrere Plattformquellen haben nicht geantwortet, daher zeigen deren Kacheln keinen Wert."
+    }
+  },
+  "projects": {
+    "search": "Suche",
+    "searchHint": "Projektname oder Slug",
+    "clearFilter": "Filter zurücksetzen",
+    "sourceNotInitialized": "Quelle nicht initialisiert",
+    "filter": {
+      "all": "Alle",
+      "notStarted": "Nicht gestartet",
+      "active": "Aktiv",
+      "humanReview": "Menschliche Prüfung",
+      "paused": "Pausiert",
+      "completed": "Abgeschlossen",
+      "failed": "Fehlgeschlagen oder abgebrochen"
+    },
+    "field": {
+      "name": "Projekt",
+      "status": "Status",
+      "updated": "Aktualisiert",
+      "created": "Erstellt",
+      "actions": "Aktionen"
+    },
+    "action": {
+      "open": "Öffnen",
+      "start": "Starten",
+      "create": "Neues Projekt"
+    },
+    "empty": {
+      "title": "Noch keine Projekte",
+      "message": "Legen Sie ein Projekt an, damit die Factory etwas zu tun bekommt."
+    },
+    "noMatches": {
+      "title": "Kein Projekt entspricht diesem Filter",
+      "message": "Es sind Projekte vorhanden, aber keines davon entspricht Ihrem Filter."
+    },
+    "unpaged": {
+      "title": "Umfangreiche Projektliste",
+      "message": "Die API liefert alle {} Projekte in einer einzigen Antwort — sie kennt keine Seitenaufteilung. Filtern Sie, damit diese Ansicht schnell bleibt."
+    },
+    "create": {
+      "title": "Neues Projekt",
+      "name": "Name",
+      "nameHelp": "Dient zugleich als Name des Arbeitsverzeichnisses.",
+      "description": "Beschreibung",
+      "descriptionHelp": "Was gebaut werden soll. Die Factory plant auf Grundlage dieses Textes; ohne ihn lässt sich das Projekt nicht starten.",
+      "submit": "Anlegen",
+      "source": "Quelle",
+      "sourceHelp": "Wie das Arbeitsverzeichnis eingerichtet wird. Dies ist ein eigener Backend-Schritt und kann getrennt wiederholt werden.",
+      "sourceEmpty": "Leeres Arbeitsverzeichnis",
+      "sourceEmptyHelp": "Ohne Vorlage beginnen.",
+      "sourceGit": "Git-Repository",
+      "sourceGitHelp": "Ein vorhandenes Repository in das Arbeitsverzeichnis klonen.",
+      "repository": "Repository-URL",
+      "branch": "Branch",
+      "branchHelp": "Optional. Ohne Angabe wird der Standard-Branch des Repositorys verwendet.",
+      "initializeSource": "Quelle initialisieren",
+      "createdAs": "Als „{}“ angelegt.",
+      "success": "Projekt angelegt und Quelle initialisiert.",
+      "startHint": "Starten Sie es aus der Projektliste, sobald Sie bereit sind.",
+      "stepOf": "Schritt {} von {}"
+    }
+  },
+  "project": {
+    "title": "Projekt",
+    "notStarted": "Nicht gestartet",
+    "currentError": "Vom Backend vermerkter Fehler",
+    "field": {
+      "identifier": "Kennung",
+      "started": "Lebenszyklus gestartet"
+    },
+    "placeholder": {
+      "title": "Projektdetails",
+      "message": "Diese Ansicht zeigt, was die API zum Projekt selbst liefert. Der übrige Teil ist noch nicht gebaut.",
+      "plannedTitle": "Folgt in späteren Phasen",
+      "planned": "Lebenszyklus-Darstellung, Arbeitspakete samt Abhängigkeitsbaum, Agentenläufe, Abnahme, Artefakte sowie die menschliche Prüfung mit Freigabe."
+    }
+  }
+}

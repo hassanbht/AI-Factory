@@ -20,10 +20,25 @@ public static class WorkspacePathGuard
             throw new SecurityViolationException("Workspace root is not configured.");
         }
 
-        var resolvedRoot = ResolveFully(root);
-        var resolvedCandidate = ResolveFully(Path.IsPathRooted(candidatePath)
+        if (string.IsNullOrWhiteSpace(candidatePath))
+        {
+            throw new SecurityViolationException("Candidate path is empty or not configured.");
+        }
+
+        if (!OperatingSystem.IsWindows() && HasWindowsDriveLetter(candidatePath))
+        {
+            throw new SecurityViolationException(
+                $"Path '{candidatePath}' resolves outside the configured workspace root.");
+        }
+
+        var normalizedCandidate = OperatingSystem.IsWindows()
             ? candidatePath
-            : Path.Combine(resolvedRoot, candidatePath));
+            : candidatePath.Replace('\\', '/');
+
+        var resolvedRoot = ResolveFully(root);
+        var resolvedCandidate = ResolveFully(Path.IsPathRooted(normalizedCandidate)
+            ? normalizedCandidate
+            : Path.Combine(resolvedRoot, normalizedCandidate));
 
         var rootWithSeparator = resolvedRoot.TrimEnd(
             Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
@@ -40,6 +55,9 @@ public static class WorkspacePathGuard
 
         return resolvedCandidate;
     }
+
+    private static bool HasWindowsDriveLetter(string path) =>
+        path.Length >= 2 && char.IsAsciiLetter(path[0]) && path[1] == ':';
 
     /// <summary>
     /// GetFullPath collapses ".."/"." segments; resolving the deepest

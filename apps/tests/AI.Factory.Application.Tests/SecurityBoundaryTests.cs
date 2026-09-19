@@ -49,6 +49,47 @@ public sealed class SecurityBoundaryTests
     }
 
     [Fact]
+    public void WorkspacePathGuard_Throws_WhenCandidatePathIsEmpty()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ai-factory-security-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+
+        Assert.Throws<SecurityViolationException>(() =>
+            WorkspacePathGuard.EnsureWithinRoot(root, "   "));
+    }
+
+    [Fact]
+    public void WorkspacePathGuard_Throws_ForBackslashDotDotPathTraversal()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ai-factory-security-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+
+        Assert.Throws<SecurityViolationException>(() =>
+            WorkspacePathGuard.EnsureWithinRoot(root, @"..\..\escaped.txt"));
+    }
+
+    [Fact]
+    public void WorkspacePathGuard_Throws_ForWindowsDriveLetterEscape_CrossPlatform()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ai-factory-security-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+
+        Assert.Throws<SecurityViolationException>(() =>
+            WorkspacePathGuard.EnsureWithinRoot(root, @"C:\Windows\System32\config"));
+    }
+
+    [Fact]
+    public void WorkspacePathGuard_Succeeds_ForBackslashPathWithinWorkspaceBoundary()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ai-factory-security-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+
+        var resolved = WorkspacePathGuard.EnsureWithinRoot(root, @"subdir\file.txt");
+
+        Assert.StartsWith(Path.GetFullPath(root), resolved, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task SystemProcessRunner_Throws_ForExplicitlyDeniedCommand()
     {
         var runner = new SystemProcessRunner(new CommandPolicyOptions

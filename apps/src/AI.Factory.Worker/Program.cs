@@ -22,6 +22,12 @@ var builder = Host.CreateApplicationBuilder(args);
 Program.ConfigureServices(builder);
 
 var host = builder.Build();
+
+// Phase 18.29.1 §C — fail closed BEFORE any hosted service starts claiming work.
+// A Worker that boots with a model its provider cannot serve would claim AgentRuns
+// only to fail every one of them, which is how release blocker 2 stayed invisible.
+await ModelRoutingPreflightStartup.RunOrThrowAsync(host.Services);
+
 host.Run();
 
 public partial class Program
@@ -198,6 +204,18 @@ public partial class Program
             Console.Error.WriteLine($"[ModelRouting] {problem}");
         }
         builder.Services.AddSingleton<IModelRouter, ModelRouter>();
+
+        // Phase 18.29.1 §C — the online half of the same question. Validate() above
+        // proves the catalog is internally coherent; this proves the provider can
+        // actually serve what it names. "auto/coding:free" passed every structural
+        // check while OpenRouter rejected it with HTTP 400, which is how it reached
+        // the release gate. Enabled in Production only (see appsettings.Production.json).
+        var modelRoutingPreflightOptions = new ModelRoutingPreflightOptions();
+builder.Configuration.GetSection(ModelRoutingPreflightOptions.SectionName).Bind(modelRoutingPreflightOptions);
+builder.Services.AddModelRoutingPreflight(
+    modelRoutingPreflightOptions,
+    aiProviderOptions,
+    (sp, name) => sp.GetRequiredService<IHttpClientFactory>().CreateClient(name));
 
         // ------------------------------------------------------------
         // AI provider abstraction & routing (Phase 18.1.1) — provider-neutral

@@ -465,6 +465,8 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
             for what is currently broken):
             {failureSummary}
 
+            {DescribeAcceptanceCriteria(workItem)}
+
             Respond using the standard structured-JSON output contract (see the
             Output contract section below), with your execution result placed
             under the top-level "data" object as:
@@ -524,6 +526,8 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
             Dependency context (already-completed prerequisite tasks):
             {dependencyContext}
 
+            {DescribeAcceptanceCriteria(workItem)}
+
             Respond using the standard structured-JSON output contract (see the
             Output contract section below), with your execution result placed
             under the top-level "data" object as:
@@ -539,6 +543,57 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
             - Report only what you actually changed.
             - Do not claim "completed" merely because code was generated; it
               must reflect genuine completion of the assigned WorkItem.
+            """;
+    }
+
+    /// <summary>
+    /// Phase 18.29.1 — states, in the Objective itself, the acceptance contract the
+    /// WorkItem will actually be judged against.
+    ///
+    /// WorkItemAcceptanceVerifier evaluates these criteria against workspace-RELATIVE
+    /// paths, but nothing ever told the agent what they were or what they were
+    /// relative to. The agent was graded on a rubric it had never seen: it would
+    /// create a perfectly good project one directory down, the contract would look
+    /// for it at the workspace root, and the WorkItem failed. The repair loop then
+    /// burned its bounded attempts without converging, because the repair objective
+    /// carried only a truncated failure summary and still never stated the rule.
+    ///
+    /// Rendered from the same <see cref="AcceptanceCriteriaContract"/> parser the
+    /// verifier uses, so what the agent is told and what it is judged by cannot
+    /// drift apart. Criteria that are absent or legacy free text produce no section
+    /// at all rather than an invented one.
+    /// </summary>
+    private static string DescribeAcceptanceCriteria(WorkItem workItem)
+    {
+        var parsed = AcceptanceCriteriaContract.Parse(workItem.AcceptanceCriteria);
+
+        if (parsed.Status != AcceptanceCriteriaParseStatus.Valid || parsed.Criteria.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var lines = parsed.Criteria.Select(criterion => criterion.Type switch
+        {
+            AcceptanceCriterionType.FileExists => $"- The file '{criterion.Path}' must exist.",
+            AcceptanceCriterionType.FileAbsent => $"- The file '{criterion.Path}' must NOT exist.",
+            AcceptanceCriterionType.ExpectedTextPresent =>
+                $"- The file '{criterion.Path}' must contain: {criterion.Value}",
+            AcceptanceCriterionType.ExpectedTextAbsent =>
+                $"- The file '{criterion.Path}' must NOT contain: {criterion.Value}",
+            AcceptanceCriterionType.ExpectedFileContent =>
+                $"- The file '{criterion.Path}' must contain exactly: {criterion.Value}",
+            AcceptanceCriterionType.BuildPasses => "- The project must build successfully.",
+            AcceptanceCriterionType.TestsPass => "- The project's tests must pass.",
+            _ => $"- {criterion.Type}: {criterion.Path}"
+        });
+
+        return $"""
+            Acceptance criteria — this WorkItem is accepted ONLY if all of these
+            hold when you are done. Every path below is relative to the ROOT of
+            your working directory, so a path with no directory component means a
+            file directly in the working-directory root, NOT inside a subfolder
+            you create:
+            {string.Join("\n", lines)}
             """;
     }
 

@@ -188,6 +188,16 @@ foreach (var problem in modelRoutingOptions.Validate())
 }
 builder.Services.AddSingleton<IModelRouter, ModelRouter>();
 
+// Phase 18.29.1 §C — the online half of the same question. Validate() above proves
+// the catalog is internally coherent; this proves the provider can actually serve
+// what it names. Enabled in Production only (see appsettings.Production.json).
+var modelRoutingPreflightOptions = new ModelRoutingPreflightOptions();
+builder.Configuration.GetSection(ModelRoutingPreflightOptions.SectionName).Bind(modelRoutingPreflightOptions);
+builder.Services.AddModelRoutingPreflight(
+    modelRoutingPreflightOptions,
+    aiProviderOptions,
+    (sp, name) => sp.GetRequiredService<IHttpClientFactory>().CreateClient(name));
+
 // ------------------------------------------------------------
 // AI provider abstraction & routing (Phase 18.1.1) — provider-neutral
 // execution built on top of the AiProviders/ModelRouting catalogs above.
@@ -701,6 +711,16 @@ if (restoreArgIndex >= 0)
 
     return;
 }
+
+// ------------------------------------------------------------
+// Model routing preflight (Phase 18.29.1 §C)
+// ------------------------------------------------------------
+// Runs after the CLI-only modes above have returned — --migrate-only and the
+// backup/restore paths must stay usable for operating a deployment whose model
+// configuration is exactly what is being fixed, so they are deliberately not
+// gated on this. On the serving path it fails closed before the first request.
+
+await ModelRoutingPreflightStartup.RunOrThrowAsync(app.Services);
 
 // ------------------------------------------------------------
 // Middleware Pipeline (Section 18 Ordering)

@@ -102,10 +102,25 @@ public sealed class HermesAgentExecutor : IAgentExecutor
             "--network",
             _options.NetworkMode,
             "-v",
-            $"{_options.DataVolume}:/opt/data",
-            "-v",
-            $"{workspacePath}:/workspace"
+            $"{_options.DataVolume}:/opt/data"
         };
+
+        // Phase 18.29.1 — how /workspace is mounted depends on WHOSE daemon runs
+        // the container, not on what the agent does. See BuildWorkspaceMountArguments.
+        try
+        {
+            arguments.AddRange(BuildWorkspaceMountArguments(workspacePath));
+        }
+        catch (SecurityViolationException ex)
+        {
+            await _auditLogger.LogAsync(
+                Guid.NewGuid(), AuditEventType.WorkflowFailed, AuditSeverity.Critical,
+                $"Security violation: {ex.Message}", cancellationToken: cancellationToken);
+
+            _logger.LogError(ex, "Workspace mount security violation for agent {Agent}", request.Agent);
+
+            return new AgentExecutionResult(false, null, ex.Message, 0, WorkspacePath: null);
+        }
 
         // `-e NAME=VALUE` are docker-run flags that inject a variable INTO
         // the container — distinct from (and never mixed up with) the host
@@ -276,6 +291,52 @@ public sealed class HermesAgentExecutor : IAgentExecutor
             return new AgentExecutionResult(
                 false, null, $"Security violation: {ex.Message}", stopwatch.ElapsedMilliseconds, workspacePath);
         }
+    }
+
+    /// <summary>
+    /// Phase 18.29.1 — produces the `docker run` arguments that put the
+    /// Factory-resolved workspace at /workspace inside the Hermes container.
+    ///
+    /// Two topologies, one execution contract:
+    ///
+    /// * Worker on the host (dev, tests, host deployment) — the daemon and the
+    ///   Worker share a filesystem, so the original `-v &lt;path&gt;:/workspace`
+    ///   bind mount is correct and is kept byte-for-byte.
+    /// * Worker in a container talking to the host daemon over a mounted socket
+    ///   (the production compose topology) — a bind-mount path is interpreted by
+    ///   the HOST, where the Worker's `/var/lib/ai-factory/workspace/&lt;id&gt;` does
+    ///   not exist. Docker would silently create an empty host directory and the
+    ///   agent would run against nothing. The workspace is therefore addressed as
+    ///   a subpath of the named volume both containers share.
+    ///
+    /// The subpath is always derived from the already-resolved workspace relative
+    /// to <see cref="HermesOptions.WorkspaceRoot"/>, re-checked through
+    /// <see cref="WorkspacePathGuard"/>. A workspace outside that root is refused
+    /// rather than mounted — this must never become a way to hand Hermes a
+    /// directory the workspace boundary would otherwise have rejected.
+    /// </summary>
+    private IReadOnlyList<string> BuildWorkspaceMountArguments(string workspacePath)
+    {
+        if (string.IsNullOrWhiteSpace(_options.WorkspaceVolumeName))
+        {
+            return new[] { "-v", $"{workspacePath}:/workspace" };
+        }
+
+        // Throws SecurityViolationException when the workspace escapes the root.
+        var boundedWorkspace = WorkspacePathGuard.EnsureWithinRoot(_options.WorkspaceRoot, workspacePath);
+        var resolvedRoot = WorkspacePathGuard.EnsureWithinRoot(_options.WorkspaceRoot, _options.WorkspaceRoot);
+
+        var relative = Path.GetRelativePath(resolvedRoot, boundedWorkspace).Replace('\\', '/');
+
+        // The root itself is a legitimate (if unusual) workspace — mount the whole
+        // volume rather than emitting an empty/"." subpath the daemon would reject.
+        return relative is "." or ""
+            ? new[] { "--mount", $"type=volume,source={_options.WorkspaceVolumeName},target=/workspace" }
+            : new[]
+            {
+                "--mount",
+                $"type=volume,source={_options.WorkspaceVolumeName},target=/workspace,volume-subpath={relative}"
+            };
     }
 
     private string? Truncate(string? text)

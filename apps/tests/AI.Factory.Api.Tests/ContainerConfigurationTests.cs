@@ -42,13 +42,28 @@ public sealed class ContainerConfigurationTests
 
         var content = File.ReadAllText(dockerfilePath);
 
-        // Multi-stage verification
-        Assert.Contains("FROM mcr.microsoft.com/dotnet/runtime:10.0 AS base", content);
+        // Multi-stage verification.
+        //
+        // Phase 18.29.1 — the runtime stage is the SDK image, not the runtime image.
+        // This is a deliberate change, not a relaxation: the Worker does not merely host
+        // .NET code, it COMPILES AND TESTS the code agents produce (DotNetBuildExecutor /
+        // DotNetTestExecutor run `dotnet build` and `dotnet test` as the verification
+        // gate). On the runtime-only base every WorkItem failed with "No .NET SDKs were
+        // found" (exit 155). The assertion is tightened accordingly — the base must
+        // provide an SDK — rather than dropped.
+        Assert.Contains("FROM mcr.microsoft.com/dotnet/sdk:10.0 AS base", content);
         Assert.Contains("FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build", content);
         Assert.Contains("FROM build AS publish", content);
         Assert.Contains("FROM base AS final", content);
 
-        // Non-root execution
+        // Phase 18.29.1 — HermesAgentExecutor executes every agent as
+        // `docker run nousresearch/hermes-agent`, so the image must carry a Docker CLI
+        // or the containerized Worker cannot execute any agent at all. Only the client
+        // binary is copied — never a daemon.
+        Assert.Contains("COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker", content);
+
+        // Non-root execution — still required, and still asserted, on the SDK base
+        // (which defines APP_UID but would otherwise default to root).
         Assert.Contains("USER $APP_UID", content);
 
         // Health check configured with liveness, NOT readiness

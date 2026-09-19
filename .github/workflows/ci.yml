@@ -119,6 +119,13 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      # Phase 18.29.1 — the worker service joins the Docker socket's owning group so
+      # its non-root user can reach the daemon (see docker-compose.yml). That gid is
+      # host-specific: 0 on Docker Desktop, the `docker` group on a GitHub runner, so
+      # it is resolved here rather than hard-coded.
+      - name: Resolve Docker socket group id
+        run: echo "DOCKER_SOCKET_GID=$(stat -c '%g' /var/run/docker.sock)" >> "$GITHUB_ENV"
+
       - name: Start stack
         run: docker compose up -d
 

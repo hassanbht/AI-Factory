@@ -22,7 +22,9 @@ public sealed class DotNetTestExecutor : ITestExecutor
             // DotNetBuildExecutor.NoDaemonFlags for the full explanation.
             // `dotnet test` drives the same MSBuild machinery, so it needs the
             // same flags; fixing only the build would leave half the gate exposed.
-            var arguments = new List<string> { "test", request.ProjectPath };
+            // Same resolution as the build gate — the two must agree on what they verify.
+            var target = MsBuildTargetResolver.Resolve(request.ProjectPath);
+            var arguments = new List<string> { "test", target };
             arguments.AddRange(DotNetBuildExecutor.NoDaemonFlags);
 
             var result = await _processRunner.RunAsync(

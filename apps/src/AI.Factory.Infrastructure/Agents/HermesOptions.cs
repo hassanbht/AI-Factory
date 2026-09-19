@@ -4,11 +4,36 @@ public sealed class HermesOptions
 {
     public string DockerImage { get; set; } = "nousresearch/hermes-agent:latest";
 
-    /// <summary>Host path mounted at /opt/data (Hermes's own persistent state).</summary>
+    /// <summary>
+    /// What is mounted at /opt/data (Hermes's own persistent state). A value
+    /// containing a path separator is a host path bind mount; a bare name is a
+    /// Docker named volume. The containerized Worker topology (Phase 18.29.1)
+    /// must use a named volume: bind-mount paths in a `docker run` issued over
+    /// a mounted socket are resolved by the HOST daemon, so a path that only
+    /// exists inside the Worker container would silently create an unrelated
+    /// empty host directory instead.
+    /// </summary>
     public string DataVolume { get; set; } = string.Empty;
 
-    /// <summary>Host directory under which a fresh isolated subfolder is created per execution, mounted at /workspace.</summary>
+    /// <summary>Directory under which a fresh isolated subfolder is created per execution, mounted at /workspace.</summary>
     public string WorkspaceRoot { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Phase 18.29.1 — name of the Docker volume backing <see cref="WorkspaceRoot"/>
+    /// when the Worker itself runs in a container and reaches the daemon through a
+    /// mounted socket. Unset (the default, and every host/dev/test execution) keeps
+    /// the original `-v &lt;workspacePath&gt;:/workspace` bind mount unchanged.
+    ///
+    /// When set, the per-execution workspace is mounted as a SUBPATH of that volume
+    /// (`--mount type=volume,volume-subpath=...`) rather than as a host path, which
+    /// is the only form that addresses the correct directory when the daemon is the
+    /// host's. The subpath is always derived from the Factory-resolved workspace
+    /// relative to <see cref="WorkspaceRoot"/> — an execution whose workspace falls
+    /// outside that root is refused rather than mounted, so this never widens what
+    /// Hermes can reach beyond the workspace volume.
+    /// </summary>
+    public string? WorkspaceVolumeName { get; set; }
+
 
     public int TimeoutSeconds { get; set; } = 300;
 

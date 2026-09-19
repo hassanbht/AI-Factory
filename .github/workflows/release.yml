@@ -442,6 +442,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Phase 18.29.1 — the worker service joins the Docker socket's owning group so
+      # its non-root user can reach the daemon (see docker-compose.yml). That gid is
+      # host-specific: 0 on Docker Desktop, the `docker` group on a GitHub runner, so
+      # it is resolved here rather than hard-coded.
+      - name: Resolve Docker socket group id
+        run: echo "DOCKER_SOCKET_GID=$(stat -c '%g' /var/run/docker.sock)" >> "$GITHUB_ENV"
+
       - name: Pull published release images by immutable digest
         env:
           AI_FACTORY_API_IMAGE: ${{ needs.docker-release.outputs.api_digest }}
@@ -547,6 +554,58 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose -f docker-compose.yml -f docker-compose.release.yml down -v
+
+  # Phase 18.29.1 §O — publish the GitHub Release for the tag that just passed every
+  # gate above. Deliberately part of THIS workflow rather than a second release
+  # mechanism: the release can then only exist for a commit that actually cleared
+  # the gate, and the immutable digests in the notes are the ones docker-release
+  # captured, not ones a human retyped.
+  #
+  # Uses the `gh` CLI preinstalled on GitHub-hosted runners with the built-in
+  # GITHUB_TOKEN — no third-party action and no new secret. `contents: write` is
+  # scoped to this job alone.
+  github-release:
+    needs: [setup, release-gate, docker-release]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Compose release notes
+        env:
+          VERSION: ${{ needs.setup.outputs.semantic_version }}
+          API_DIGEST: ${{ needs.docker-release.outputs.api_digest }}
+          WORKER_DIGEST: ${{ needs.docker-release.outputs.worker_digest }}
+        run: |
+          set -e
+          notes_file="docs/releases/v${VERSION}.md"
+          if [ ! -f "$notes_file" ]; then
+            echo "::error::Expected release notes at $notes_file for tag ${{ github.ref_name }}. Refusing to publish a release with no notes."
+            exit 1
+          fi
+          cp "$notes_file" /tmp/release-notes.md
+          {
+            echo ""
+            echo "## Published artifacts (immutable digests)"
+            echo ""
+            echo "| Image | Digest |"
+            echo "|---|---|"
+            echo "| API | \`$API_DIGEST\` |"
+            echo "| Worker | \`$WORKER_DIGEST\` |"
+            echo ""
+            echo "Release commit: \`${{ github.sha }}\`"
+          } >> /tmp/release-notes.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "AI Factory ${{ github.ref_name }}" \
+            --notes-file /tmp/release-notes.md \
+            --target "${{ github.sha }}"
 
   release-gate:
     needs: [stability-gate, versioned-build, docker-release, sbom, container-scan, migration-failure-gate, published-smoke-test]

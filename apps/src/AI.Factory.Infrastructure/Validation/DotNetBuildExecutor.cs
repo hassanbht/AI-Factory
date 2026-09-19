@@ -47,7 +47,10 @@ public sealed class DotNetBuildExecutor : IBuildExecutor
     {
         try
         {
-            var arguments = new List<string> { "build", request.ProjectPath };
+            // See MsBuildTargetResolver: unchanged when the workspace root already
+            // holds a project/solution; resolves an unambiguous nested one otherwise.
+            var target = MsBuildTargetResolver.Resolve(request.ProjectPath);
+            var arguments = new List<string> { "build", target };
             arguments.AddRange(NoDaemonFlags);
 
             var result = await _processRunner.RunAsync(

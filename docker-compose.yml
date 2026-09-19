@@ -66,6 +66,13 @@ services:
     volumes:
       - ai_factory_data:/var/lib/ai-factory/data
       - ai_factory_backups:/var/lib/ai-factory/backups
+      # Phase 18.29.1 — the API owns workspace PROVISIONING (POST /api/projects/{id}/source
+      # runs ProjectWorkspaceProvisioner in this process) while the Worker owns EXECUTION,
+      # so both must see the same volume. Without this mount the API created each Project's
+      # workspace inside its own container's filesystem and the Worker then failed every
+      # Implementation run with "workspace does not exist or is not accessible" — the two
+      # halves of one contract writing to two different filesystems.
+      - ai_factory_workspace:/var/lib/ai-factory/workspace
       - tmpfs_api:/tmp
     deploy:
       resources:
@@ -80,7 +87,12 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 15s
+      # 120s, not 15s: startup now blocks on the model-routing preflight (Phase
+      # 18.29.1 §C), a real provider call bounded by ModelRoutingPreflight.TimeoutSeconds
+      # (60s). A cold container's first outbound TLS request can be slow, and a
+      # start_period shorter than the preflight budget would restart a container that
+      # is doing exactly what it is supposed to do.
+      start_period: 120s
     networks:
       - ai_factory_network
 
@@ -116,10 +128,56 @@ services:
       - AI_FACTORY_HEALTH_DIR=/tmp/ai-factory-health
       - Hermes__WorkspaceRoot=/var/lib/ai-factory/workspace
       - Orchestration__WorkspaceRoot=/var/lib/ai-factory/workspace
+      # Phase 18.29.1 — the containerized Hermes execution contract. These are the
+      # NAMES of volumes and of a secret, never a secret value: the API key itself
+      # is resolved at run time from the OPENROUTER_API_KEY environment secret via
+      # EnvironmentSecretProvider and is never written to any compose/appsettings file.
+      - Hermes__WorkspaceVolumeName=ai_factory_production_workspace
+      - Hermes__DataVolume=ai_factory_production_hermes
+      - AgentWorkspace__ProjectsBaseDirectory=/var/lib/ai-factory/workspace
+      - AgentWorkspace__AllowedRoot=/var/lib/ai-factory/workspace
     volumes:
       - ai_factory_data:/var/lib/ai-factory/data
       - ai_factory_workspace:/var/lib/ai-factory/workspace
+      - ai_factory_hermes:/var/lib/ai-factory/hermes
       - tmpfs_worker:/tmp
+      # ---------------------------------------------------------------------
+      # SECURITY — host Docker daemon access (Phase 18.29.1, deliberate).
+      #
+      # HermesAgentExecutor executes every agent as `docker run
+      # nousresearch/hermes-agent`. For that to work from inside this container
+      # it must reach a Docker daemon, and the daemon it reaches is the HOST's.
+      #
+      # This is a real and substantial privilege grant, stated plainly rather than
+      # buried: a process that can talk to the host Docker socket can start
+      # containers with arbitrary mounts and privileges, and is therefore
+      # effectively equivalent to root on the Docker host. Mounting it does NOT
+      # sandbox the Worker — it makes the Worker as trusted as the host.
+      #
+      # It is accepted here because it is the execution model the Factory already
+      # has (sibling Hermes containers, not nested Docker), and the alternative —
+      # running Hermes inside this container via privileged dind — is strictly
+      # worse. It is read-only (`:ro`) because the Worker only needs to issue API
+      # calls over the socket, never to replace it; note that read-only limits
+      # tampering with the socket FILE, not what can be asked of the daemon
+      # THROUGH it.
+      #
+      # Operational requirement that follows from this: run the Worker only on a
+      # host whose Docker daemon you are willing to treat as part of the Factory's
+      # trust boundary. Do not co-locate it with unrelated production workloads.
+      # ---------------------------------------------------------------------
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # The Worker process is non-root (UID 1654) and the socket is mode 660, so the
+    # container needs supplementary membership of the socket's OWNING GROUP to open
+    # it. This is a group membership, NOT a switch to root: the process still runs
+    # as UID 1654 and the image's USER directive is untouched.
+    #
+    # The default 0 matches Docker Desktop, where the socket is root:root. On a
+    # distro with a real `docker` group, set DOCKER_SOCKET_GID to that gid instead —
+    # `stat -c '%g' /var/run/docker.sock` — rather than leaving it at 0, so the
+    # container is not in the root group for no reason.
+    group_add:
+      - "${DOCKER_SOCKET_GID:-0}"
     deploy:
       resources:
         limits:
@@ -138,7 +196,12 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 15s
+      # 120s, not 15s: startup now blocks on the model-routing preflight (Phase
+      # 18.29.1 §C), a real provider call bounded by ModelRoutingPreflight.TimeoutSeconds
+      # (60s). A cold container's first outbound TLS request can be slow, and a
+      # start_period shorter than the preflight budget would restart a container that
+      # is doing exactly what it is supposed to do.
+      start_period: 120s
     networks:
       - ai_factory_network
 
@@ -149,6 +212,11 @@ volumes:
     name: ai_factory_production_backups
   ai_factory_workspace:
     name: ai_factory_production_workspace
+  # Hermes's own persistent state (/opt/data). A NAMED volume, not a host path:
+  # the Hermes container is started by the host daemon, so a path that exists only
+  # inside the Worker container would resolve to an unrelated host directory.
+  ai_factory_hermes:
+    name: ai_factory_production_hermes
   tmpfs_api:
   tmpfs_worker:
 

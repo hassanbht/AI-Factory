@@ -2,12 +2,53 @@
 # AI.Factory.Worker — Production Multi-Stage Dockerfile
 # ------------------------------------------------------------
 
-# Stage 1: Runtime Base
-FROM mcr.microsoft.com/dotnet/runtime:10.0 AS base
+# Stage 0: Docker CLI source (Phase 18.29.1)
+# HermesAgentExecutor executes agents by running the Hermes container
+# (`docker run nousresearch/hermes-agent`). Without a Docker CLI in this image the
+# Worker container cannot execute ANY agent — it fails with "Failed to start
+# process 'docker'", which is exactly what blocked the v1.0.0 release gate.
+#
+# Only the client binary is taken, never a daemon: this image does not run Docker,
+# it talks to a daemon whose socket the deployment mounts in. See the security note
+# on the `worker` service in docker-compose.yml.
+#
+# 29-cli specifically, and only /usr/local/bin/docker: the 28-cli client is built on
+# Go 1.25.3 and carries 22 HIGH/CRITICAL stdlib CVEs, which correctly failed the
+# release pipeline's Trivy gate. The 29-cli client scans clean. Its cli-plugins
+# (docker-buildx) still carry HIGH findings and are deliberately NOT copied — the
+# Worker issues `docker run`, it never builds images.
+FROM docker:29-cli AS dockercli
+
+# Stage 1: Runtime Base (Phase 18.29.1 — SDK, not runtime)
+#
+# The Worker does not merely host .NET code, it COMPILES AND TESTS the code the
+# agents produce: DotNetBuildExecutor/DotNetTestExecutor shell out to `dotnet build`
+# and `dotnet test` as the Factory's verification gate. On the runtime-only image
+# that failed with "No .NET SDKs were found" (exit 155) for every WorkItem, which
+# then drove the repair loop into repeatedly "fixing" a defect that was in the image
+# rather than in the generated code — one repair attempt went as far as downloading
+# an entire .NET SDK into the project workspace.
+#
+# The cost is a substantially larger image. That is the honest price of what the
+# Worker actually does; the API image is unaffected and stays on the runtime base.
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS base
 WORKDIR /app
+
+# This image defines APP_UID=1654 but defaults to root; the final stage still switches
+# to USER $APP_UID, so the Worker remains non-root.
+#
+# The SDK needs a writable HOME for the NuGet cache and CLI state, and uid 1654 has no
+# home directory in this base — without one, `dotnet build` fails trying to write to a
+# read-only $HOME. It is placed inside the Factory's own tree, which the final stage
+# already chowns.
 ENV DOTNET_RUNNING_IN_CONTAINER=true \
     DOTNET_ENVIRONMENT=Production \
-    AI_FACTORY_HEALTH_DIR=/tmp/ai-factory-health
+    AI_FACTORY_HEALTH_DIR=/tmp/ai-factory-health \
+    DOTNET_CLI_TELEMETRY_OPTOUT=true \
+    DOTNET_NOLOGO=true \
+    HOME=/var/lib/ai-factory/home \
+    DOTNET_CLI_HOME=/var/lib/ai-factory/home \
+    NUGET_PACKAGES=/var/lib/ai-factory/home/.nuget/packages
 
 # Healthcheck represents LIVENESS ("is the process alive?"), not readiness — a
 # worker.degraded (transient dependency failure) worker is still alive and must
@@ -80,8 +121,13 @@ LABEL org.opencontainers.image.version=$BUILD_VERSION \
       org.opencontainers.image.created=$BUILD_TIMESTAMP_UTC \
       org.opencontainers.image.source=$IMAGE_SOURCE_URL
 
+# Docker CLI only — no daemon, no containerd, no runc. The Worker uses it solely to
+# run the Hermes agent container against the socket the deployment mounts in.
+COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
+
 # Ensure persistent, temporary, and workspace directory structures exist and are owned by non-root user
-RUN mkdir -p /var/lib/ai-factory/data /var/lib/ai-factory/workspace /var/lib/ai-factory/hermes /tmp/ai-factory-health && \
+RUN mkdir -p /var/lib/ai-factory/data /var/lib/ai-factory/workspace /var/lib/ai-factory/hermes \
+             /var/lib/ai-factory/home/.nuget/packages /tmp/ai-factory-health && \
     chown -R $APP_UID:$APP_UID /var/lib/ai-factory /tmp/ai-factory-health /app
 
 # Copy published artifacts from publish stage

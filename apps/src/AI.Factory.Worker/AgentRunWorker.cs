@@ -159,8 +159,6 @@ public sealed class AgentRunWorker : BackgroundService
         // this loop.
         using var heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(executionCts.Token);
         var heartbeatTask = RunHeartbeatLoopAsync(
-            executionScope.ServiceProvider.GetRequiredService<ITaskStateManager>(),
-            executionScope.ServiceProvider.GetRequiredService<IAgentRunRepository>(),
             run.Id,
             run.WorkItemId,
             heartbeatCts.Token);
@@ -257,14 +255,26 @@ public sealed class AgentRunWorker : BackgroundService
     /// race with a concurrent recovery sweep) is logged and counted but
     /// never terminates the loop — the AgentRun execution itself remains
     /// authoritative (Phase 18.4 §10).
+    ///
+    /// Phase 18.29.1 — this loop owns its OWN DI scope, and therefore its own
+    /// FactoryDbContext. It previously resolved ITaskStateManager and
+    /// IAgentRunRepository from the caller's executionScope, which meant the
+    /// heartbeat and the orchestrator were issuing concurrent operations against a
+    /// single scoped DbContext — EF Core answers that with "A second operation was
+    /// started on this context instance before a previous operation completed".
+    /// It only surfaced once a real containerized Implementation run started writing
+    /// workspace artifacts (FileSystemArtifactRecorder) while a heartbeat tick was
+    /// in flight, which is exactly the overlap this loop exists to create.
     /// </summary>
     private async Task RunHeartbeatLoopAsync(
-        ITaskStateManager taskStateManager,
-        IAgentRunRepository agentRunRepository,
         Guid agentRunId,
         Guid? workItemId,
         CancellationToken cancellationToken)
     {
+        using var heartbeatScope = _scopeFactory.CreateScope();
+        var taskStateManager = heartbeatScope.ServiceProvider.GetRequiredService<ITaskStateManager>();
+        var agentRunRepository = heartbeatScope.ServiceProvider.GetRequiredService<IAgentRunRepository>();
+
         // Immediate initial heartbeat upon starting execution
         try
         {

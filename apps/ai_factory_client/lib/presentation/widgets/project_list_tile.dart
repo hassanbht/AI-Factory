@@ -6,6 +6,7 @@ import '../../core/responsive/breakpoints.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../domain/enums/backend_enums.dart';
 import '../../domain/models/project.dart';
+import 'focus_ring.dart';
 import 'status_chip.dart';
 
 /// One project, in the list.
@@ -63,12 +64,15 @@ class ProjectListTile extends StatelessWidget {
           button: true,
           label: _semanticLabel(context),
           child: Card(
-            child: InkWell(
-              onTap: onOpen,
+            child: FocusRing(
               borderRadius: BorderRadius.circular(AppRadius.md),
-              child: Padding(
-                padding: const EdgeInsets.all(AppSpacing.md),
-                child: content,
+              child: InkWell(
+                onTap: onOpen,
+                borderRadius: BorderRadius.circular(AppRadius.md),
+                child: Padding(
+                  padding: const EdgeInsets.all(AppSpacing.md),
+                  child: content,
+                ),
               ),
             ),
           ),

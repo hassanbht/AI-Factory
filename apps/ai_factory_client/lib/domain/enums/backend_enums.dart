@@ -264,3 +264,98 @@ enum StructuredResultStatus {
   static StructuredResultStatus fromWire(String? raw) =>
       _parse(raw, values, (v) => v.wireValue, unknown);
 }
+
+/// `AI.Factory.Domain.Enums.AuditSeverity` on an audit log entry.
+///
+/// `GET /api/audit-log` returns the raw entity and the API registers no
+/// `JsonStringEnumConverter`, so this arrives as an **ordinal**, exactly like
+/// [FailureCategory] on the diagnostics endpoint. Declaration order therefore
+/// has to match the backend enum.
+///
+/// This is a log level, not a business outcome — the entry's own `outcome`
+/// field carries that, and the two are never merged.
+enum AuditSeverity {
+  info('Info'),
+  warning('Warning'),
+  error('Error'),
+  critical('Critical'),
+  unknown('');
+
+  const AuditSeverity(this.wireValue);
+
+  final String wireValue;
+
+  static AuditSeverity fromWire(String? raw) =>
+      _parse(raw, values, (v) => v.wireValue, unknown);
+
+  /// Out-of-range values degrade to [unknown] rather than throwing, so a
+  /// severity a newer backend adds cannot break the audit list.
+  static AuditSeverity fromOrdinal(int ordinal) =>
+      (ordinal >= 0 && ordinal < values.length - 1) ? values[ordinal] : unknown;
+
+  bool get isFailure => this == warning || this == error || this == critical;
+}
+
+/// `AI.Factory.Domain.Enums.AuditEventType`, in backend declaration order.
+///
+/// Also an ordinal on the wire. There are 47 of them and they are technical
+/// identifiers rather than operator-facing prose, so they are **not**
+/// translated (Workstream W: identifiers keep their wire spelling in both
+/// languages). A name table rather than a Dart enum, because nothing in the
+/// client branches on the value — it is displayed and nothing more.
+const List<String> auditEventTypeNames = <String>[
+  'WorkflowStarted',
+  'WorkflowStateChanged',
+  'ModelSelected',
+  'AgentStarted',
+  'AgentCompleted',
+  'Retry',
+  'Timeout',
+  'BuildResult',
+  'TestResult',
+  'RepairAttempt',
+  'ValidationResult',
+  'HumanApproval',
+  'WorkflowCompleted',
+  'WorkflowFailed',
+  'ReviewResult',
+  'EvaluationResult',
+  'LearningResult',
+  'CircuitStateChanged',
+  'CircuitRejected',
+  'BulkheadEntered',
+  'BulkheadQueued',
+  'BulkheadRejected',
+  'BulkheadCompleted',
+  'ShutdownInitiated',
+  'WorkerStopping',
+  'WorkerStopped',
+  'OperationsDrained',
+  'OperationsCancelled',
+  'ShutdownTimedOut',
+  'ShutdownRequestRejected',
+  'OperationalAccessDenied',
+  'RateLimitRejected',
+  'SecurityRequestRejected',
+  'ConfigurationValidationFailed',
+  'SecretResolutionFailed',
+  'RequiredSecretMissing',
+  'DatabaseRetry',
+  'DatabaseConcurrencyConflict',
+  'DatabaseTransactionFailed',
+  'DatabaseOperationFailed',
+  'WorkerDegraded',
+  'WorkerRecovered',
+  'WorkerFaulted',
+  'DatabaseBackupSucceeded',
+  'DatabaseBackupFailed',
+  'DatabaseRestoreSucceeded',
+  'DatabaseRestoreFailed',
+];
+
+/// The event type's backend name, or the ordinal itself when the backend has
+/// introduced one this client does not know — never a blank and never a guess.
+String auditEventTypeName(int ordinal) =>
+    (ordinal >= 0 && ordinal < auditEventTypeNames.length)
+    ? auditEventTypeNames[ordinal]
+    : '#$ordinal';

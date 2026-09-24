@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart' hide Trans;
 
 import '../core/localization/locale_service.dart';
+import '../core/theme/app_motion.dart';
 import '../core/theme/app_theme.dart';
 import '../core/theme/theme_service.dart';
+import '../presentation/widgets/live_updates.dart';
 import 'app_bindings.dart';
 import 'app_routes.dart';
 
@@ -30,6 +32,11 @@ class AiFactoryApp extends StatelessWidget {
       initialBinding: AppBindings(),
       initialRoute: AppRoutes.initial,
       getPages: AppRoutes.pages,
+      // Lets a live-updating page pause its polling while another page
+      // covers it, and refresh the moment it is uncovered.
+      navigatorObservers: [liveRouteObserver],
+      // Platform transitions, dropped when the OS asks for reduced motion.
+      customTransition: AppMotion.pageTransition,
     );
   }
 }

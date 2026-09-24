@@ -117,14 +117,15 @@ class ProjectSort {
       return null;
     }
 
-    final ranked = <(int, Project)>[
-      for (final project in projects)
-        if (attentionRank(project) case final int r) (r, project),
-    ]..sort((a, b) {
-      final byRank = a.$1.compareTo(b.$1);
-      if (byRank != 0) return byRank;
-      return b.$2.updatedAtUtc.compareTo(a.$2.updatedAtUtc);
-    });
+    final ranked =
+        <(int, Project)>[
+          for (final project in projects)
+            if (attentionRank(project) case final int r) (r, project),
+        ]..sort((a, b) {
+          final byRank = a.$1.compareTo(b.$1);
+          if (byRank != 0) return byRank;
+          return b.$2.updatedAtUtc.compareTo(a.$2.updatedAtUtc);
+        });
 
     final result = ranked.map((e) => e.$2).toList();
     return List<Project>.unmodifiable(

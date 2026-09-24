@@ -57,23 +57,29 @@ void main() {
       }
     });
 
-    test('a description is required, because Start rejects a project without one', () {
-      expect(
-        controller.validateDescription(''),
-        'validation.descriptionRequired',
-      );
-      expect(controller.validateDescription('Build an API.'), isNull);
-      expect(
-        controller.validateDescription('a' * 2001),
-        'validation.descriptionTooLong',
-      );
-    });
+    test(
+      'a description is required, because Start rejects a project without one',
+      () {
+        expect(
+          controller.validateDescription(''),
+          'validation.descriptionRequired',
+        );
+        expect(controller.validateDescription('Build an API.'), isNull);
+        expect(
+          controller.validateDescription('a' * 2001),
+          'validation.descriptionTooLong',
+        );
+      },
+    );
 
     test('a repository URL is required only for a Git source', () {
       expect(controller.validateRepository(''), isNull);
 
       controller.setSourceType(ProjectSourceType.gitRepository);
-      expect(controller.validateRepository(''), 'validation.repositoryRequired');
+      expect(
+        controller.validateRepository(''),
+        'validation.repositoryRequired',
+      );
       expect(
         controller.validateRepository('https://example.com/repo.git'),
         isNull,
@@ -110,26 +116,29 @@ void main() {
       controller.onClose();
     });
 
-    test('a second submit while the first is in flight sends nothing', () async {
-      final gate = Completer<void>();
-      projects.gate = gate.future;
+    test(
+      'a second submit while the first is in flight sends nothing',
+      () async {
+        final gate = Completer<void>();
+        projects.gate = gate.future;
 
-      final controller = build();
-      controller.nameField.text = 'Customer API';
-      controller.descriptionField.text = 'Build an API.';
+        final controller = build();
+        controller.nameField.text = 'Customer API';
+        controller.descriptionField.text = 'Build an API.';
 
-      final first = controller.submitDetails();
-      expect(controller.isSubmitting.value, isTrue);
+        final first = controller.submitDetails();
+        expect(controller.isSubmitting.value, isTrue);
 
-      // The whole point: one press, one project.
-      expect(await controller.submitDetails(), isFalse);
-      expect(projects.createRequests, hasLength(1));
+        // The whole point: one press, one project.
+        expect(await controller.submitDetails(), isFalse);
+        expect(projects.createRequests, hasLength(1));
 
-      gate.complete();
-      await first;
-      expect(controller.isSubmitting.value, isFalse);
-      controller.onClose();
-    });
+        gate.complete();
+        await first;
+        expect(controller.isSubmitting.value, isFalse);
+        controller.onClose();
+      },
+    );
 
     test('a server validation failure keeps the typed values', () async {
       projects.mutationError = const ValidationError(
@@ -170,19 +179,22 @@ void main() {
       controller.onClose();
     });
 
-    test('retrying after the project was created does not create a second', () async {
-      final controller = build();
-      controller.nameField.text = 'Customer API';
-      controller.descriptionField.text = 'Build an API.';
-      await controller.submitDetails();
+    test(
+      'retrying after the project was created does not create a second',
+      () async {
+        final controller = build();
+        controller.nameField.text = 'Customer API';
+        controller.descriptionField.text = 'Build an API.';
+        await controller.submitDetails();
 
-      controller.step.value = CreateProjectStep.details;
-      expect(await controller.submitDetails(), isTrue);
+        controller.step.value = CreateProjectStep.details;
+        expect(await controller.submitDetails(), isTrue);
 
-      expect(projects.createRequests, hasLength(1));
-      expect(controller.step.value, CreateProjectStep.source);
-      controller.onClose();
-    });
+        expect(projects.createRequests, hasLength(1));
+        expect(controller.step.value, CreateProjectStep.source);
+        controller.onClose();
+      },
+    );
   });
 
   group('source step', () {
@@ -219,58 +231,67 @@ void main() {
       controller.onClose();
     });
 
-    test('a 409 means already initialized, which is the desired outcome', () async {
-      final controller = await created();
-      projects.mutationError = const ConflictError(
-        technicalDetail: 'Source already initialized.',
-      );
-      projects.failOnce = true;
+    test(
+      'a 409 means already initialized, which is the desired outcome',
+      () async {
+        final controller = await created();
+        projects.mutationError = const ConflictError(
+          technicalDetail: 'Source already initialized.',
+        );
+        projects.failOnce = true;
 
-      expect(await controller.submitSource(), isTrue);
+        expect(await controller.submitSource(), isTrue);
 
-      expect(controller.step.value, CreateProjectStep.done);
-      expect(controller.error.value, isNull);
-      // It re-read the project rather than assuming what state it is in.
-      expect(projects.calls, contains(startsWith('getById:')));
-      controller.onClose();
-    });
+        expect(controller.step.value, CreateProjectStep.done);
+        expect(controller.error.value, isNull);
+        // It re-read the project rather than assuming what state it is in.
+        expect(projects.calls, contains(startsWith('getById:')));
+        controller.onClose();
+      },
+    );
 
-    test('a failing source step keeps the created project for a retry', () async {
-      final controller = await created();
-      final project = controller.project.value;
+    test(
+      'a failing source step keeps the created project for a retry',
+      () async {
+        final controller = await created();
+        final project = controller.project.value;
 
-      projects.mutationError = const ProviderFailure();
-      projects.failOnce = true;
-      expect(await controller.submitSource(), isFalse);
+        projects.mutationError = const ProviderFailure();
+        projects.failOnce = true;
+        expect(await controller.submitSource(), isFalse);
 
-      expect(controller.error.value, isA<ProviderFailure>());
-      expect(controller.step.value, CreateProjectStep.source);
-      // The project row exists on the server; a retry must not create a
-      // second one.
-      expect(controller.project.value, project);
+        expect(controller.error.value, isA<ProviderFailure>());
+        expect(controller.step.value, CreateProjectStep.source);
+        // The project row exists on the server; a retry must not create a
+        // second one.
+        expect(controller.project.value, project);
 
-      expect(await controller.submitSource(), isTrue);
-      expect(projects.createRequests, hasLength(1));
-      controller.onClose();
-    });
+        expect(await controller.submitSource(), isTrue);
+        expect(projects.createRequests, hasLength(1));
+        controller.onClose();
+      },
+    );
 
-    test('a second submit while the first is in flight sends nothing', () async {
-      final controller = await created();
-      final gate = Completer<void>();
-      projects.gate = gate.future;
+    test(
+      'a second submit while the first is in flight sends nothing',
+      () async {
+        final controller = await created();
+        final gate = Completer<void>();
+        projects.gate = gate.future;
 
-      final first = controller.submitSource();
-      expect(await controller.submitSource(), isFalse);
+        final first = controller.submitSource();
+        expect(await controller.submitSource(), isFalse);
 
-      gate.complete();
-      await first;
+        gate.complete();
+        await first;
 
-      expect(
-        projects.calls.where((c) => c.startsWith('initializeSource')),
-        hasLength(1),
-      );
-      controller.onClose();
-    });
+        expect(
+          projects.calls.where((c) => c.startsWith('initializeSource')),
+          hasLength(1),
+        );
+        controller.onClose();
+      },
+    );
   });
 
   test('resuming a stuck project starts at the source step', () async {

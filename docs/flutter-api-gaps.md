@@ -17,13 +17,21 @@ rather than inventing, guessing or computing a substitute.
 **Missing.** No SSE, WebSocket, SignalR or long-polling endpoint.
 **Verified.** No `MapHub`, `text/event-stream`, `WebSocket` or SignalR package
 reference anywhere in `apps/src`.
-**Impact.** Live execution views cannot be push-driven.
-**Workaround.** Bounded polling with backoff, terminal-state stop and lifecycle
-awareness ([`flutter-architecture.md`](flutter-architecture.md) §12). Sufficient for a
+**Status (Phase 19.9): still open.** No server-push transport; controlled client
+polling implemented. Re-verified in Phase 19.9: the same search over `apps/src`
+still finds no `MapHub`, `text/event-stream`, `WebSocket` or SignalR reference.
+Polling does **not** close this gap and the UI never claims otherwise — it says
+"live updates" and "last updated", never "connected" or "real-time".
+**Impact.** Live execution views cannot be push-driven. A change is seen within
+one polling interval (3–30 s depending on the screen), not the moment it happens.
+**Workaround (implemented).** `PollingCoordinator`: bounded exponential backoff,
+terminal-state stop, `401`/permanent-error stop, no-overlap queueing, page
+visibility and app-lifecycle pause
+([`flutter-architecture.md`](flutter-architecture.md) §12). Sufficient for a
 single-operator console.
 **Proposal.** `GET /api/projects/{id}/events` as SSE, emitting project status changes,
-work item transitions and orchestration progress events. Only `core/polling/` and the
-repository subscription methods would change.
+work item transitions and orchestration progress events. Only the coordinator's task in
+`core/polling/` and the repository layer would change; screens are unaffected.
 
 ---
 
@@ -175,10 +183,35 @@ entries, which require the operational key.
 **Verified.** `ToProjectDto`; `ProjectTransitions` records no history.
 **Impact.** Workstream E's "timestamps where available" is only partly satisfiable, and
 not at all without an ops key.
-**Workaround.** Show stage times only when audit data is available; otherwise render the
-stage without a timestamp. Never interpolate.
+
+Phase 19.4 found this gap to be wider than "no timestamps", and the lifecycle
+visualization is shaped by the wider form:
+
+* **No stage can be reported as completed.** One status arrives and no history, so
+  the only defensible statement about another stage is that it lies before or after
+  the reported one. A stage *before* it was necessarily entered — the transition
+  table admits no way past it — but *when* is unknown; a stage *after* it may
+  already have been visited, because `HumanReview -> Implementation` is a legal
+  rework branch.
+* **An interrupted project names no stage at all.** `Paused`, `Failed` and
+  `Cancelled` **overwrite** `Status` rather than being recorded alongside it, so the
+  stage at which execution stopped is unrecoverable from the API. This contradicts
+  [`flutter-ux-spec.md`](flutter-ux-spec.md) §6.4, which expects a failed project's
+  lifecycle to show "the stage at which it stopped".
+* **`Paused` has no determinable resume target.** `PATCH /api/projects/{id}/status`
+  accepts `Paused -> any active stage`, but the client cannot know which stage the
+  project was paused in, so it cannot offer a Resume action without guessing one.
+  This is why Project Detail offers none.
+
+**Workaround.** Show stage times only when audit data is available; otherwise render
+the stage without a timestamp. Never interpolate. Place stages relative to the
+reported state, and mark **no** stage as current when the reported state overwrote
+it — stating in the UI that the stage is not exposed (`ProjectLifecycle`,
+`ProjectLifecycleWidget`).
 **Proposal.** `GET /api/projects/{id}/history` returning the status transition timeline
-under the normal (non-operational) rate-limit policy.
+under the normal (non-operational) rate-limit policy. A `PreviousStatus` (or
+`PausedFromStatus`) field on the project DTO would resolve the resume target and the
+failed-at-stage question on its own, at far lower cost.
 
 ---
 
@@ -251,16 +284,30 @@ audit log carries `workItemId`, but only under the operational key, and
 ## G-OPS-KEY-UX — Diagnostics require a shared operational key
 
 **Not a missing endpoint — a security-design consequence to record.**
-Every diagnostics surface (`/api/operations/*`, `/api/audit-log`,
-`/api/projects/{id}/diagnostics`, `/api/agents/metrics`) requires `X-Operations-Key`
-when `RequireAccessKey` is enabled, while the entire project/workflow surface requires
-nothing at all.
+`/api/operations/*`, `/api/audit-log` and `/api/projects/{id}/diagnostics` require
+`X-Operations-Key` when `RequireAccessKey` is enabled, while the entire
+project/workflow surface requires nothing at all.
+
+**Corrected in Phase 19.8 (evidence).** `/api/agents/metrics` was previously listed
+here as protected; it is not. `OperationalEndpointSecurityMiddleware.IsOperationalPath`
+matches only paths starting `/api/operations`, the exact path `/api/audit-log`, and
+`/api/projects/*/diagnostics` — agent metrics is none of them, and is merely
+rate-limited under the operational policy. Also recorded: `RequireAccessKey`
+**defaults to `false`**, so a default deployment serves all of these without any key,
+and the middleware accepts the key in `X-Operations-Key`, `X-Api-Key` or
+`Authorization: Bearer` (`OperationalEndpointSecurityMiddleware.IsValidKeyProvidedAsync`).
+Rejection is always `401` with `application/problem+json`; there is no `403` path.
 **Impact.** A desktop client that shows diagnostics must hold a shared operational
 secret; a Flutter Web build would place it in a browser.
-**Client rule.** The key is entered by the operator, stored in
-`flutter_secure_storage`, masked, never logged, never in a URL. Diagnostics panes
-degrade to an "Operational key required" state when absent. **Flutter Web builds should
-not be configured with an operational key.**
+**Client rule — implemented in Phase 19.8.** The key is entered by the operator and
+stored in `flutter_secure_storage` behind `OperationalCredentialStore`, obscured in the
+field, never rendered back (not even masked), never logged (`ApiHeaders.redacted`),
+never in a URL. Sections degrade to an "Operator access required" state when absent,
+independently of one another. A `401` triggers exactly one retry after re-reading the
+stored key, then stops. **Flutter Web builds should not be configured with an
+operational key.** *Phase 19.10:* a Web build keeps an entered key in memory for
+the session only and says so on screen — it is never persisted in the browser.
+Still open: the shared-secret design itself.
 **Proposal.** Real API authentication with per-user tokens, so diagnostics are not
 gated behind one shared secret. Larger than a UI phase.
 

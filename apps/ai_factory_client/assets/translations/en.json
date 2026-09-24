@@ -1,32 +1,28 @@
 {
-  "app": {
-    "title": "AI Factory",
-    "subtitle": "Operator console"
-  },
   "nav": {
     "dashboard": "Dashboard",
     "projects": "Projects",
     "operations": "Operations",
     "settings": "Settings",
-    "expandMenu": "Expand navigation",
-    "collapseMenu": "Collapse navigation",
     "mainNavigation": "Main navigation"
   },
   "common": {
     "cancel": "Cancel",
     "close": "Close",
     "retry": "Retry",
-    "save": "Save",
     "loading": "Loading",
     "refresh": "Refresh",
-    "copy": "Copy",
     "copied": "Copied",
-    "details": "Details",
     "notAvailable": "Not available",
-    "notImplemented": "Not implemented yet",
-    "back": "Back",
-    "clear": "Clear",
-    "open": "Open"
+    "yes": "Yes",
+    "no": "No",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "previous": "Previous",
+    "next": "Next",
+    "seconds": "{} s",
+    "milliseconds": "{} ms",
+    "durationHms": "{} h {} min {} s"
   },
   "state": {
     "loading": {
@@ -57,12 +53,7 @@
     "server": "The server reported an unexpected error.",
     "unknown": "An unexpected error occurred."
   },
-  "placeholder": {
-    "comingSoon": "Coming in a later phase",
-    "operations": "Diagnostics, deployment, database, configuration and the audit log will live here."
-  },
   "settings": {
-    "title": "Settings",
     "appearance": {
       "section": "Appearance and language",
       "language": "Language",
@@ -142,6 +133,45 @@
       "infrastructure": "Infrastructure",
       "approval": "Approval",
       "review": "Review"
+    },
+    "workItemType": {
+      "analysis": "Analysis",
+      "specification": "Specification",
+      "architecture": "Architecture",
+      "planning": "Planning",
+      "implementation": "Implementation",
+      "test": "Test",
+      "review": "Review",
+      "repair": "Repair",
+      "documentation": "Documentation"
+    },
+    "workItemPriority": {
+      "critical": "Critical",
+      "high": "High",
+      "normal": "Normal",
+      "low": "Low"
+    },
+    "taskReadiness": {
+      "ready": "Ready",
+      "waitingForDependency": "Waiting for dependency",
+      "blockedByFailedDependency": "Blocked by failed dependency",
+      "running": "Running",
+      "completed": "Completed",
+      "cancelled": "Cancelled",
+      "failed": "Failed"
+    },
+    "structuredResultStatus": {
+      "succeeded": "Succeeded",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "timedOut": "Timed out",
+      "invalid": "Invalid"
+    },
+    "auditSeverity": {
+      "info": "Info",
+      "warning": "Warning",
+      "error": "Error",
+      "critical": "Critical"
     }
   },
   "time": {
@@ -269,18 +299,440 @@
     }
   },
   "project": {
-    "title": "Project",
     "notStarted": "Not started",
     "currentError": "Error recorded by the backend",
     "field": {
       "identifier": "Identifier",
       "started": "Lifecycle started"
-    },
-    "placeholder": {
-      "title": "Project detail",
-      "message": "This screen shows what the API returns for the project itself. The rest of it is not built yet.",
-      "plannedTitle": "Arriving in later phases",
-      "planned": "Lifecycle visualization, work items and their dependency tree, agent runs, acceptance, artifacts, and human review with approval."
     }
+  },
+  "projectDetail": {
+    "title": "Project detail",
+    "backToProjects": "Back to projects",
+    "field": {
+      "slug": "Slug"
+    },
+    "overview": {
+      "title": "Overview",
+      "empty": "This project has no description."
+    },
+    "notFound": {
+      "title": "Project not found",
+      "message": "No project with this identifier exists on the AI Factory API. It may have been removed, or the link may be wrong."
+    },
+    "error": {
+      "noCategory": "The API reports this as a single text field: it carries no failure category and no time of its own."
+    },
+    "start": {
+      "sourceRequired": "The project source has not been initialized yet. A project can only be started once the source step has succeeded."
+    }
+  },
+  "lifecycle": {
+    "title": "Lifecycle",
+    "currentState": "Current state",
+    "step": "Step {} of {}",
+    "history": {
+      "title": "Stage history",
+      "reason": "The API reports the current status only. There is no stage history and no stage entry time, so stages are shown by their position relative to the current one and never as completed."
+    },
+    "position": {
+      "current": "Current stage",
+      "earlier": "Before the current stage",
+      "later": "After the current stage",
+      "anchor": "The repair loop returns here",
+      "undetermined": "Position unknown"
+    },
+    "offTrack": {
+      "repairing": "Repair loop. The backend reaches this state from Testing and returns to Testing, so it is not a step forward.",
+      "paused": "Execution is paused. The stage it was paused in is not exposed by the API, so no stage is marked as the current one.",
+      "failed": "Execution ended in failure. The stage it stopped at is not exposed by the API, so no stage is marked as the current one.",
+      "cancelled": "The project was cancelled. The stage it was cancelled in is not exposed by the API, so no stage is marked as the current one.",
+      "unrecognized": "The backend reported a state this client does not recognize, so its position in the lifecycle is unknown."
+    },
+    "note": {
+      "created": "The project exists, but no source has been initialized for it yet.",
+      "notStarted": "The project has not been started. The Factory advances it only once it has been started.",
+      "humanReview": "The automated work has finished and human approval is required. Review the evidence below and approve to complete the project.",
+      "completed": "The project is complete. Completed is reachable only through human approval."
+    }
+  },
+  "source": {
+    "title": "Source",
+    "branchDefault": "Repository default",
+    "notInitializedHelp": "No source decision has been recorded for this project yet.",
+    "emptyHelp": "The workspace was created empty; no repository was recorded.",
+    "field": {
+      "kind": "Source type",
+      "repository": "Repository",
+      "branch": "Branch"
+    },
+    "kind": {
+      "notInitialized": "Not initialized",
+      "empty": "Empty workspace",
+      "git": "Git repository"
+    }
+  },
+  "workItems": {
+    "title": "Work items",
+    "summary": {
+      "one": "{} work item · {} completed",
+      "other": "{} work items · {} completed"
+    },
+    "empty": {
+      "title": "No work items",
+      "message": "This project does not currently expose any work items."
+    },
+    "noPlan": {
+      "title": "No dependency plan",
+      "reason": "This project has no accepted plan yet, so work items are listed without dependency order or readiness."
+    }
+  },
+  "workItem": {
+    "shared": "Shared dependency",
+    "attempts": {
+      "one": "{} attempt",
+      "other": "{} attempts"
+    },
+    "repairs": {
+      "one": "{} repair",
+      "other": "{} repairs"
+    },
+    "noDescription": "This work item has no description.",
+    "noDependencies": "No dependencies.",
+    "detail": {
+      "title": "Work item detail",
+      "none": "Select a work item to see its detail."
+    },
+    "field": {
+      "status": "Status",
+      "readiness": "Readiness",
+      "attempts": "Attempts",
+      "repairs": "Repairs",
+      "type": "Type",
+      "priority": "Priority",
+      "dependencies": "Dependencies",
+      "currentError": "Current error"
+    },
+    "acceptance": {
+      "title": "Acceptance",
+      "reason": "The API does not yet expose acceptance criteria or results for a work item. A completed status means the backend state is Completed, not that acceptance criteria passed."
+    },
+    "error": {
+      "noCategory": "The API reports this as a single text field: it carries no failure category and no time of its own."
+    },
+    "action": {
+      "viewAgentRuns": "View agent runs"
+    },
+    "semanticsRole": "Work item"
+  },
+  "agentRuns": {
+    "title": "Agent runs",
+    "summary": {
+      "one": "{} agent run",
+      "other": "{} agent runs"
+    },
+    "refresh": "Refresh agent runs",
+    "empty": {
+      "title": "No agent runs",
+      "message": "No agent has run for this project yet."
+    },
+    "filter": {
+      "label": "Status",
+      "all": "All statuses"
+    },
+    "workItemFilter": {
+      "active": "Showing runs for “{}”",
+      "clear": "Show all runs",
+      "noMatches": "No agent runs are attributed to this work item."
+    }
+  },
+  "agentRun": {
+    "attempt": "Attempt {}",
+    "unknownAgent": "Unknown agent ({})",
+    "noWorkItem": "Not attributed to a work item",
+    "detail": {
+      "title": "Agent run detail",
+      "none": "Select an agent run to see its detail."
+    },
+    "field": {
+      "status": "Status",
+      "attempt": "Attempt",
+      "project": "Project",
+      "workItem": "Work item",
+      "created": "Created",
+      "started": "Started",
+      "completed": "Completed",
+      "duration": "Duration",
+      "failureCategory": "Failure category",
+      "currentError": "Error message",
+      "correlationId": "Correlation ID"
+    },
+    "action": {
+      "viewWorkItem": "View work item",
+      "copyCorrelationId": "Copy correlation ID"
+    },
+    "telemetry": {
+      "title": "Execution telemetry",
+      "reason": "Model, provider and fallback information are persisted by the backend but are not returned by this endpoint. The orchestration run — not yet reachable from this screen — is the only place `selectedModel` is exposed."
+    },
+    "structuredResult": {
+      "title": "Structured result",
+      "none": "No structured result was returned for this run.",
+      "summary": "Summary",
+      "output": "Output",
+      "data": "Data",
+      "warnings": "Warnings",
+      "errors": "Errors",
+      "artifacts": "Artifacts",
+      "metadata": "Metadata"
+    },
+    "semanticsRole": "Agent run"
+  },
+  "dependency": {
+    "title": "Dependencies",
+    "noPlan": {
+      "title": "No dependency plan exists for this project",
+      "reason": "Edges are only known once a plan has been accepted. Work items above are shown as a flat list, in no particular order."
+    },
+    "semantics": {
+      "dependsOn": "{} {} depends on {}"
+    },
+    "warning": {
+      "present": {
+        "one": "{} dependency issue was found in the plan data and is not shown as an edge.",
+        "other": "{} dependency issues were found in the plan data and are not shown as edges."
+      },
+      "cycle": "Circular dependency — not expanded further."
+    }
+  },
+  "humanReview": {
+    "title": "Human Review Required",
+    "subtitle": "Automated processing has reached the human approval gate. Review the available evidence before approving this project.",
+    "approveButton": "Approve project",
+    "approveButtonSemantics": "Approve project — this will transition the project to Completed",
+    "approvePending": "Approval in progress…",
+    "confirm": {
+      "title": "Approve project?",
+      "body": "This will record your approval and allow the Factory to transition the project to Completed. Review the evidence before continuing.",
+      "approve": "Approve",
+      "cancel": "Cancel"
+    },
+    "summary": {
+      "title": "Review Summary",
+      "workItems": "Work items",
+      "completed": "{} completed",
+      "failed": "{} failed",
+      "errors": "Errors",
+      "noErrors": "No errors recorded.",
+      "acceptance": "Acceptance",
+      "acceptanceUnavailable": "Acceptance results are not exposed by the API. A completed work item status does not imply that acceptance criteria passed."
+    },
+    "evidence": {
+      "title": "Execution Evidence",
+      "agentRuns": "Agent runs",
+      "agentRunsSummary": "{} total · {} succeeded · {} failed",
+      "structuredResults": "Structured results",
+      "structuredResultsNote": "Individual results are shown in the Agent Runs section above.",
+      "telemetry": "Execution telemetry",
+      "telemetryNote": "Model, provider and fallback are not exposed by this endpoint (G-RUN-TELEMETRY)."
+    },
+    "completed": {
+      "title": "Project Completed",
+      "body": "This project was approved and transitioned to Completed by the backend."
+    }
+  },
+  "operations": {
+    "title": "Operations",
+    "refresh": "Refresh operations data",
+    "section": {
+      "failed": "This section could not be loaded.",
+      "empty": "The API returned no data for this section.",
+      "stale": "Showing the last values that loaded successfully."
+    },
+    "health": {
+      "title": "API health",
+      "subtitle": "What the two health probes answered. This describes the API only.",
+      "live": "Liveness",
+      "ready": "Readiness",
+      "checkedAt": "Checked at",
+      "healthy": "Healthy",
+      "unhealthy": "Unhealthy",
+      "unavailable": "Unavailable",
+      "detail": "Per-check detail",
+      "detailUnavailable": "The health endpoints answer with a single word of plain text. They name no individual check, so no per-component breakdown can be shown.",
+      "worker": "Worker health",
+      "workerUnavailable": "The API exposes no worker health endpoint. Scheduler activity below is the nearest available signal, and it is activity rather than health."
+    }
+  },
+  "deployment": {
+    "title": "Deployment",
+    "application": "Application",
+    "environment": "Environment",
+    "version": "Version",
+    "informationalVersion": "Informational version",
+    "framework": "Framework",
+    "os": "Operating system",
+    "architecture": "Architecture",
+    "containerized": "Containerized",
+    "databaseProvider": "Database provider",
+    "startedAt": "Started at",
+    "uptime": "Uptime",
+    "gitCommit": "Git commit",
+    "gitBranch": "Git branch",
+    "buildNumber": "Build number",
+    "buildTimestamp": "Build timestamp"
+  },
+  "database": {
+    "title": "Database",
+    "provider": "Provider",
+    "ready": "Ready",
+    "commandTimeout": "Command timeout",
+    "retries": "Retries",
+    "retriesEnabled": {
+      "one": "Enabled, up to {} attempt",
+      "other": "Enabled, up to {} attempts"
+    },
+    "optimisticConcurrency": "Optimistic concurrency",
+    "operations": "Operations",
+    "failures": "Failures",
+    "averageDuration": "Average duration",
+    "counters": "Resilience counters",
+    "countersDetail": "{} retries · {} transient · {} concurrency conflicts · {} busy · {} locked · {} transaction failures",
+    "migrations": "Migration state",
+    "migrationsUnavailable": "The database endpoint reports provider, readiness and resilience counters. It reports no migration history, and none is inferred here."
+  },
+  "scheduler": {
+    "title": "Scheduler activity",
+    "subtitle": "What the dispatch loop did. Not a statement about worker health.",
+    "enabled": "Scheduler",
+    "maxConcurrent": "Max concurrent tasks",
+    "lastCycle": "Last cycle",
+    "noCycleYet": "No cycle has run since the service started.",
+    "lastCycleCounts": "Last cycle counts",
+    "lastCycleDetail": "{} dispatched · {} failed · {} skipped for concurrency",
+    "totals": "Totals",
+    "totalsDetail": "{} dispatched · {} failures",
+    "notWorkerHealth": "This is not worker health",
+    "notWorkerHealthReason": "These are dispatch counters. A cycle count of zero does not mean a worker is down, and a non-zero one does not mean it is healthy — the API exposes no worker health."
+  },
+  "metrics": {
+    "title": "Agent metrics",
+    "inFlight": "In flight",
+    "inFlightDetail": "{} queued · {} running",
+    "created": "Created",
+    "started": "Started",
+    "succeeded": "Succeeded",
+    "failed": "Failed",
+    "timedOut": "Timed out",
+    "cancelled": "Cancelled",
+    "workerClaimSuccess": "Worker claims",
+    "averageDuration": "Average duration",
+    "telemetry": "Model and cost telemetry",
+    "telemetryUnavailable": "This endpoint returns run counters only. Token usage, model cost and provider latency are not exposed, so they are not shown as zero."
+  },
+  "configuration": {
+    "title": "Configuration",
+    "subtitle": "Sanitized metadata: flags, names and counts. Never a secret value.",
+    "environment": "Environment",
+    "valid": "Configuration valid",
+    "database": "Database",
+    "databaseConfigured": "Configured ({})",
+    "databaseNotConfigured": "Not configured",
+    "secretManagement": "Secret management",
+    "operationalEndpoints": "Operational endpoints",
+    "operationalSecured": "Secured — key sent in the {} header",
+    "operationalOpen": "Not secured: this deployment serves the operational endpoints without a key.",
+    "rateLimiting": "Rate limiting",
+    "transport": "Transport",
+    "transportDetail": "HTTPS redirect {} · HSTS {} · CORS {}",
+    "maxBodySize": "Max request body (bytes)",
+    "providers": "Providers",
+    "noProviders": "The configuration endpoint lists no external providers.",
+    "providerDetail": "{} · {} · {}",
+    "secretReferencePresent": "secret reference set",
+    "noSecretReference": "no secret reference",
+    "resilienceProfiles": "Resilience profiles: {}",
+    "routing": "Model routing",
+    "routingUnavailable": "Model routing information is unavailable: the API exposes no models, routes or provider-selection endpoints. Provider names above are configuration metadata, not a routing table."
+  },
+  "operatorAccess": {
+    "title": "Operator access",
+    "subtitle": "The operational API key for this backend. Stored in the platform keystore, never in plain settings.",
+    "required": "Operator access required",
+    "enterKey": "Enter operational key",
+    "keyStored": "A key is stored for this device.",
+    "noKey": "No key is stored for this device.",
+    "field": "Operational key",
+    "fieldHelp": "Issued by whoever operates this AI Factory instance. It is not a model-provider key and never one of your provider credentials.",
+    "show": "Show key",
+    "hide": "Hide key",
+    "save": "Save key",
+    "clear": "Clear key",
+    "storageFailed": "The secure keystore could not be read or written. The key was not stored.",
+    "scope": "What this key is for",
+    "scopeNote": "It authorizes the operational, diagnostics and audit endpoints of this API and nothing else. It is sent as a request header, never in a URL, and never written to a log.",
+    "sessionOnly": "In the browser the key is kept for this session only: it is never saved, and a reload asks for it again."
+  },
+  "audit": {
+    "title": "Audit log",
+    "subtitle": "Operational events recorded by the backend.",
+    "filter": {
+      "severity": "Severity",
+      "all": "All",
+      "clientSideNote": "The severity filter narrows the loaded page only. The endpoint accepts a severity parameter but does not apply it, so filtering server-side is not possible."
+    },
+    "noMatches": "No entry on this page matches the selected severity.",
+    "page": "Page {} · {} entries total",
+    "actor": "Actor: {}",
+    "outcome": "Outcome: {}"
+  },
+  "diagnostics": {
+    "title": "Project diagnostics",
+    "open": "Diagnostics",
+    "summary": "Summary",
+    "status": "Project status",
+    "executionDuration": "Execution duration",
+    "noDuration": "The API reports no execution duration for this project.",
+    "attempts": "Attempts",
+    "repairAttempts": "Repair attempts",
+    "latestTask": "Latest work item",
+    "latestRun": "Latest orchestration run",
+    "agentRuns": "Agent runs",
+    "activeRuns": "Active",
+    "staleRuns": "Stale",
+    "staleScope": "Scope of these counts",
+    "staleScopeReason": "Stale runs are reported for this project only. The API exposes no system-wide stale count, and summing projects would not produce one.",
+    "workItems": "Work items by status",
+    "workItemsTotal": "{} in total",
+    "noWorkItems": "The diagnostics response contains no work item counts.",
+    "lastFailure": "Last recorded failure",
+    "lastFailureAt": "Recorded at",
+    "noFailureMessage": "The API records a failure time for this project but no message.",
+    "failureCategory": "Category: {}",
+    "acceptance": "Acceptance",
+    "acceptanceUnavailable": "Acceptance results are not exposed by the API. Work item counts describe backend state, not whether acceptance criteria passed.",
+    "unauthorized": "This endpoint is protected by the operational key. Enter one below to load the diagnostics.",
+    "notFound": {
+      "title": "No diagnostics for this project",
+      "message": "The API has no diagnostics record for this project identifier."
+    },
+    "backToProject": "Back to the project"
+  },
+  "live": {
+    "status": {
+      "idle": "Waiting for the first update",
+      "live": "Live updates on",
+      "refreshing": "Refreshing…",
+      "offline": "Offline · retrying automatically",
+      "retrying": "Refresh failed · retrying automatically",
+      "paused": "Live updates paused",
+      "accessRequired": "Access required · live updates stopped",
+      "halted": "Refresh failed · live updates stopped",
+      "stopped": "Not refreshing automatically — nothing here is changing"
+    },
+    "lastUpdated": "Last updated {}",
+    "neverUpdated": "Not updated yet",
+    "retryNow": "Retry now",
+    "enterKey": "Enter operational key"
   }
 }

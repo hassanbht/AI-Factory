@@ -12,6 +12,8 @@ public sealed class DatabaseOptions
 
     public string Provider { get; set; } = "Sqlite";
 
+    public bool AutoMigrate { get; set; } = false;
+
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(ConnectionString))

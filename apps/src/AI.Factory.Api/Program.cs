@@ -156,6 +156,9 @@ if (string.IsNullOrWhiteSpace(hermesOptions.WorkspaceRoot))
     hermesOptions.WorkspaceRoot = "../../../sandbox/agent-workspace";
 }
 
+hermesOptions.DataVolume = DeploymentPaths.Expand(hermesOptions.DataVolume);
+hermesOptions.WorkspaceRoot = DeploymentPaths.Expand(hermesOptions.WorkspaceRoot);
+
 builder.Services.AddSingleton(hermesOptions);
 
 var commandPolicyOptions = new CommandPolicyOptions();
@@ -448,6 +451,7 @@ if (string.IsNullOrWhiteSpace(orchestrationOptions.WorkspaceRoot))
     orchestrationOptions.WorkspaceRoot = "../../../sandbox/agent-workspace";
 }
 
+orchestrationOptions.WorkspaceRoot = DeploymentPaths.Expand(orchestrationOptions.WorkspaceRoot);
 orchestrationOptions.Validate();
 builder.Services.AddSingleton(orchestrationOptions);
 
@@ -642,6 +646,9 @@ if (builder.Configuration.GetValue<bool>("Health:CheckOpenViking"))
 
 var app = builder.Build();
 
+var appLogger = app.Services.GetRequiredService<ILogger<Program>>();
+SqliteStorageInitializer.EnsureDataDirectoryExists(databaseOptions.ConnectionString, appLogger);
+
 if (args.Contains("--migrate-only"))
 {
     using var scope = app.Services.CreateScope();
@@ -782,6 +789,15 @@ app.UseMiddleware<OperationalEndpointSecurityMiddleware>();
 
 using (var startupScope = app.Services.CreateScope())
 {
+    if (databaseOptions.AutoMigrate)
+    {
+        var migrationLogger = startupScope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+        migrationLogger.LogInformation("Applying pending database migrations (Database:AutoMigrate enabled)...");
+        var db = startupScope.ServiceProvider.GetRequiredService<FactoryDbContext>();
+        await db.Database.MigrateAsync();
+        migrationLogger.LogInformation("Database migrations successfully applied.");
+    }
+
     var taskStateManager = startupScope.ServiceProvider.GetRequiredService<ITaskStateManager>();
     await taskStateManager.RecoverOrphanedTasksAsync();
 }

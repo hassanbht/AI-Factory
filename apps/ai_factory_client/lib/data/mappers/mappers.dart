@@ -8,10 +8,12 @@ library;
 
 import '../../domain/enums/backend_enums.dart';
 import '../../domain/models/agent_run.dart';
+import '../../domain/models/audit.dart';
 import '../../domain/models/operations.dart';
 import '../../domain/models/project.dart';
 import '../../domain/models/work_item.dart';
 import '../dto/agent_dto.dart';
+import '../dto/audit_dto.dart';
 import '../dto/diagnostics_dto.dart';
 import '../dto/operations_dto.dart';
 import '../dto/project_dto.dart';
@@ -273,6 +275,39 @@ ConfigurationInfo mapConfigurationInfo(ConfigurationInfoDto dto) =>
         ),
       ),
       configurationSources: List<String>.unmodifiable(dto.configurationSources),
+    );
+
+/// `eventType` and `severity` arrive as ordinals (the API registers no
+/// `JsonStringEnumConverter`), so both are resolved by position and the raw
+/// ordinal is kept — an entry whose type this client does not know still
+/// renders, as `#47` rather than as nothing.
+AuditLogEntry mapAuditLogEntry(AuditLogEntryDto dto) => AuditLogEntry(
+  id: dto.id,
+  executionId: dto.executionId,
+  timestampUtc: dto.timestampUtc,
+  eventType: auditEventTypeName(dto.eventType),
+  rawEventType: dto.eventType,
+  severity: AuditSeverity.fromOrdinal(dto.severity),
+  rawSeverity: dto.severity,
+  message: dto.message,
+  actorType: dto.actorType,
+  projectId: dto.projectId,
+  workItemId: dto.workItemId,
+  correlationId: dto.correlationId,
+  operationId: dto.operationId,
+  parentOperationId: dto.parentOperationId,
+  runId: dto.runId,
+  outcome: dto.outcome,
+  actorId: dto.actorId,
+  failureCategory: mapFailureCategoryValue(dto.failureCategory),
+);
+
+PagedResult<AuditLogEntry> mapAuditLogPage(AuditLogPageDto dto) =>
+    PagedResult<AuditLogEntry>(
+      items: dto.items.map(mapAuditLogEntry).toList(growable: false),
+      totalCount: dto.totalCount,
+      page: dto.page,
+      pageSize: dto.pageSize,
     );
 
 SchedulerStatus mapSchedulerStatus(SchedulerStatusDto dto) => SchedulerStatus(

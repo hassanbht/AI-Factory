@@ -67,8 +67,16 @@ void main() {
 
   testWidgets('renders every band once loaded', (tester) async {
     projects.projects = [
-      testProject(id: '1', name: 'Customer API', status: ProjectStatus.implementation),
-      testProject(id: '2', name: 'Mobile App', status: ProjectStatus.humanReview),
+      testProject(
+        id: '1',
+        name: 'Customer API',
+        status: ProjectStatus.implementation,
+      ),
+      testProject(
+        id: '2',
+        name: 'Mobile App',
+        status: ProjectStatus.humanReview,
+      ),
     ];
     await pump(tester);
 
@@ -105,7 +113,9 @@ void main() {
     expect(find.widgetWithText(MetricTile, '0'), findsWidgets);
   });
 
-  testWidgets('a failed project list shows an error with retry', (tester) async {
+  testWidgets('a failed project list shows an error with retry', (
+    tester,
+  ) async {
     projects.listError = const NetworkError();
     final controller = await pump(tester);
 
@@ -164,28 +174,28 @@ void main() {
     diagnostics.metricsError = const AuthenticationError();
     await pump(tester);
 
-    expect(
-      find.textContaining('require an operational key'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('require an operational key'), findsOneWidget);
     // Not presented as a failure the operator should retry.
     expect(find.text('Some information could not be loaded'), findsNothing);
   });
 
-  testWidgets('worker health is explicitly declared unavailable', (tester) async {
+  testWidgets('worker health is explicitly declared unavailable', (
+    tester,
+  ) async {
     await pump(tester);
 
     // Scheduler activity must never be dressed up as worker health.
     expect(find.text('Worker health'), findsOneWidget);
-    expect(
-      find.textContaining('no worker health endpoint'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('no worker health endpoint'), findsOneWidget);
   });
 
   testWidgets('the whole dashboard renders in German', (tester) async {
     projects.projects = [
-      testProject(id: '2', name: 'Mobile App', status: ProjectStatus.humanReview),
+      testProject(
+        id: '2',
+        name: 'Mobile App',
+        status: ProjectStatus.humanReview,
+      ),
     ];
     await pump(tester);
 
@@ -212,7 +222,11 @@ void main() {
       tester,
     ) async {
       projects.projects = [
-        testProject(id: '1', name: 'Customer API', status: ProjectStatus.humanReview),
+        testProject(
+          id: '1',
+          name: 'Customer API',
+          status: ProjectStatus.humanReview,
+        ),
         testProject(id: '2', name: 'Mobile App', status: ProjectStatus.failed),
       ];
       await pump(tester, size: entry.value);

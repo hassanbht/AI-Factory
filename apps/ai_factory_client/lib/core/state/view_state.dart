@@ -1,3 +1,5 @@
+import 'package:equatable/equatable.dart';
+
 import '../errors/app_error.dart';
 
 /// The single view state used by every screen (`docs/flutter-architecture.md`
@@ -6,8 +8,15 @@ import '../errors/app_error.dart';
 /// [Partial] exists because aggregate screens read several independent
 /// endpoints, and one failing diagnostics call must never blank out the data
 /// that did load.
-sealed class ViewState<T> {
+///
+/// Value equality matters: a poll that brings back exactly what is on screen
+/// produces an equal state, and GetX does not notify for an equal value — so
+/// an unchanged cycle rebuilds nothing, however long the list.
+sealed class ViewState<T> extends Equatable {
   const ViewState();
+
+  @override
+  List<Object?> get props => const [];
 
   /// Data already available, whatever the current phase is.
   T? get dataOrNull => switch (this) {
@@ -56,12 +65,18 @@ class Refreshing<T> extends ViewState<T> {
   const Refreshing(this.data);
 
   final T data;
+
+  @override
+  List<Object?> get props => [data];
 }
 
 class Success<T> extends ViewState<T> {
   const Success(this.data);
 
   final T data;
+
+  @override
+  List<Object?> get props => [data];
 }
 
 /// Some sources loaded, others failed.
@@ -70,6 +85,9 @@ class Partial<T> extends ViewState<T> {
 
   final T data;
   final List<AppError> failures;
+
+  @override
+  List<Object?> get props => [data, failures];
 }
 
 /// The request succeeded and the result is legitimately empty.
@@ -84,4 +102,7 @@ class Failure<T> extends ViewState<T> {
 
   /// Last known data, shown as stale rather than discarded.
   final T? stale;
+
+  @override
+  List<Object?> get props => [error, stale];
 }

@@ -63,6 +63,17 @@ class StatusTones {
     _ => StatusTone.active,
   };
 
+  static StatusTone readiness(TaskReadiness readiness) => switch (readiness) {
+    TaskReadiness.ready => StatusTone.neutral,
+    TaskReadiness.completed => StatusTone.success,
+    TaskReadiness.failed => StatusTone.danger,
+    TaskReadiness.blockedByFailedDependency => StatusTone.warning,
+    TaskReadiness.waitingForDependency => StatusTone.warning,
+    TaskReadiness.cancelled => StatusTone.neutral,
+    TaskReadiness.unknown => StatusTone.neutral,
+    TaskReadiness.running => StatusTone.active,
+  };
+
   static StatusTone agentRun(AgentRunStatus status) => switch (status) {
     AgentRunStatus.succeeded => StatusTone.success,
     AgentRunStatus.failed || AgentRunStatus.timedOut => StatusTone.danger,
@@ -103,6 +114,50 @@ class StatusChip extends StatelessWidget {
     compact: compact,
   );
 
+  /// Work item status.
+  factory StatusChip.workItem(
+    WorkItemStatus status, {
+    String? rawStatus,
+    bool compact = false,
+    Key? key,
+  }) => StatusChip(
+    key: key,
+    label: EnumLabels.workItemStatus(status, rawValue: rawStatus),
+    tone: StatusTones.workItem(status),
+    semanticPrefix: 'workItem.field.status'.tr(),
+    compact: compact,
+  );
+
+  /// Dispatch readiness — why a work item can or cannot run right now.
+  factory StatusChip.readiness(
+    TaskReadiness readiness, {
+    String? rawValue,
+    bool compact = false,
+    Key? key,
+  }) => StatusChip(
+    key: key,
+    label: EnumLabels.taskReadiness(readiness, rawValue: rawValue),
+    tone: StatusTones.readiness(readiness),
+    semanticPrefix: 'workItem.field.readiness'.tr(),
+    compact: compact,
+  );
+
+  /// AgentRun execution status — distinct from [StatusChip.workItem]: an
+  /// AgentRun `Succeeded` and its WorkItem `Completed` are different domain
+  /// concepts (Phase 19.6 Workstream G) and must not share a label.
+  factory StatusChip.agentRun(
+    AgentRunStatus status, {
+    String? rawStatus,
+    bool compact = false,
+    Key? key,
+  }) => StatusChip(
+    key: key,
+    label: EnumLabels.agentRunStatus(status, rawValue: rawStatus),
+    tone: StatusTones.agentRun(status),
+    semanticPrefix: 'agentRun.field.status'.tr(),
+    compact: compact,
+  );
+
   final String label;
   final StatusTone tone;
 
@@ -116,10 +171,8 @@ class StatusChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final color = tone.color(scheme);
-    final textStyle = Theme.of(context).textTheme.labelMedium?.copyWith(
-      color: color,
-      fontWeight: FontWeight.w600,
-    );
+    final textStyle = Theme.of(context).textTheme.labelMedium
+        ?.copyWith(color: color, fontWeight: FontWeight.w600);
 
     return Semantics(
       label: semanticPrefix == null ? label : '$semanticPrefix: $label',

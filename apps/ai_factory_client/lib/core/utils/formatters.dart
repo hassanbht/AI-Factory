@@ -1,5 +1,7 @@
 import 'package:intl/intl.dart';
 
+import 'app_clock.dart';
+
 /// Locale-aware formatting helpers.
 ///
 /// Every date, duration and number in the UI goes through one of these, so
@@ -11,13 +13,19 @@ class Formatters {
   /// Absolute date and time in the viewer's local time zone. API timestamps
   /// are UTC and are converted here, never displayed raw.
   static String dateTime(DateTime utc, String locale) {
-    final local = utc.isUtc ? utc.toLocal() : utc;
+    final local = AppClock.toLocal(utc);
     return DateFormat.yMMMd(locale).add_Hm().format(local);
   }
 
   static String date(DateTime utc, String locale) {
-    final local = utc.isUtc ? utc.toLocal() : utc;
+    final local = AppClock.toLocal(utc);
     return DateFormat.yMMMd(locale).format(local);
+  }
+
+  /// Local wall-clock time with seconds (`10:42:13`), for "last updated".
+  static String time(DateTime utc, String locale) {
+    final local = AppClock.toLocal(utc);
+    return DateFormat.Hms(locale).format(local);
   }
 
   static String number(num value, String locale) =>

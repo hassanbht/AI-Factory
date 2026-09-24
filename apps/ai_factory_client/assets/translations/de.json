@@ -1,32 +1,28 @@
 {
-  "app": {
-    "title": "AI Factory",
-    "subtitle": "Betriebskonsole"
-  },
   "nav": {
     "dashboard": "Übersicht",
     "projects": "Projekte",
     "operations": "Betrieb",
     "settings": "Einstellungen",
-    "expandMenu": "Navigation ausklappen",
-    "collapseMenu": "Navigation einklappen",
     "mainNavigation": "Hauptnavigation"
   },
   "common": {
     "cancel": "Abbrechen",
     "close": "Schließen",
     "retry": "Erneut versuchen",
-    "save": "Speichern",
     "loading": "Wird geladen",
     "refresh": "Aktualisieren",
-    "copy": "Kopieren",
     "copied": "Kopiert",
-    "details": "Details",
     "notAvailable": "Nicht verfügbar",
-    "notImplemented": "Noch nicht implementiert",
-    "back": "Zurück",
-    "clear": "Zurücksetzen",
-    "open": "Öffnen"
+    "yes": "Ja",
+    "no": "Nein",
+    "enabled": "Aktiviert",
+    "disabled": "Deaktiviert",
+    "previous": "Zurück",
+    "next": "Weiter",
+    "seconds": "{} s",
+    "milliseconds": "{} ms",
+    "durationHms": "{} Std. {} Min. {} s"
   },
   "state": {
     "loading": {
@@ -57,12 +53,7 @@
     "server": "Der Server hat einen unerwarteten Fehler gemeldet.",
     "unknown": "Ein unerwarteter Fehler ist aufgetreten."
   },
-  "placeholder": {
-    "comingSoon": "Folgt in einer späteren Phase",
-    "operations": "Hier entstehen Diagnose, Deployment, Datenbank, Konfiguration und das Audit-Protokoll."
-  },
   "settings": {
-    "title": "Einstellungen",
     "appearance": {
       "section": "Darstellung und Sprache",
       "language": "Sprache",
@@ -142,6 +133,45 @@
       "infrastructure": "Infrastruktur",
       "approval": "Freigabe",
       "review": "Prüfung"
+    },
+    "workItemType": {
+      "analysis": "Analyse",
+      "specification": "Spezifikation",
+      "architecture": "Architektur",
+      "planning": "Planung",
+      "implementation": "Implementierung",
+      "test": "Test",
+      "review": "Prüfung",
+      "repair": "Reparatur",
+      "documentation": "Dokumentation"
+    },
+    "workItemPriority": {
+      "critical": "Kritisch",
+      "high": "Hoch",
+      "normal": "Normal",
+      "low": "Niedrig"
+    },
+    "taskReadiness": {
+      "ready": "Bereit",
+      "waitingForDependency": "Wartet auf Abhängigkeit",
+      "blockedByFailedDependency": "Durch fehlgeschlagene Abhängigkeit blockiert",
+      "running": "Läuft",
+      "completed": "Abgeschlossen",
+      "cancelled": "Abgebrochen",
+      "failed": "Fehlgeschlagen"
+    },
+    "structuredResultStatus": {
+      "succeeded": "Erfolgreich",
+      "failed": "Fehlgeschlagen",
+      "cancelled": "Abgebrochen",
+      "timedOut": "Zeitüberschreitung",
+      "invalid": "Ungültig"
+    },
+    "auditSeverity": {
+      "info": "Info",
+      "warning": "Warnung",
+      "error": "Fehler",
+      "critical": "Kritisch"
     }
   },
   "time": {
@@ -269,18 +299,440 @@
     }
   },
   "project": {
-    "title": "Projekt",
     "notStarted": "Nicht gestartet",
     "currentError": "Vom Backend vermerkter Fehler",
     "field": {
       "identifier": "Kennung",
       "started": "Lebenszyklus gestartet"
-    },
-    "placeholder": {
-      "title": "Projektdetails",
-      "message": "Diese Ansicht zeigt, was die API zum Projekt selbst liefert. Der übrige Teil ist noch nicht gebaut.",
-      "plannedTitle": "Folgt in späteren Phasen",
-      "planned": "Lebenszyklus-Darstellung, Arbeitspakete samt Abhängigkeitsbaum, Agentenläufe, Abnahme, Artefakte sowie die menschliche Prüfung mit Freigabe."
     }
+  },
+  "projectDetail": {
+    "title": "Projektdetails",
+    "backToProjects": "Zurück zu den Projekten",
+    "field": {
+      "slug": "Slug"
+    },
+    "overview": {
+      "title": "Übersicht",
+      "empty": "Dieses Projekt hat keine Beschreibung."
+    },
+    "notFound": {
+      "title": "Projekt nicht gefunden",
+      "message": "Zu dieser Kennung existiert in der AI-Factory-API kein Projekt. Es wurde möglicherweise entfernt, oder der Link ist falsch."
+    },
+    "error": {
+      "noCategory": "Die API liefert dazu nur ein einziges Textfeld: Es enthält weder eine Fehlerkategorie noch einen eigenen Zeitpunkt."
+    },
+    "start": {
+      "sourceRequired": "Die Projektquelle wurde noch nicht initialisiert. Ein Projekt kann erst gestartet werden, wenn der Quellschritt erfolgreich war."
+    }
+  },
+  "lifecycle": {
+    "title": "Lebenszyklus",
+    "currentState": "Aktueller Zustand",
+    "step": "Schritt {} von {}",
+    "history": {
+      "title": "Phasenverlauf",
+      "reason": "Die API liefert ausschließlich den aktuellen Status. Es gibt weder einen Phasenverlauf noch Eintrittszeiten, deshalb werden Phasen nur relativ zur aktuellen Phase eingeordnet und nie als abgeschlossen dargestellt."
+    },
+    "position": {
+      "current": "Aktuelle Phase",
+      "earlier": "Vor der aktuellen Phase",
+      "later": "Nach der aktuellen Phase",
+      "anchor": "Hierher kehrt die Reparaturschleife zurück",
+      "undetermined": "Position unbekannt"
+    },
+    "offTrack": {
+      "repairing": "Reparaturschleife. Das Backend erreicht diesen Zustand aus dem Test und kehrt in den Test zurück; er ist kein Schritt nach vorn.",
+      "paused": "Die Ausführung ist pausiert. Die API gibt nicht preis, in welcher Phase pausiert wurde, deshalb ist keine Phase als aktuell markiert.",
+      "failed": "Die Ausführung ist fehlgeschlagen. Die API gibt nicht preis, in welcher Phase sie abgebrochen ist, deshalb ist keine Phase als aktuell markiert.",
+      "cancelled": "Das Projekt wurde abgebrochen. Die API gibt nicht preis, in welcher Phase der Abbruch erfolgte, deshalb ist keine Phase als aktuell markiert.",
+      "unrecognized": "Das Backend meldet einen Zustand, den dieser Client nicht kennt; seine Position im Lebenszyklus ist daher unbekannt."
+    },
+    "note": {
+      "created": "Das Projekt existiert, aber es wurde noch keine Quelle dafür initialisiert.",
+      "notStarted": "Das Projekt wurde nicht gestartet. Die Factory führt es erst weiter, nachdem es gestartet wurde.",
+      "humanReview": "Die automatische Arbeit ist abgeschlossen, eine menschliche Freigabe ist erforderlich. Prüfen Sie die Nachweise unten und genehmigen Sie das Projekt, um es abzuschließen.",
+      "completed": "Das Projekt ist abgeschlossen. „Abgeschlossen“ ist ausschließlich über eine menschliche Freigabe erreichbar."
+    }
+  },
+  "source": {
+    "title": "Quelle",
+    "branchDefault": "Standard des Repositorys",
+    "notInitializedHelp": "Für dieses Projekt wurde noch keine Quellentscheidung festgehalten.",
+    "emptyHelp": "Der Arbeitsbereich wurde leer angelegt; es wurde kein Repository festgehalten.",
+    "field": {
+      "kind": "Quelltyp",
+      "repository": "Repository",
+      "branch": "Branch"
+    },
+    "kind": {
+      "notInitialized": "Nicht initialisiert",
+      "empty": "Leerer Arbeitsbereich",
+      "git": "Git-Repository"
+    }
+  },
+  "workItems": {
+    "title": "Arbeitspakete",
+    "summary": {
+      "one": "{} Arbeitspaket · {} abgeschlossen",
+      "other": "{} Arbeitspakete · {} abgeschlossen"
+    },
+    "empty": {
+      "title": "Keine Arbeitspakete",
+      "message": "Für dieses Projekt sind derzeit keine Arbeitspakete vorhanden."
+    },
+    "noPlan": {
+      "title": "Kein Abhängigkeitsplan",
+      "reason": "Für dieses Projekt liegt noch kein angenommener Plan vor; Arbeitspakete werden daher ohne Abhängigkeitsreihenfolge oder Bereitschaft aufgelistet."
+    }
+  },
+  "workItem": {
+    "shared": "Geteilte Abhängigkeit",
+    "attempts": {
+      "one": "{} Versuch",
+      "other": "{} Versuche"
+    },
+    "repairs": {
+      "one": "{} Reparatur",
+      "other": "{} Reparaturen"
+    },
+    "noDescription": "Dieses Arbeitspaket hat keine Beschreibung.",
+    "noDependencies": "Keine Abhängigkeiten.",
+    "detail": {
+      "title": "Arbeitspaket-Detail",
+      "none": "Wählen Sie ein Arbeitspaket aus, um dessen Details zu sehen."
+    },
+    "field": {
+      "status": "Status",
+      "readiness": "Bereitschaft",
+      "attempts": "Versuche",
+      "repairs": "Reparaturen",
+      "type": "Typ",
+      "priority": "Priorität",
+      "dependencies": "Abhängigkeiten",
+      "currentError": "Aktueller Fehler"
+    },
+    "acceptance": {
+      "title": "Abnahme",
+      "reason": "Die API stellt noch keine Abnahmekriterien oder -ergebnisse für ein Arbeitspaket bereit. „Abgeschlossen“ bedeutet nur, dass das Backend diesen Status vermerkt hat, nicht dass Abnahmekriterien erfüllt sind."
+    },
+    "error": {
+      "noCategory": "Die API liefert dazu nur ein einziges Textfeld: Es enthält weder eine Fehlerkategorie noch einen eigenen Zeitpunkt."
+    },
+    "action": {
+      "viewAgentRuns": "Agentenläufe anzeigen"
+    },
+    "semanticsRole": "Arbeitspaket"
+  },
+  "agentRuns": {
+    "title": "Agentenläufe",
+    "summary": {
+      "one": "{} Agentenlauf",
+      "other": "{} Agentenläufe"
+    },
+    "refresh": "Agentenläufe aktualisieren",
+    "empty": {
+      "title": "Keine Agentenläufe",
+      "message": "Für dieses Projekt ist noch kein Agent gelaufen."
+    },
+    "filter": {
+      "label": "Status",
+      "all": "Alle Status"
+    },
+    "workItemFilter": {
+      "active": "Läufe für „{}“ werden angezeigt",
+      "clear": "Alle Läufe anzeigen",
+      "noMatches": "Diesem Arbeitspaket sind keine Agentenläufe zugeordnet."
+    }
+  },
+  "agentRun": {
+    "attempt": "Versuch {}",
+    "unknownAgent": "Unbekannter Agent ({})",
+    "noWorkItem": "Keinem Arbeitspaket zugeordnet",
+    "detail": {
+      "title": "Agentenlauf-Detail",
+      "none": "Wählen Sie einen Agentenlauf aus, um dessen Details zu sehen."
+    },
+    "field": {
+      "status": "Status",
+      "attempt": "Versuch",
+      "project": "Projekt",
+      "workItem": "Arbeitspaket",
+      "created": "Erstellt",
+      "started": "Gestartet",
+      "completed": "Abgeschlossen",
+      "duration": "Dauer",
+      "failureCategory": "Fehlerkategorie",
+      "currentError": "Fehlermeldung",
+      "correlationId": "Korrelations-ID"
+    },
+    "action": {
+      "viewWorkItem": "Arbeitspaket anzeigen",
+      "copyCorrelationId": "Korrelations-ID kopieren"
+    },
+    "telemetry": {
+      "title": "Ausführungstelemetrie",
+      "reason": "Modell, Anbieter und Fallback-Informationen werden vom Backend gespeichert, aber von diesem Endpunkt nicht zurückgegeben. Der Orchestrierungslauf — von diesem Bildschirm aus noch nicht erreichbar — ist die einzige Stelle, an der `selectedModel` bereitgestellt wird."
+    },
+    "structuredResult": {
+      "title": "Strukturiertes Ergebnis",
+      "none": "Für diesen Lauf wurde kein strukturiertes Ergebnis zurückgegeben.",
+      "summary": "Zusammenfassung",
+      "output": "Ausgabe",
+      "data": "Daten",
+      "warnings": "Warnungen",
+      "errors": "Fehler",
+      "artifacts": "Artefakte",
+      "metadata": "Metadaten"
+    },
+    "semanticsRole": "Agentenlauf"
+  },
+  "dependency": {
+    "title": "Abhängigkeiten",
+    "noPlan": {
+      "title": "Für dieses Projekt existiert kein Abhängigkeitsplan",
+      "reason": "Abhängigkeiten sind erst bekannt, sobald ein Plan angenommen wurde. Die Arbeitspakete oben werden als einfache Liste ohne bestimmte Reihenfolge angezeigt."
+    },
+    "semantics": {
+      "dependsOn": "{} {} hängt ab von {}"
+    },
+    "warning": {
+      "present": {
+        "one": "{} Abhängigkeitsproblem wurde in den Plandaten gefunden und wird nicht als Kante angezeigt.",
+        "other": "{} Abhängigkeitsprobleme wurden in den Plandaten gefunden und werden nicht als Kanten angezeigt."
+      },
+      "cycle": "Zirkuläre Abhängigkeit — wird nicht weiter aufgeklappt."
+    }
+  },
+  "humanReview": {
+    "title": "Manuelle Prüfung erforderlich",
+    "subtitle": "Die automatisierte Verarbeitung hat die menschliche Freigabegrenze erreicht. Prüfen Sie die verfügbaren Nachweise, bevor Sie das Projekt genehmigen.",
+    "approveButton": "Projekt freigeben",
+    "approveButtonSemantics": "Projekt freigeben — das Projekt wird dadurch auf Abgeschlossen gesetzt",
+    "approvePending": "Freigabe wird übermittelt…",
+    "confirm": {
+      "title": "Projekt freigeben?",
+      "body": "Ihre Freigabe wird protokolliert und ermöglicht es der Factory, das Projekt auf Abgeschlossen zu setzen. Prüfen Sie die Nachweise, bevor Sie fortfahren.",
+      "approve": "Freigeben",
+      "cancel": "Abbrechen"
+    },
+    "summary": {
+      "title": "Prüfungszusammenfassung",
+      "workItems": "Arbeitspakete",
+      "completed": "{} abgeschlossen",
+      "failed": "{} fehlgeschlagen",
+      "errors": "Fehler",
+      "noErrors": "Keine Fehler protokolliert.",
+      "acceptance": "Abnahme",
+      "acceptanceUnavailable": "Abnahmeergebnisse werden von der API nicht bereitgestellt. Ein abgeschlossener Arbeitspaketstatus bedeutet nicht, dass Abnahmekriterien erfüllt wurden."
+    },
+    "evidence": {
+      "title": "Ausführungsnachweise",
+      "agentRuns": "Agentläufe",
+      "agentRunsSummary": "{} gesamt · {} erfolgreich · {} fehlgeschlagen",
+      "structuredResults": "Strukturierte Ergebnisse",
+      "structuredResultsNote": "Einzelergebnisse werden im Abschnitt Agentläufe oben angezeigt.",
+      "telemetry": "Ausführungstelemetrie",
+      "telemetryNote": "Modell, Anbieter und Fallback werden von diesem Endpunkt nicht bereitgestellt (G-RUN-TELEMETRY)."
+    },
+    "completed": {
+      "title": "Projekt abgeschlossen",
+      "body": "Dieses Projekt wurde freigegeben und von der Factory auf Abgeschlossen gesetzt."
+    }
+  },
+  "operations": {
+    "title": "Betrieb",
+    "refresh": "Betriebsdaten aktualisieren",
+    "section": {
+      "failed": "Dieser Abschnitt konnte nicht geladen werden.",
+      "empty": "Die API hat für diesen Abschnitt keine Daten geliefert.",
+      "stale": "Zeigt die zuletzt erfolgreich geladenen Werte."
+    },
+    "health": {
+      "title": "API-Zustand",
+      "subtitle": "Was die beiden Health-Prüfungen geantwortet haben. Das betrifft ausschließlich die API.",
+      "live": "Liveness",
+      "ready": "Readiness",
+      "checkedAt": "Geprüft am",
+      "healthy": "Fehlerfrei",
+      "unhealthy": "Nicht fehlerfrei",
+      "unavailable": "Nicht erreichbar",
+      "detail": "Detail je Prüfung",
+      "detailUnavailable": "Die Health-Endpunkte antworten mit einem einzelnen Wort als Klartext. Sie benennen keine einzelne Prüfung, daher ist keine Aufschlüsselung je Komponente möglich.",
+      "worker": "Worker-Zustand",
+      "workerUnavailable": "Die API bietet keinen Endpunkt für den Worker-Zustand. Die Scheduler-Aktivität unten ist das nächstliegende verfügbare Signal — und sie beschreibt Aktivität, nicht Gesundheit."
+    }
+  },
+  "deployment": {
+    "title": "Deployment",
+    "application": "Anwendung",
+    "environment": "Umgebung",
+    "version": "Version",
+    "informationalVersion": "Informationsversion",
+    "framework": "Framework",
+    "os": "Betriebssystem",
+    "architecture": "Architektur",
+    "containerized": "Containerisiert",
+    "databaseProvider": "Datenbankanbieter",
+    "startedAt": "Gestartet am",
+    "uptime": "Laufzeit",
+    "gitCommit": "Git-Commit",
+    "gitBranch": "Git-Branch",
+    "buildNumber": "Build-Nummer",
+    "buildTimestamp": "Build-Zeitstempel"
+  },
+  "database": {
+    "title": "Datenbank",
+    "provider": "Anbieter",
+    "ready": "Bereit",
+    "commandTimeout": "Befehls-Timeout",
+    "retries": "Wiederholungen",
+    "retriesEnabled": {
+      "one": "Aktiviert, bis zu {} Versuch",
+      "other": "Aktiviert, bis zu {} Versuche"
+    },
+    "optimisticConcurrency": "Optimistische Nebenläufigkeit",
+    "operations": "Operationen",
+    "failures": "Fehler",
+    "averageDuration": "Durchschnittsdauer",
+    "counters": "Resilienz-Zähler",
+    "countersDetail": "{} Wiederholungen · {} vorübergehend · {} Nebenläufigkeitskonflikte · {} belegt · {} gesperrt · {} Transaktionsfehler",
+    "migrations": "Migrationsstatus",
+    "migrationsUnavailable": "Der Datenbank-Endpunkt liefert Anbieter, Bereitschaft und Resilienz-Zähler. Er liefert keine Migrationshistorie — und hier wird keine abgeleitet."
+  },
+  "scheduler": {
+    "title": "Scheduler-Aktivität",
+    "subtitle": "Was die Dispatch-Schleife getan hat. Keine Aussage über den Worker-Zustand.",
+    "enabled": "Scheduler",
+    "maxConcurrent": "Max. gleichzeitige Aufgaben",
+    "lastCycle": "Letzter Zyklus",
+    "noCycleYet": "Seit dem Start des Dienstes wurde kein Zyklus ausgeführt.",
+    "lastCycleCounts": "Zähler des letzten Zyklus",
+    "lastCycleDetail": "{} zugeteilt · {} fehlgeschlagen · {} wegen Nebenläufigkeit übersprungen",
+    "totals": "Gesamt",
+    "totalsDetail": "{} zugeteilt · {} Fehler",
+    "notWorkerHealth": "Das ist kein Worker-Zustand",
+    "notWorkerHealthReason": "Dies sind Dispatch-Zähler. Null Zyklen bedeuten nicht, dass ein Worker ausgefallen ist, und ein Wert größer null bedeutet nicht, dass er fehlerfrei läuft — die API stellt keinen Worker-Zustand bereit."
+  },
+  "metrics": {
+    "title": "Agent-Metriken",
+    "inFlight": "In Bearbeitung",
+    "inFlightDetail": "{} in Warteschlange · {} laufend",
+    "created": "Erstellt",
+    "started": "Gestartet",
+    "succeeded": "Erfolgreich",
+    "failed": "Fehlgeschlagen",
+    "timedOut": "Zeitüberschreitung",
+    "cancelled": "Abgebrochen",
+    "workerClaimSuccess": "Worker-Zuweisungen",
+    "averageDuration": "Durchschnittsdauer",
+    "telemetry": "Modell- und Kostentelemetrie",
+    "telemetryUnavailable": "Dieser Endpunkt liefert nur Ausführungszähler. Tokenverbrauch, Modellkosten und Anbieter-Latenz werden nicht bereitgestellt und daher nicht als Null dargestellt."
+  },
+  "configuration": {
+    "title": "Konfiguration",
+    "subtitle": "Bereinigte Metadaten: Schalter, Namen und Zähler. Niemals ein geheimer Wert.",
+    "environment": "Umgebung",
+    "valid": "Konfiguration gültig",
+    "database": "Datenbank",
+    "databaseConfigured": "Konfiguriert ({})",
+    "databaseNotConfigured": "Nicht konfiguriert",
+    "secretManagement": "Secret-Verwaltung",
+    "operationalEndpoints": "Betriebs-Endpunkte",
+    "operationalSecured": "Gesichert — Schlüssel wird im Header {} gesendet",
+    "operationalOpen": "Nicht gesichert: Dieses Deployment liefert die Betriebs-Endpunkte ohne Schlüssel aus.",
+    "rateLimiting": "Ratenbegrenzung",
+    "transport": "Transport",
+    "transportDetail": "HTTPS-Weiterleitung {} · HSTS {} · CORS {}",
+    "maxBodySize": "Max. Request-Body (Bytes)",
+    "providers": "Anbieter",
+    "noProviders": "Der Konfigurations-Endpunkt listet keine externen Anbieter auf.",
+    "providerDetail": "{} · {} · {}",
+    "secretReferencePresent": "Secret-Referenz gesetzt",
+    "noSecretReference": "keine Secret-Referenz",
+    "resilienceProfiles": "Resilienz-Profile: {}",
+    "routing": "Modell-Routing",
+    "routingUnavailable": "Informationen zum Modell-Routing sind nicht verfügbar: Die API bietet keine Endpunkte für Modelle, Routen oder Anbieterauswahl. Die Anbieternamen oben sind Konfigurations-Metadaten, keine Routing-Tabelle."
+  },
+  "operatorAccess": {
+    "title": "Operator-Zugang",
+    "subtitle": "Der Betriebs-API-Schlüssel für dieses Backend. Wird im Schlüsselspeicher des Systems abgelegt, nie in einfachen Einstellungen.",
+    "required": "Operator-Zugang erforderlich",
+    "enterKey": "Betriebsschlüssel eingeben",
+    "keyStored": "Für dieses Gerät ist ein Schlüssel hinterlegt.",
+    "noKey": "Für dieses Gerät ist kein Schlüssel hinterlegt.",
+    "field": "Betriebsschlüssel",
+    "fieldHelp": "Wird von der Betreiberin oder dem Betreiber dieser AI-Factory-Instanz ausgegeben. Es ist kein Modellanbieter-Schlüssel und niemals eine Ihrer Anbieter-Zugangsdaten.",
+    "show": "Schlüssel anzeigen",
+    "hide": "Schlüssel verbergen",
+    "save": "Schlüssel speichern",
+    "clear": "Schlüssel löschen",
+    "storageFailed": "Der sichere Schlüsselspeicher konnte nicht gelesen oder beschrieben werden. Der Schlüssel wurde nicht gespeichert.",
+    "scope": "Wofür dieser Schlüssel gilt",
+    "scopeNote": "Er autorisiert ausschließlich die Betriebs-, Diagnose- und Audit-Endpunkte dieser API. Er wird als Request-Header gesendet, nie in einer URL, und nie in ein Protokoll geschrieben.",
+    "sessionOnly": "Im Browser gilt der Schlüssel nur für diese Sitzung: Er wird nie gespeichert, und nach dem Neuladen wird er erneut abgefragt."
+  },
+  "audit": {
+    "title": "Audit-Protokoll",
+    "subtitle": "Vom Backend aufgezeichnete Betriebsereignisse.",
+    "filter": {
+      "severity": "Schweregrad",
+      "all": "Alle",
+      "clientSideNote": "Der Schweregrad-Filter grenzt nur die geladene Seite ein. Der Endpunkt nimmt einen Severity-Parameter entgegen, wendet ihn aber nicht an — serverseitiges Filtern ist daher nicht möglich."
+    },
+    "noMatches": "Kein Eintrag auf dieser Seite entspricht dem gewählten Schweregrad.",
+    "page": "Seite {} · {} Einträge insgesamt",
+    "actor": "Akteur: {}",
+    "outcome": "Ergebnis: {}"
+  },
+  "diagnostics": {
+    "title": "Projektdiagnose",
+    "open": "Diagnose",
+    "summary": "Zusammenfassung",
+    "status": "Projektstatus",
+    "executionDuration": "Ausführungsdauer",
+    "noDuration": "Die API meldet für dieses Projekt keine Ausführungsdauer.",
+    "attempts": "Versuche",
+    "repairAttempts": "Reparaturversuche",
+    "latestTask": "Letztes Arbeitspaket",
+    "latestRun": "Letzter Orchestrierungslauf",
+    "agentRuns": "Agent-Ausführungen",
+    "activeRuns": "Aktiv",
+    "staleRuns": "Veraltet",
+    "staleScope": "Geltungsbereich dieser Zähler",
+    "staleScopeReason": "Veraltete Ausführungen werden nur für dieses Projekt gemeldet. Die API bietet keinen systemweiten Zähler, und das Aufsummieren einzelner Projekte ergäbe keinen.",
+    "workItems": "Arbeitspakete nach Status",
+    "workItemsTotal": "Insgesamt {}",
+    "noWorkItems": "Die Diagnose-Antwort enthält keine Zähler für Arbeitspakete.",
+    "lastFailure": "Zuletzt erfasster Fehler",
+    "lastFailureAt": "Erfasst am",
+    "noFailureMessage": "Die API erfasst für dieses Projekt einen Fehlerzeitpunkt, aber keine Meldung.",
+    "failureCategory": "Kategorie: {}",
+    "acceptance": "Abnahme",
+    "acceptanceUnavailable": "Abnahmeergebnisse werden von der API nicht bereitgestellt. Die Zähler der Arbeitspakete beschreiben den Backend-Status, nicht das Bestehen von Abnahmekriterien.",
+    "unauthorized": "Dieser Endpunkt ist durch den Betriebsschlüssel geschützt. Geben Sie unten einen ein, um die Diagnose zu laden.",
+    "notFound": {
+      "title": "Keine Diagnose für dieses Projekt",
+      "message": "Die API hat für diese Projektkennung keinen Diagnosedatensatz."
+    },
+    "backToProject": "Zurück zum Projekt"
+  },
+  "live": {
+    "status": {
+      "idle": "Warten auf die erste Aktualisierung",
+      "live": "Live-Aktualisierung aktiv",
+      "refreshing": "Wird aktualisiert…",
+      "offline": "Offline · neuer Versuch folgt automatisch",
+      "retrying": "Aktualisierung fehlgeschlagen · neuer Versuch folgt automatisch",
+      "paused": "Live-Aktualisierung pausiert",
+      "accessRequired": "Zugang erforderlich · Live-Aktualisierung angehalten",
+      "halted": "Aktualisierung fehlgeschlagen · Live-Aktualisierung angehalten",
+      "stopped": "Keine automatische Aktualisierung – hier ändert sich nichts mehr"
+    },
+    "lastUpdated": "Zuletzt aktualisiert {}",
+    "neverUpdated": "Noch nicht aktualisiert",
+    "retryNow": "Jetzt erneut versuchen",
+    "enterKey": "Betriebsschlüssel eingeben"
   }
 }

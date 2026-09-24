@@ -31,6 +31,16 @@ public sealed class ProductionConfigurationSafetyTests
         AssertDoesNotContainForbiddenTokens(content, path);
     }
 
+    [Fact]
+    public void AppSettingsProductionWindows_DoesNotContainMigrationFailureSimulationSwitch()
+    {
+        var path = Path.Combine(FindRepoRoot(), "apps", "src", "AI.Factory.Api", "appsettings.Production.Windows.json");
+        Assert.True(File.Exists(path), $"{path} must exist.");
+
+        var content = File.ReadAllText(path);
+        AssertDoesNotContainForbiddenTokens(content, path);
+    }
+
     private static void AssertDoesNotContainForbiddenTokens(string content, string path)
     {
         Assert.False(

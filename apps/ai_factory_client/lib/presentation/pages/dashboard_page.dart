@@ -13,12 +13,14 @@ import '../../domain/models/project.dart';
 import '../controllers/dashboard_controller.dart';
 import '../models/dashboard_snapshot.dart';
 import '../models/project_list_filter.dart';
-import 'projects_page.dart';
 import '../shell/app_shell.dart';
 import '../shell/shell_destination.dart';
+import '../widgets/focus_ring.dart';
+import '../widgets/live_updates.dart';
 import '../widgets/panels.dart';
 import '../widgets/state_views.dart';
 import '../widgets/status_chip.dart';
+import 'projects_page.dart';
 
 /// The operator overview.
 ///
@@ -40,44 +42,50 @@ class DashboardPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final controller = Get.find<DashboardController>();
 
-    return AppShell(
-      destination: ShellDestination.dashboard,
-      actions: [
-        Obx(
-          () => IconButton(
-            onPressed: controller.state.value.isBusy
-                ? null
-                : controller.refreshData,
-            tooltip: 'common.refresh'.tr(),
-            icon: const Icon(Icons.refresh),
+    return LiveUpdatesScope(
+      poller: controller.live,
+      child: AppShell(
+        destination: ShellDestination.dashboard,
+        actions: [
+          Obx(
+            () => IconButton(
+              onPressed: controller.state.value.isBusy
+                  ? null
+                  : controller.refreshData,
+              tooltip: 'common.refresh'.tr(),
+              icon: const Icon(Icons.refresh),
+            ),
           ),
-        ),
-      ],
-      builder: (context) => Obx(() {
-        final state = controller.state.value;
+        ],
+        builder: (context) => Obx(() {
+          final state = controller.state.value;
 
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // A refresh keeps the existing content on screen and shows a thin
-            // progress line instead of replacing everything with a spinner.
-            if (state is Refreshing<DashboardSnapshot>)
-              const LinearProgressIndicator(minHeight: 2),
-            Expanded(
-              child: AsyncView<DashboardSnapshot>(
-                state: state,
-                onRetry: controller.load,
-                builder: (context, snapshot) => _DashboardBody(
-                  snapshot: snapshot,
-                  failures: state is Partial<DashboardSnapshot>
-                      ? state.failures
-                      : const [],
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              LiveStatusIndicator(poller: controller.live),
+              const SizedBox(height: AppSpacing.sm),
+              // A manual refresh keeps the existing content on screen and shows
+              // a thin progress line instead of replacing everything with a
+              // spinner. A background poll shows nothing but the indicator.
+              if (state is Refreshing<DashboardSnapshot>)
+                const LinearProgressIndicator(minHeight: 2),
+              Expanded(
+                child: AsyncView<DashboardSnapshot>(
+                  state: state,
+                  onRetry: controller.load,
+                  builder: (context, snapshot) => _DashboardBody(
+                    snapshot: snapshot,
+                    failures: state is Partial<DashboardSnapshot>
+                        ? state.failures
+                        : const [],
+                  ),
                 ),
               ),
-            ),
-          ],
-        );
-      }),
+            ],
+          );
+        }),
+      ),
     );
   }
 }
@@ -371,7 +379,10 @@ class _PlatformBand extends StatelessWidget {
                     : scheduler.hasRunACycle
                     ? 'dashboard.platform.lastCycle'.tr(
                         args: [
-                          RelativeTime.format(scheduler.lastCycleAtUtc!, locale),
+                          RelativeTime.format(
+                            scheduler.lastCycleAtUtc!,
+                            locale,
+                          ),
                         ],
                       )
                     : 'dashboard.platform.noCycleYet'.tr(),
@@ -499,39 +510,42 @@ class _CompactProjectRow extends StatelessWidget {
     final theme = Theme.of(context);
     final locale = context.locale.toString();
 
-    return InkWell(
-      onTap: () => Get.toNamed<void>(AppRoutes.projectDetail(project.id)),
+    return FocusRing(
       borderRadius: BorderRadius.circular(AppRadius.sm),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    project.name,
-                    style: theme.textTheme.bodyMedium,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  Text(
-                    RelativeTime.format(project.updatedAtUtc, locale),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
+      child: InkWell(
+        onTap: () => Get.toNamed<void>(AppRoutes.projectDetail(project.id)),
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      project.name,
+                      style: theme.textTheme.bodyMedium,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                  ),
-                ],
+                    Text(
+                      RelativeTime.format(project.updatedAtUtc, locale),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(width: AppSpacing.sm),
-            StatusChip.project(
-              project.status,
-              rawStatus: project.rawStatus,
-              compact: true,
-            ),
-          ],
+              const SizedBox(width: AppSpacing.sm),
+              StatusChip.project(
+                project.status,
+                rawStatus: project.rawStatus,
+                compact: true,
+              ),
+            ],
+          ),
         ),
       ),
     );

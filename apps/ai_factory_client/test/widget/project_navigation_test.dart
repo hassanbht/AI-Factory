@@ -1,9 +1,8 @@
 import 'package:ai_factory_client/app/app_routes.dart';
-import 'package:ai_factory_client/core/errors/app_error.dart';
-import 'package:ai_factory_client/core/localization/locale_service.dart';
 import 'package:ai_factory_client/domain/enums/backend_enums.dart';
 import 'package:ai_factory_client/domain/repositories/repositories.dart';
 import 'package:ai_factory_client/presentation/pages/project_detail_page.dart';
+import 'package:ai_factory_client/presentation/pages/projects_page.dart';
 import 'package:ai_factory_client/presentation/widgets/status_chip.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -12,29 +11,39 @@ import 'package:get/get.dart' hide Trans;
 import '../support/fake_repositories.dart';
 import '../support/test_app.dart';
 
-/// Projects -> Project Detail, driven through the real routing table.
+/// Projects -> Project Detail -> back, driven through the real routing table.
 ///
-/// The repositories are registered **before** the route bindings run, which
-/// is the substitution recipe the Phase 19.2 DI test pinned down: a `fenix`
+/// The screen's own content is covered by `project_detail_page_test.dart`;
+/// what is pinned down here is the navigation contract: the id travels in the
+/// route, the screen re-reads from the API rather than trusting the list's
+/// copy, and the way back exists whether the screen was pushed or deep-linked.
+///
+/// The repositories are registered **before** the route bindings run, which is
+/// the substitution recipe the Phase 19.2 DI test pinned down: a `fenix`
 /// registration cannot be replaced afterwards.
 void main() {
   setUpAll(initializeTestLocalization);
 
+  const projectId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+
   late FakeProjectRepository projects;
-  late LocaleService localeService;
 
   setUp(() async {
-    localeService = await registerTestServices();
+    await registerTestServices();
     projects = FakeProjectRepository(
       projects: [
         testProject(
-          id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+          id: projectId,
           name: 'Customer API',
           status: ProjectStatus.humanReview,
+          lifecycleStartedAtUtc: DateTime.utc(2026, 9, 19, 12),
         ),
       ],
     );
     Get.put<ProjectRepository>(projects);
+    Get.put<WorkItemRepository>(FakeWorkItemRepository());
+    Get.put<AgentRunRepository>(FakeAgentRunRepository());
+    Get.put<ApprovalRepository>(FakeApprovalRepository());
   });
 
   Future<void> pumpApp(WidgetTester tester, {String? route}) async {
@@ -45,7 +54,7 @@ void main() {
     );
   }
 
-  testWidgets('opening a project navigates to the detail placeholder', (
+  testWidgets('opening a project navigates to its detail screen', (
     tester,
   ) async {
     await pumpApp(tester);
@@ -55,105 +64,53 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(ProjectDetailPage), findsOneWidget);
-    expect(find.text('Project detail'), findsOneWidget);
-    // Honest about what it is not.
-    expect(
-      find.textContaining('The rest of it is not built yet'),
-      findsOneWidget,
-    );
+    expect(Get.currentRoute, AppRoutes.projectDetail(projectId));
   });
 
-  testWidgets('the placeholder reads the project it was opened for', (
-    tester,
-  ) async {
+  testWidgets('the screen re-reads the project by id rather than trusting '
+      'the list', (tester) async {
     await pumpApp(tester);
     await tester.tap(find.text('Open'));
     await tester.pumpAndSettle();
 
-    // Fetched by id, so a deep link works without the list.
-    expect(
-      projects.calls,
-      contains('getById:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'),
-    );
+    expect(projects.calls, contains('getById:$projectId'));
     expect(find.text('Customer API'), findsWidgets);
     expect(find.byType(StatusChip), findsOneWidget);
-    expect(find.text('Human review'), findsOneWidget);
+    expect(find.text('Human review'), findsWidgets);
     expectNoUntranslatedKeys(tester);
   });
 
-  testWidgets('a deep link to an unknown project shows a not-found state', (
+  testWidgets('back returns to the Projects screen', (tester) async {
+    await pumpApp(tester);
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(BackButton));
+    await tester.pumpAndSettle();
+
+    expect(Get.currentRoute, AppRoutes.projects);
+    expect(find.byType(ProjectsPage), findsOneWidget);
+  });
+
+  testWidgets('a deep link opens the screen without the list', (tester) async {
+    await pumpApp(tester, route: AppRoutes.projectDetail(projectId));
+
+    expect(find.byType(ProjectDetailPage), findsOneWidget);
+    expect(find.text('Customer API'), findsWidgets);
+    expect(projects.listCount, 0, reason: 'the list is not fetched for detail');
+  });
+
+  testWidgets('a deep link to an unknown project offers the way back', (
     tester,
   ) async {
     await pumpApp(tester, route: AppRoutes.projectDetail('does-not-exist'));
 
-    expect(
-      find.text('The requested resource no longer exists.'),
-      findsOneWidget,
-    );
-    expect(find.text('Retry'), findsOneWidget);
-  });
+    expect(find.text('Project not found'), findsOneWidget);
 
-  testWidgets('a recorded backend error is shown on the placeholder', (
-    tester,
-  ) async {
-    projects.projects = [
-      testProject(
-        id: 'p-err',
-        name: 'Broken',
-        status: ProjectStatus.failed,
-        currentError: 'Planner produced no work items.',
-      ),
-    ];
-
-    await pumpApp(tester, route: AppRoutes.projectDetail('p-err'));
-
-    expect(find.text('Error recorded by the backend'), findsOneWidget);
-    expect(find.text('Planner produced no work items.'), findsOneWidget);
-  });
-
-  testWidgets('a failed detail read offers a retry', (tester) async {
-    projects.listError = const NetworkError();
-    await pumpApp(tester, route: AppRoutes.projectDetail('p1'));
-
-    expect(find.textContaining('No connection'), findsOneWidget);
-
-    projects.listError = null;
-    projects.projects = [testProject(id: 'p1', name: 'Recovered')];
-    await tester.tap(find.text('Retry'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Back to projects'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Recovered'), findsWidgets);
-  });
-
-  testWidgets('the placeholder renders in German', (tester) async {
-    await pumpApp(
-      tester,
-      route: AppRoutes.projectDetail('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'),
-    );
-
-    final context = tester.element(find.byType(Scaffold).first);
-    await localeService.apply(context, LocalePreference.german);
-    await tester.pumpAndSettle();
-
-    expect(find.text('Projektdetails'), findsOneWidget);
-    expect(find.text('Kennung'), findsOneWidget);
-    expectNoUntranslatedKeys(tester);
-  });
-
-  testWidgets('the placeholder lays out without overflow when compact', (
-    tester,
-  ) async {
-    await pumpScreen(
-      tester,
-      initialRoute: AppRoutes.projectDetail(
-        'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
-      ),
-      getPages: AppRoutes.pages,
-      size: TestSizes.compact,
-    );
-
-    expect(tester.takeException(), isNull);
-    expect(find.byType(ProjectDetailPage), findsOneWidget);
+    expect(Get.currentRoute, AppRoutes.projects);
   });
 
   test('the detail route is built from the project id', () {

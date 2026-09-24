@@ -4,9 +4,11 @@ import 'dart:io';
 /// Loads the JSON payloads captured from a running AI Factory `v1.0.0` API.
 ///
 /// These are recordings, not hand-written examples: every file under
-/// `test/fixtures/api/` was produced by calling the real endpoint. Tests that
-/// assert a shape assert the shape the backend actually returns, and
-/// regenerating them after a backend release is how contract drift is caught.
+/// `test/fixtures/api/` except [agentRunStructured] was produced by
+/// `tool/api_fixtures.dart` calling the real endpoints on a throwaway
+/// database, then normalized (stable ids and instants, the timestamp format
+/// preserved). Tests that assert a shape assert the shape the backend
+/// actually returns; `--check` against a fresh API is how drift is caught.
 class ApiFixtures {
   const ApiFixtures._();
 
@@ -38,4 +40,11 @@ class ApiFixtures {
   static const String agentMetrics = 'agent_metrics';
   static const String problemValidation = 'problem_validation';
   static const String problemConflict = 'problem_conflict';
+  static const String auditLogPage = 'audit_log_page';
+  static const String approvedProject = 'approved_project';
+
+  /// Hand-authored: a structured result exists only after a real agent
+  /// execution. Its fields are checked against a captured run by
+  /// `tool/api_fixtures.dart --check`.
+  static const String agentRunStructured = 'agent_run_structured';
 }

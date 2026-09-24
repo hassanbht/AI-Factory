@@ -6,6 +6,8 @@
 /// or SQLite directly.
 library;
 
+import 'package:flutter/foundation.dart';
+
 enum AppEnvironment {
   development,
   production;
@@ -34,19 +36,35 @@ class AppConfig {
   ///   --dart-define=AI_FACTORY_ENV=development \
   ///   --dart-define=AI_FACTORY_API_BASE_URL=http://localhost:5223
   /// ```
-  factory AppConfig.fromEnvironment() {
-    const envName = String.fromEnvironment(
-      'AI_FACTORY_ENV',
-      defaultValue: 'development',
-    );
-    final environment = AppEnvironment.fromName(envName);
+  factory AppConfig.fromEnvironment() => AppConfig.resolve(
+    environmentName: const String.fromEnvironment('AI_FACTORY_ENV'),
+    baseUrlOverride: const String.fromEnvironment('AI_FACTORY_API_BASE_URL'),
+    isReleaseBuild: kReleaseMode,
+  );
 
-    const baseUrlOverride = String.fromEnvironment('AI_FACTORY_API_BASE_URL');
+  /// The rules behind [AppConfig.fromEnvironment], separated so they can be
+  /// tested without a release build.
+  ///
+  /// With no `AI_FACTORY_ENV`, a debug build is `development` and a release
+  /// build is `production` — so a release build never falls back to the
+  /// development API address. Production has no default address at all: a
+  /// release without `AI_FACTORY_API_BASE_URL` reports itself unconfigured
+  /// (Settings says so) instead of calling a machine it was never meant for.
+  factory AppConfig.resolve({
+    required String environmentName,
+    required String baseUrlOverride,
+    required bool isReleaseBuild,
+  }) {
+    final environment = environmentName.trim().isEmpty
+        ? (isReleaseBuild
+              ? AppEnvironment.production
+              : AppEnvironment.development)
+        : AppEnvironment.fromName(environmentName);
 
     return AppConfig(
       environment: environment,
-      apiBaseUrl: baseUrlOverride.isNotEmpty
-          ? baseUrlOverride
+      apiBaseUrl: baseUrlOverride.trim().isNotEmpty
+          ? baseUrlOverride.trim()
           : _defaultBaseUrl(environment),
       connectTimeout: const Duration(seconds: 10),
       sendTimeout: const Duration(seconds: 30),

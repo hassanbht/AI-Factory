@@ -1,4 +1,5 @@
 import 'package:ai_factory_client/core/localization/relative_time.dart';
+import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

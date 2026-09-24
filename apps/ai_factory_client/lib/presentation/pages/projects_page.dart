@@ -11,6 +11,7 @@ import '../dialogs/create_project_dialog.dart';
 import '../models/project_list_filter.dart';
 import '../shell/app_shell.dart';
 import '../shell/shell_destination.dart';
+import '../widgets/live_updates.dart';
 import '../widgets/panels.dart';
 import '../widgets/project_list_tile.dart';
 import '../widgets/state_views.dart';
@@ -63,71 +64,76 @@ class _ProjectsPageState extends State<ProjectsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return AppShell(
-      destination: ShellDestination.projects,
-      actions: [
-        Obx(
-          () => IconButton(
-            onPressed: controller.state.value.isBusy
-                ? null
-                : controller.refreshData,
-            tooltip: 'common.refresh'.tr(),
-            icon: const Icon(Icons.refresh),
-          ),
-        ),
-      ],
-      builder: (context) => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Obx(() {
-            final state = controller.state.value;
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _Toolbar(
-                  controller: controller,
-                  filter: controller.filter.value,
-                  onCreate: _create,
-                ),
-                if (state is Refreshing<List<Project>>)
-                  const LinearProgressIndicator(minHeight: 2),
-                if (controller.actionError.value case final error?) ...[
-                  const SizedBox(height: AppSpacing.sm),
-                  ActionErrorBanner(
-                    error: error,
-                    onDismiss: controller.dismissActionError,
-                  ),
-                ],
-                if (controller.isLargeList) ...[
-                  const SizedBox(height: AppSpacing.sm),
-                  _UnpagedListNotice(total: controller.totalCount),
-                ],
-              ],
-            );
-          }),
-          const SizedBox(height: AppSpacing.sm),
-          Expanded(
-            child: Obx(() {
-              final state = controller.state.value;
-              // Read inside the Obx closure, not inside the child widget's
-              // build: GetX only tracks observables touched while the closure
-              // runs, so a filter change has to be observed here.
-              final visible = controller.visibleProjects;
-
-              return AsyncView<List<Project>>(
-                state: state,
-                onRetry: controller.load,
-                emptyTitle: 'projects.empty.title'.tr(),
-                emptyMessage: 'projects.empty.message'.tr(),
-                builder: (context, _) => _ProjectList(
-                  controller: controller,
-                  projects: visible,
-                  onOpen: _open,
-                ),
-              );
-            }),
+    return LiveUpdatesScope(
+      poller: controller.live,
+      child: AppShell(
+        destination: ShellDestination.projects,
+        actions: [
+          Obx(
+            () => IconButton(
+              onPressed: controller.state.value.isBusy
+                  ? null
+                  : controller.refreshData,
+              tooltip: 'common.refresh'.tr(),
+              icon: const Icon(Icons.refresh),
+            ),
           ),
         ],
+        builder: (context) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Obx(() {
+              final state = controller.state.value;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _Toolbar(
+                    controller: controller,
+                    filter: controller.filter.value,
+                    onCreate: _create,
+                  ),
+                  const SizedBox(height: AppSpacing.xs),
+                  LiveStatusIndicator(poller: controller.live),
+                  if (state is Refreshing<List<Project>>)
+                    const LinearProgressIndicator(minHeight: 2),
+                  if (controller.actionError.value case final error?) ...[
+                    const SizedBox(height: AppSpacing.sm),
+                    ActionErrorBanner(
+                      error: error,
+                      onDismiss: controller.dismissActionError,
+                    ),
+                  ],
+                  if (controller.isLargeList) ...[
+                    const SizedBox(height: AppSpacing.sm),
+                    _UnpagedListNotice(total: controller.totalCount),
+                  ],
+                ],
+              );
+            }),
+            const SizedBox(height: AppSpacing.sm),
+            Expanded(
+              child: Obx(() {
+                final state = controller.state.value;
+                // Read inside the Obx closure, not inside the child widget's
+                // build: GetX only tracks observables touched while the closure
+                // runs, so a filter change has to be observed here.
+                final visible = controller.visibleProjects;
+
+                return AsyncView<List<Project>>(
+                  state: state,
+                  onRetry: controller.load,
+                  emptyTitle: 'projects.empty.title'.tr(),
+                  emptyMessage: 'projects.empty.message'.tr(),
+                  builder: (context, _) => _ProjectList(
+                    controller: controller,
+                    projects: visible,
+                    onOpen: _open,
+                  ),
+                );
+              }),
+            ),
+          ],
+        ),
       ),
     );
   }

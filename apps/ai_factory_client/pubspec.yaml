@@ -38,12 +38,20 @@ dependencies:
   dio: ^5.11.1
   easy_localization: ^3.0.8
   shared_preferences: ^2.5.5
+  # The operational API key only. Never a provider credential, and never
+  # SharedPreferences — see lib/core/security/operational_credential_store.dart.
+  flutter_secure_storage: ^9.2.4
   equatable: ^3.0.0
   intl: ^0.20.3
   json_annotation: ^4.12.0
 
 dev_dependencies:
   flutter_test:
+    sdk: flutter
+  # Runs the real application on a real Windows/Web target, with real
+  # networking, so the operator flow can be exercised end to end against a
+  # running API. A widget test cannot: its binding fakes async and stubs HTTP.
+  integration_test:
     sdk: flutter
 
   # The "flutter_lints" package below contains a set of recommended lints to
@@ -52,9 +60,31 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  # Drives polling timers with fake time, so interval, backoff and lifecycle
+  # tests never sleep. Already resolved through flutter_test.
+  fake_async: ^1.3.3
   build_runner: ^2.16.1
   json_serializable: ^6.14.1
   http_mock_adapter: ^0.6.1
+  flutter_launcher_icons: "^0.14.4"
+
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/logo.jpg"
+  min_sdk_android: 21
+  web:
+    generate: true
+    image_path: "assets/logo.jpg"
+    background_color: "#0F766E"
+    theme_color: "#0F766E"
+  windows:
+    generate: true
+    image_path: "assets/logo.jpg"
+    icon_size: 48
+  macos:
+    generate: true
+    image_path: "assets/logo.jpg"
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

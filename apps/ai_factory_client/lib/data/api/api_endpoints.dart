@@ -48,17 +48,30 @@ class ApiEndpoints {
 
   static String agentRunCancel(String id) => '/api/agents/runs/$id/cancel';
 
-  /// Operational key required.
+  /// Rate-limited under the operational policy, but **not** behind the
+  /// operational key: `OperationalEndpointSecurityMiddleware.IsOperationalPath`
+  /// covers `/api/operations*`, `/api/audit-log` and
+  /// `/api/projects/*/diagnostics` only, and this path is none of them.
   static const String agentMetrics = '/api/agents/metrics';
 
   // --- Scheduler ----------------------------------------------------------
   static const String schedulerStatus = '/api/scheduler/status';
 
-  // --- Operations (operational key required) ------------------------------
+  // --- Operations ---------------------------------------------------------
+  // Everything below is behind the operational key **when the backend is
+  // configured to require one** (`Security:OperationalEndpoints:
+  // RequireAccessKey`, which defaults to false). A deployment that leaves it
+  // off serves these to anyone, so the client treats the key as conditional
+  // rather than assuming a 401 is coming.
   static String projectDiagnostics(String projectId) =>
       '/api/operations/projects/$projectId/diagnostics';
 
   static const String deployment = '/api/operations/deployment';
   static const String database = '/api/operations/database';
   static const String configuration = '/api/operations/configuration';
+
+  /// `GET /api/audit-log`, paged. Accepts `projectId`, `executionId`, `page`
+  /// and `pageSize` (max 100). It also accepts `severity` and then ignores
+  /// it, so this client does not send it (gap `G-AUDIT-SEVERITY`).
+  static const String auditLog = '/api/audit-log';
 }

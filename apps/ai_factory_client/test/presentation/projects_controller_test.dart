@@ -63,10 +63,12 @@ void main() {
       final controller = build();
       await controller.load();
 
-      expect(
-        controller.visibleProjects.map((p) => p.id).toList(),
-        <String>['running', 'review', 'done', 'failed'],
-      );
+      expect(controller.visibleProjects.map((p) => p.id).toList(), <String>[
+        'running',
+        'review',
+        'done',
+        'failed',
+      ]);
     });
 
     test('within a group, most recently updated comes first', () async {
@@ -86,18 +88,26 @@ void main() {
       final controller = build();
       await controller.load();
 
-      expect(
-        controller.visibleProjects.map((p) => p.id).toList(),
-        <String>['new', 'old'],
-      );
+      expect(controller.visibleProjects.map((p) => p.id).toList(), <String>[
+        'new',
+        'old',
+      ]);
     });
   });
 
   group('filtering', () {
     setUp(() {
       projects.projects = [
-        testProject(id: '1', name: 'Customer API', status: ProjectStatus.implementation),
-        testProject(id: '2', name: 'Mobile App', status: ProjectStatus.humanReview),
+        testProject(
+          id: '1',
+          name: 'Customer API',
+          status: ProjectStatus.implementation,
+        ),
+        testProject(
+          id: '2',
+          name: 'Mobile App',
+          status: ProjectStatus.humanReview,
+        ),
         testProject(id: '3', name: 'Billing', status: ProjectStatus.completed),
         testProject(id: '4', name: 'Legacy', status: ProjectStatus.cancelled),
       ];
@@ -123,20 +133,23 @@ void main() {
       expect(controller.visibleProjects.map((p) => p.id), <String>['2']);
     });
 
-    test('a filter that matches nothing empties the view, not the data', () async {
-      final controller = build();
-      await controller.load();
+    test(
+      'a filter that matches nothing empties the view, not the data',
+      () async {
+        final controller = build();
+        await controller.load();
 
-      controller.setQuery('nothing matches this');
-      expect(controller.visibleProjects, isEmpty);
-      // The screen distinguishes these two: there ARE projects.
-      expect(controller.totalCount, 4);
-      expect(controller.state.value, isA<Success<List<Project>>>());
+        controller.setQuery('nothing matches this');
+        expect(controller.visibleProjects, isEmpty);
+        // The screen distinguishes these two: there ARE projects.
+        expect(controller.totalCount, 4);
+        expect(controller.state.value, isA<Success<List<Project>>>());
 
-      controller.clearFilter();
-      expect(controller.visibleProjects, hasLength(4));
-      expect(controller.isFiltered, isFalse);
-    });
+        controller.clearFilter();
+        expect(controller.visibleProjects, hasLength(4));
+        expect(controller.isFiltered, isFalse);
+      },
+    );
   });
 
   group('start', () {
@@ -268,19 +281,22 @@ void main() {
   });
 
   group('after creation', () {
-    test('the new project appears immediately and the list is re-read', () async {
-      projects.projects = [testProject(id: 'p1')];
-      final controller = build();
-      await controller.load();
-      final before = projects.listCount;
+    test(
+      'the new project appears immediately and the list is re-read',
+      () async {
+        projects.projects = [testProject(id: 'p1')];
+        final controller = build();
+        await controller.load();
+        final before = projects.listCount;
 
-      final created = testProject(id: 'new', name: 'Fresh');
-      projects.projects = [...projects.projects, created];
-      await controller.onProjectCreated(created);
+        final created = testProject(id: 'new', name: 'Fresh');
+        projects.projects = [...projects.projects, created];
+        await controller.onProjectCreated(created);
 
-      expect(projects.listCount, before + 1);
-      expect(controller.visibleProjects.map((p) => p.id), contains('new'));
-    });
+        expect(projects.listCount, before + 1);
+        expect(controller.visibleProjects.map((p) => p.id), contains('new'));
+      },
+    );
   });
 
   group('unpaged list', () {

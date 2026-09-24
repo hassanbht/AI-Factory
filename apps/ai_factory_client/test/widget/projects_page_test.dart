@@ -38,8 +38,16 @@ void main() {
   group('list', () {
     testWidgets('renders a row per project with its status', (tester) async {
       projects.projects = [
-        testProject(id: '1', name: 'Customer API', status: ProjectStatus.implementation),
-        testProject(id: '2', name: 'Mobile App', status: ProjectStatus.humanReview),
+        testProject(
+          id: '1',
+          name: 'Customer API',
+          status: ProjectStatus.implementation,
+        ),
+        testProject(
+          id: '2',
+          name: 'Mobile App',
+          status: ProjectStatus.humanReview,
+        ),
       ];
       await pump(tester);
 
@@ -116,8 +124,16 @@ void main() {
   group('filtering', () {
     setUp(() {
       projects.projects = [
-        testProject(id: '1', name: 'Customer API', status: ProjectStatus.implementation),
-        testProject(id: '2', name: 'Mobile App', status: ProjectStatus.humanReview),
+        testProject(
+          id: '1',
+          name: 'Customer API',
+          status: ProjectStatus.implementation,
+        ),
+        testProject(
+          id: '2',
+          name: 'Mobile App',
+          status: ProjectStatus.humanReview,
+        ),
       ];
     });
 
@@ -132,7 +148,9 @@ void main() {
       expect(find.text('Mobile App'), findsOneWidget);
     });
 
-    testWidgets('a search that matches nothing explains itself', (tester) async {
+    testWidgets('a search that matches nothing explains itself', (
+      tester,
+    ) async {
       await pump(tester);
 
       await tester.enterText(find.byType(TextField).first, 'zzz');
@@ -166,7 +184,9 @@ void main() {
       expect(find.text('Start'), findsOneWidget);
     });
 
-    testWidgets('starting shows the status the server returned', (tester) async {
+    testWidgets('starting shows the status the server returned', (
+      tester,
+    ) async {
       projects.projects = [
         testProject(id: '1', name: 'Fresh', status: ProjectStatus.analyzing),
       ];
@@ -219,14 +239,13 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        find.text('The resource changed in the meantime. Reload and try again.'),
+        find.text(
+          'The resource changed in the meantime. Reload and try again.',
+        ),
         findsOneWidget,
       );
       // The server's own explanation, kept for the operator.
-      expect(
-        find.text('Project has no initialized source.'),
-        findsOneWidget,
-      );
+      expect(find.text('Project has no initialized source.'), findsOneWidget);
       // The list is still there and still usable.
       expect(find.text('Fresh'), findsOneWidget);
     });
@@ -246,7 +265,11 @@ void main() {
 
   testWidgets('the screen renders in German', (tester) async {
     projects.projects = [
-      testProject(id: '1', name: 'Customer API', status: ProjectStatus.humanReview),
+      testProject(
+        id: '1',
+        name: 'Customer API',
+        status: ProjectStatus.humanReview,
+      ),
     ];
     await pump(tester);
 
@@ -300,13 +323,14 @@ void main() {
     });
   }
 
-  testWidgets('column captions appear only where rows are laid out in columns', (
-    tester,
-  ) async {
-    projects.projects = [testProject()];
-    await pump(tester, size: TestSizes.expanded);
-    expect(find.text('Actions'), findsOneWidget);
-  });
+  testWidgets(
+    'column captions appear only where rows are laid out in columns',
+    (tester) async {
+      projects.projects = [testProject()];
+      await pump(tester, size: TestSizes.expanded);
+      expect(find.text('Actions'), findsOneWidget);
+    },
+  );
 
   testWidgets('the compact layout drops the column captions', (tester) async {
     projects.projects = [testProject()];

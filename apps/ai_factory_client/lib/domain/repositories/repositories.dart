@@ -5,13 +5,14 @@
 /// and no `DioException` crosses this boundary.
 ///
 /// Every read accepts an optional [RequestCancellation] so a screen can abort
-/// its in-flight requests on dispose — the same mechanism polling will use.
+/// its in-flight requests on dispose — the same mechanism polling uses.
 library;
 
 import '../../core/network/request_cancellation.dart';
 import '../../data/dto/requests.dart';
 import '../enums/backend_enums.dart';
 import '../models/agent_run.dart';
+import '../models/audit.dart';
 import '../models/operations.dart';
 import '../models/project.dart';
 import '../models/work_item.dart';
@@ -122,14 +123,35 @@ abstract class AgentRunRepository {
 
 abstract class DiagnosticsRepository {
   /// `GET /api/operations/projects/{projectId}/diagnostics`.
-  /// Requires the operational key; throws `AuthenticationError` without one.
+  ///
+  /// Behind the operational key when the backend requires one, in which case
+  /// it answers `401` and this throws `AuthenticationError`.
   Future<ProjectDiagnostics> getProjectDiagnostics(
     String projectId, {
     RequestCancellation? cancellation,
   });
 
-  /// `GET /api/agents/metrics` — global counters, operational key required.
+  /// `GET /api/agents/metrics` — global counters.
+  ///
+  /// Not behind the operational key: the backend's operational path check
+  /// does not cover `/api/agents/metrics`.
   Future<AgentMetrics> getAgentMetrics({RequestCancellation? cancellation});
+}
+
+/// Read-only access to the backend's operational audit log.
+///
+/// There is no write path: audit entries are written by the backend itself,
+/// and this client only reads them.
+abstract class AuditRepository {
+  /// `GET /api/audit-log`, paged.
+  ///
+  /// Behind the operational key when the backend requires one. Severity is
+  /// not a server-side filter (gap `G-AUDIT-SEVERITY`), so [AuditLogQuery]
+  /// does not offer one.
+  Future<PagedResult<AuditLogEntry>> list(
+    AuditLogQuery query, {
+    RequestCancellation? cancellation,
+  });
 }
 
 /// Read-only operational information. The API exposes no mutation here and

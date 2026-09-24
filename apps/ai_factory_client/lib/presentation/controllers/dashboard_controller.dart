@@ -2,6 +2,9 @@ import 'package:get/get.dart' hide Trans;
 
 import '../../core/errors/app_error.dart';
 import '../../core/network/request_cancellation.dart';
+import '../../core/polling/app_activity.dart';
+import '../../core/polling/polling_coordinator.dart';
+import '../../core/polling/polling_policy.dart';
 import '../../core/state/view_state.dart';
 import '../../domain/models/agent_run.dart';
 import '../../domain/models/operations.dart';
@@ -30,16 +33,31 @@ class DashboardController extends GetxController {
     ProjectRepository? projects,
     OperationsRepository? operations,
     DiagnosticsRepository? diagnostics,
+    this._intervals = PollIntervals.defaults,
+    AppActivity? activity,
   }) : _projects = projects ?? Get.find<ProjectRepository>(),
        _operations = operations ?? Get.find<OperationsRepository>(),
-       _diagnostics = diagnostics ?? Get.find<DiagnosticsRepository>();
+       _diagnostics = diagnostics ?? Get.find<DiagnosticsRepository>(),
+       _activity = activity ?? AppActivity.maybeFind();
 
   final ProjectRepository _projects;
   final OperationsRepository _operations;
   final DiagnosticsRepository _diagnostics;
+  final PollIntervals _intervals;
+  final AppActivity? _activity;
 
   final Rx<ViewState<DashboardSnapshot>> state =
       Rx<ViewState<DashboardSnapshot>>(const Idle<DashboardSnapshot>());
+
+  /// Live updates: every read on this screen, re-run on one schedule —
+  /// [PollIntervals.dashboard] while any project is being advanced,
+  /// [PollIntervals.idle] otherwise. Started and stopped by the page.
+  late final PollingCoordinator live = PollingCoordinator(
+    task: (trigger) => _fetch(refreshing: true, silent: trigger.isBackground),
+    interval: _interval,
+    maxBackoff: _intervals.maxBackoff,
+    activity: _activity,
+  );
 
   RequestCancellation? _inFlight;
 
@@ -53,30 +71,49 @@ class DashboardController extends GetxController {
   void onClose() {
     // Leaving the screen aborts whatever is still running, so a late response
     // cannot write into a disposed controller.
+    live.dispose();
     _inFlight?.cancel();
     _inFlight = null;
     super.onClose();
   }
 
   /// First load. Shows a skeleton because there is nothing to keep on screen.
-  Future<void> load() => _fetch(refreshing: false);
+  ///
+  /// Goes through [live] like every other read, so it can never overlap a
+  /// poll and it counts as the screen's first successful update.
+  Future<void> load() => live.refreshNow();
 
   /// Operator-triggered refresh. Existing content stays visible.
   ///
   /// Named `refreshData` rather than `refresh` because `GetxController`
   /// already has a `refresh()` that notifies `GetBuilder` listeners; shadowing
   /// it with an async reload would be a trap for the next screen.
-  Future<void> refreshData() => _fetch(refreshing: true);
+  Future<void> refreshData() => live.refreshNow();
 
-  Future<void> _fetch({required bool refreshing}) async {
+  Duration _interval() {
+    final active = state.value.dataOrNull?.counts.active ?? 1;
+    return active > 0 ? _intervals.dashboard : _intervals.idle;
+  }
+
+  /// One cycle. Returns the error that decides the next poll: the project
+  /// list is the primary source; health, scheduler and metrics are additive.
+  ///
+  /// A [silent] cycle is a background poll: the data on screen stays as it
+  /// is until the response replaces it, with no progress line.
+  Future<AppError?> _fetch({
+    required bool refreshing,
+    bool silent = false,
+  }) async {
     _inFlight?.cancel();
     final cancellation = RequestCancellation();
     _inFlight = cancellation;
 
     final previous = state.value.dataOrNull;
-    state.value = refreshing && previous != null
-        ? Refreshing<DashboardSnapshot>(previous)
-        : const Loading<DashboardSnapshot>();
+    if (!silent) {
+      state.value = refreshing && previous != null
+          ? Refreshing<DashboardSnapshot>(previous)
+          : const Loading<DashboardSnapshot>();
+    }
 
     // One round trip rather than four sequential ones. Each result is
     // captured independently so a single failure cannot cancel the others.
@@ -87,17 +124,16 @@ class DashboardController extends GetxController {
       _guard(() => _diagnostics.getAgentMetrics(cancellation: cancellation)),
     ]);
 
-    if (cancellation.isCancelled || _inFlight != cancellation) return;
+    if (cancellation.isCancelled || _inFlight != cancellation) {
+      return const RequestCancelledError();
+    }
     _inFlight = null;
 
     final projectsResult = results[0];
     if (projectsResult is AppError) {
-      if (projectsResult is RequestCancelledError) return;
-      state.value = Failure<DashboardSnapshot>(
-        projectsResult,
-        stale: previous,
-      );
-      return;
+      if (projectsResult is RequestCancelledError) return projectsResult;
+      state.value = Failure<DashboardSnapshot>(projectsResult, stale: previous);
+      return projectsResult;
     }
 
     final projects = projectsResult! as List<Project>;
@@ -135,6 +171,7 @@ class DashboardController extends GetxController {
     state.value = failures.isEmpty
         ? Success<DashboardSnapshot>(snapshot)
         : Partial<DashboardSnapshot>(snapshot, failures);
+    return PollOutcome.decisive(secondary: failures);
   }
 
   /// Runs [action] and returns either its value or the [AppError] it threw,
@@ -158,4 +195,3 @@ class DashboardController extends GetxController {
     return null;
   }
 }
-

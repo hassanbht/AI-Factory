@@ -23,6 +23,10 @@ Program.ConfigureServices(builder);
 
 var host = builder.Build();
 
+var logger = host.Services.GetRequiredService<ILogger<Program>>();
+var databaseOptions = host.Services.GetRequiredService<DatabaseOptions>();
+SqliteStorageInitializer.EnsureDataDirectoryExists(databaseOptions.ConnectionString, logger);
+
 // Phase 18.29.1 §C — fail closed BEFORE any hosted service starts claiming work.
 // A Worker that boots with a model its provider cannot serve would claim AgentRuns
 // only to fail every one of them, which is how release blocker 2 stayed invisible.
@@ -37,6 +41,8 @@ public partial class Program
     // starts the hosted services). See AI.Factory.Worker.Tests.
     public static void ConfigureServices(HostApplicationBuilder builder)
     {
+        builder.Configuration.AddPlatformSpecificOverlay(builder.Environment);
+
         var securityOptions = new SecurityOptions();
         builder.Configuration.GetSection(SecurityOptions.SectionName).Bind(securityOptions);
         securityOptions.Validate();
@@ -51,6 +57,10 @@ public partial class Program
                 ?? "Data Source=../../../data/factory.db";
         }
         databaseOptions.Validate();
+
+        databaseOptions.ConnectionString = SqliteStorageInitializer.NormalizeConnectionString(
+            databaseOptions.ConnectionString, builder.Environment.ContentRootPath);
+
         builder.Services.AddSingleton(databaseOptions);
 
         var databaseResilienceOptions = new DatabaseResilienceOptions();
@@ -155,6 +165,9 @@ public partial class Program
         {
             hermesOptions.WorkspaceRoot = "../../../sandbox/agent-workspace";
         }
+
+        hermesOptions.DataVolume = DeploymentPaths.Expand(hermesOptions.DataVolume);
+        hermesOptions.WorkspaceRoot = DeploymentPaths.Expand(hermesOptions.WorkspaceRoot);
 
         builder.Services.AddSingleton(hermesOptions);
 
@@ -350,6 +363,8 @@ builder.Services.AddModelRoutingPreflight(
         // the existing WorkspacePathGuard.
         var agentWorkspaceOptions = new AgentWorkspaceOptions();
         builder.Configuration.GetSection("AgentWorkspace").Bind(agentWorkspaceOptions);
+        agentWorkspaceOptions.ProjectsBaseDirectory = DeploymentPaths.Expand(agentWorkspaceOptions.ProjectsBaseDirectory);
+        agentWorkspaceOptions.AllowedRoot = DeploymentPaths.Expand(agentWorkspaceOptions.AllowedRoot);
         agentWorkspaceOptions.Validate();
         builder.Services.AddSingleton(agentWorkspaceOptions);
         builder.Services.AddScoped<IWorkspaceResolver, ProjectWorkspaceResolver>();
@@ -414,6 +429,7 @@ builder.Services.AddModelRoutingPreflight(
             orchestrationOptions.WorkspaceRoot = "../../../sandbox/agent-workspace";
         }
 
+        orchestrationOptions.WorkspaceRoot = DeploymentPaths.Expand(orchestrationOptions.WorkspaceRoot);
         orchestrationOptions.Validate();
         builder.Services.AddSingleton(orchestrationOptions);
 

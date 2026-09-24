@@ -2,6 +2,9 @@ import 'package:get/get.dart' hide Trans;
 
 import '../../core/errors/app_error.dart';
 import '../../core/network/request_cancellation.dart';
+import '../../core/polling/app_activity.dart';
+import '../../core/polling/polling_coordinator.dart';
+import '../../core/polling/polling_policy.dart';
 import '../../core/state/view_state.dart';
 import '../../domain/models/project.dart';
 import '../../domain/repositories/repositories.dart';
@@ -15,8 +18,29 @@ import 'dashboard_controller.dart';
 /// ordering parameters (gap `G-PROJECT-PAGING`), so all three happen here on
 /// the already-retrieved collection. Nothing pretends the server did it.
 class ProjectsController extends GetxController {
-  ProjectsController({ProjectRepository? projects})
-    : _projects = projects ?? Get.find<ProjectRepository>();
+  ProjectsController({
+    ProjectRepository? projects,
+    this._intervals = PollIntervals.defaults,
+    AppActivity? activity,
+  }) : _projects = projects ?? Get.find<ProjectRepository>(),
+       _activity = activity ?? AppActivity.maybeFind();
+
+  final PollIntervals _intervals;
+  final AppActivity? _activity;
+
+  /// Live updates for the list. A poll replaces [state] only; [filter] is a
+  /// separate observable, so the operator's filter, query and the derived
+  /// sort order survive every refresh.
+  late final PollingCoordinator live = PollingCoordinator(
+    task: (trigger) => _fetch(refreshing: true, silent: trigger.isBackground),
+    interval: () {
+      final projects = state.value.dataOrNull;
+      final active = projects == null || projects.any((p) => p.status.isActive);
+      return active ? _intervals.projects : _intervals.idle;
+    },
+    maxBackoff: _intervals.maxBackoff,
+    activity: _activity,
+  );
 
   /// Above this many rows the screen suggests filtering, because the list is
   /// unpaged and every project arrives in one response.
@@ -70,15 +94,17 @@ class ProjectsController extends GetxController {
 
   @override
   void onClose() {
+    live.dispose();
     _inFlight?.cancel();
     _inFlight = null;
     super.onClose();
   }
 
-  Future<void> load() => _fetch(refreshing: false);
+  /// Every read goes through [live], so none can overlap a poll.
+  Future<void> load() => live.refreshNow();
 
   /// See [DashboardController.refreshData] for why this is not `refresh`.
-  Future<void> refreshData() => _fetch(refreshing: true);
+  Future<void> refreshData() => live.refreshNow();
 
   void setStatusFilter(ProjectStatusFilter status) {
     filter.value = filter.value.copyWith(status: status);
@@ -92,31 +118,40 @@ class ProjectsController extends GetxController {
 
   void dismissActionError() => actionError.value = null;
 
-  Future<void> _fetch({required bool refreshing}) async {
+  /// Returns the error that decides the next poll, or null on success. A
+  /// [silent] read is a background poll and shows no progress line.
+  Future<AppError?> _fetch({
+    required bool refreshing,
+    bool silent = false,
+  }) async {
     _inFlight?.cancel();
     final cancellation = RequestCancellation();
     _inFlight = cancellation;
 
     final previous = state.value.dataOrNull;
-    state.value = refreshing && previous != null
-        ? Refreshing<List<Project>>(previous)
-        : const Loading<List<Project>>();
+    if (!silent) {
+      state.value = refreshing && previous != null
+          ? Refreshing<List<Project>>(previous)
+          : const Loading<List<Project>>();
+    }
 
     try {
       final projects = await _projects.list(cancellation: cancellation);
-      if (_inFlight != cancellation) return;
+      if (_inFlight != cancellation) return const RequestCancelledError();
       _inFlight = null;
 
       state.value = projects.isEmpty
           ? const Empty<List<Project>>()
           : Success<List<Project>>(List<Project>.unmodifiable(projects));
-    } on RequestCancelledError {
+      return null;
+    } on RequestCancelledError catch (error) {
       // Superseded by a newer request; that request owns the state now.
-      return;
+      return error;
     } on AppError catch (error) {
-      if (_inFlight != cancellation) return;
+      if (_inFlight != cancellation) return const RequestCancelledError();
       _inFlight = null;
       state.value = Failure<List<Project>>(error, stale: previous);
+      return error;
     }
   }
 
@@ -142,6 +177,9 @@ class ProjectsController extends GetxController {
       final started = await _projects.start(projectId, actor: actor);
       _replace(started);
       lastStarted.value = started;
+      // The start was accepted; re-read at once rather than waiting for the
+      // next poll, so the list and its polling interval follow the server.
+      await refreshData();
     } on RequestCancelledError {
       return;
     } on AppError catch (error) {

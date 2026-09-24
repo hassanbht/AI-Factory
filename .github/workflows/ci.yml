@@ -190,3 +190,134 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose down -v
+
+  # --- Flutter client (Phase 19.10) --------------------------------------------------------
+  # Every quality gate of apps/ai_factory_client, credential-free. Windows, because the
+  # goldens are rendered by the Windows test engine and Windows desktop is the primary
+  # release target. Flutter is cloned at a pinned tag rather than installed by a
+  # third-party action, so no unpinned action code runs here.
+  flutter-client:
+    runs-on: windows-latest
+    env:
+      FLUTTER_VERSION: '3.47.5'
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/ai_factory_client
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Flutter (pinned)
+        working-directory: ${{ runner.temp }}
+        run: |
+          git clone --depth 1 --branch "$FLUTTER_VERSION" https://github.com/flutter/flutter.git flutter
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Dependencies
+        run: flutter pub get
+
+      - name: Format
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Secret scan — sources, tests, fixtures, assets (values, not references)
+        run: dart run tool/secret_scan.dart
+
+      - name: Translation coverage
+        run: flutter test test/localization
+
+      - name: Fixture validation (committed contract fixtures)
+        run: flutter test test/contract
+
+      - name: Unit, widget, accessibility, performance, soak and regression tests
+        run: flutter test --exclude-tags golden
+
+      - name: Golden tests (EN/DE × compact/medium/expanded × light/dark)
+        run: flutter test --tags golden
+
+      - name: Upload golden failures
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: golden-failures
+          path: apps/ai_factory_client/test/golden/failures/
+          if-no-files-found: ignore
+
+      # A release build carries no API address unless one is given at build time
+      # (AppConfig.resolve), and never an operational key.
+      - name: Windows release build
+        run: flutter build windows --release
+
+      - name: Web release build
+        run: flutter build web --release
+
+      - name: Secret scan — release build output
+        run: dart run tool/secret_scan.dart build/web build/windows/x64/runner/Release
+
+  # Contract drift: a fresh API on a throwaway SQLite file, captured and compared with the
+  # committed fixtures. Credential-free: the API runs with its default RequireAccessKey=false
+  # and no provider is called. Fails on any contract drift (see tool/api_fixtures.dart).
+  flutter-contract-fixtures:
+    runs-on: ubuntu-latest
+    env:
+      FLUTTER_VERSION: '3.47.5'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Install Flutter (pinned)
+        run: |
+          git clone --depth 1 --branch "$FLUTTER_VERSION" https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+
+      - name: Build the API
+        run: dotnet build apps/src/AI.Factory.Api/AI.Factory.Api.csproj --configuration Release
+
+      - name: Start the API on a throwaway database
+        run: |
+          set -e
+          db="$RUNNER_TEMP/contract-fixtures.db"
+          test ! -e "$db"
+          ASPNETCORE_ENVIRONMENT=Development \
+          ASPNETCORE_URLS=http://127.0.0.1:5299 \
+          Database__ConnectionString="Data Source=$db" \
+          ConnectionStrings__FactoryDatabase="Data Source=$db" \
+          Database__AutoMigrate=true \
+          nohup dotnet apps/src/AI.Factory.Api/bin/Release/net10.0/AI.Factory.Api.dll \
+            > "$RUNNER_TEMP/api.log" 2>&1 &
+          echo "API_PID=$!" >> "$GITHUB_ENV"
+          for i in $(seq 1 60); do
+            if curl -fs http://127.0.0.1:5299/health/ready > /dev/null; then echo "ready after ${i}s"; break; fi
+            sleep 1
+          done
+          curl -fs http://127.0.0.1:5299/health/ready
+          grep -q "SqliteDataDirectoryReady" "$RUNNER_TEMP/api.log"
+
+      - name: Dependencies
+        working-directory: apps/ai_factory_client
+        run: flutter pub get
+
+      - name: Capture and compare (fails on drift)
+        working-directory: apps/ai_factory_client
+        run: dart run tool/api_fixtures.dart --base-url http://127.0.0.1:5299 --check
+
+      - name: Stop the API
+        if: always()
+        run: |
+          if [ -n "${API_PID:-}" ]; then kill "$API_PID" || true; fi
+
+      - name: Upload API log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: contract-api-log
+          path: ${{ runner.temp }}/api.log
+          if-no-files-found: ignore

@@ -3,6 +3,10 @@
   "WorkspaceRootPath": "D:\\Project\\AI-Factory\\apps\\",
   "Documents": [
     {
+      "AbsoluteMoniker": "D:0:0:{E30EB553-AAEC-877A-C0F3-7884928C1CE5}|src\\AI.Factory.Api\\AI.Factory.Api.csproj|d:\\project\\ai-factory\\apps\\src\\ai.factory.api\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{E30EB553-AAEC-877A-C0F3-7884928C1CE5}|src\\AI.Factory.Api\\AI.Factory.Api.csproj|solutionrelative:src\\ai.factory.api\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
       "AbsoluteMoniker": "D:0:0:{E525A769-01A1-DCE3-FDAB-66973FBA5F2C}|src\\AI.Factory.Worker\\AI.Factory.Worker.csproj|d:\\project\\ai-factory\\apps\\src\\ai.factory.worker\\agentrunworker.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
       "RelativeMoniker": "D:0:0:{E525A769-01A1-DCE3-FDAB-66973FBA5F2C}|src\\AI.Factory.Worker\\AI.Factory.Worker.csproj|solutionrelative:src\\ai.factory.worker\\agentrunworker.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     },
@@ -23,6 +27,19 @@
             {
               "$type": "Document",
               "DocumentIndex": 0,
+              "Title": "Program.cs",
+              "DocumentMoniker": "D:\\Project\\AI-Factory\\apps\\src\\AI.Factory.Api\\Program.cs",
+              "RelativeDocumentMoniker": "src\\AI.Factory.Api\\Program.cs",
+              "ToolTip": "D:\\Project\\AI-Factory\\apps\\src\\AI.Factory.Api\\Program.cs",
+              "RelativeToolTip": "src\\AI.Factory.Api\\Program.cs",
+              "ViewState": "AgIAACcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-09-19T20:47:42.919Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
               "Title": "AgentRunWorker.cs",
               "DocumentMoniker": "D:\\Project\\AI-Factory\\apps\\src\\AI.Factory.Worker\\AgentRunWorker.cs",
               "RelativeDocumentMoniker": "src\\AI.Factory.Worker\\AgentRunWorker.cs",
@@ -35,7 +52,7 @@
             },
             {
               "$type": "Document",
-              "DocumentIndex": 1,
+              "DocumentIndex": 2,
               "Title": "OrchestrationRunWorker.cs",
               "DocumentMoniker": "D:\\Project\\AI-Factory\\apps\\src\\AI.Factory.Worker\\OrchestrationRunWorker.cs",
               "RelativeDocumentMoniker": "src\\AI.Factory.Worker\\OrchestrationRunWorker.cs",

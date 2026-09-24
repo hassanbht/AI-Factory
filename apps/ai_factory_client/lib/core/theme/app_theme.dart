@@ -28,6 +28,15 @@ class AppTheme {
       visualDensity: VisualDensity.standard,
     );
 
+    // Keyboard focus is drawn as a 2 dp outline in the primary colour. The
+    // Material 3 default is a faint overlay tint, too weak to follow on a
+    // dense desktop screen; unfocused states fall through to the defaults.
+    final focusRing = WidgetStateProperty.resolveWith<BorderSide?>(
+      (states) => states.contains(WidgetState.focused)
+          ? BorderSide(color: colorScheme.primary, width: 2)
+          : null,
+    );
+
     return base.copyWith(
       scaffoldBackgroundColor: colorScheme.surface,
       appBarTheme: AppBarTheme(
@@ -54,17 +63,19 @@ class AppTheme {
           // Keyboard and pointer targets stay comfortably large on desktop.
           minimumSize: const Size(0, 44),
           padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-        ),
+        ).copyWith(side: focusRing),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
           minimumSize: const Size(0, 44),
           padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-        ),
+        ).copyWith(side: focusRing),
       ),
       textButtonTheme: TextButtonThemeData(
-        style: TextButton.styleFrom(minimumSize: const Size(0, 44)),
+        style: TextButton.styleFrom(minimumSize: const Size(0, 44))
+            .copyWith(side: focusRing),
       ),
+      iconButtonTheme: IconButtonThemeData(style: ButtonStyle(side: focusRing)),
       navigationRailTheme: NavigationRailThemeData(
         backgroundColor: colorScheme.surfaceContainerLow,
         indicatorColor: colorScheme.secondaryContainer,
@@ -94,21 +105,29 @@ class AppTheme {
 class StatusPalette {
   const StatusPalette._();
 
-  static Color neutral(ColorScheme scheme) => scheme.outline;
+  /// `onSurfaceVariant`, not `outline`: a neutral chip's label is small text,
+  /// and `outline` reaches only ~3.7:1 on its own tint (WCAG needs 4.5:1).
+  static Color neutral(ColorScheme scheme) => scheme.onSurfaceVariant;
 
   static Color active(ColorScheme scheme) => scheme.primary;
 
   static Color success(ColorScheme scheme) =>
       scheme.brightness == Brightness.light
-      ? const Color(0xFF2F7D32)
+      ? const Color(0xFF1E6B23)
       : const Color(0xFF81C995);
 
   static Color warning(ColorScheme scheme) =>
       scheme.brightness == Brightness.light
-      ? const Color(0xFF9A6700)
+      ? const Color(0xFF7A5100)
       : const Color(0xFFE3B341);
 
-  static Color danger(ColorScheme scheme) => scheme.error;
+  /// In the light theme `error` misses 4.5:1 on the darker containers once
+  /// the chip's own tint is added, so the deeper `onErrorContainer` red is
+  /// used there.
+  static Color danger(ColorScheme scheme) =>
+      scheme.brightness == Brightness.light
+      ? scheme.onErrorContainer
+      : scheme.error;
 
   /// Awaiting a human decision — deliberately distinct from both "running"
   /// and "done", because it is the one state that needs a person.

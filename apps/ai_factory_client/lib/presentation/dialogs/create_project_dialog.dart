@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart' hide Trans;
 
 import '../../core/responsive/breakpoints.dart';
+import '../../core/theme/app_motion.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../domain/enums/backend_enums.dart';
 import '../../domain/models/project.dart';
@@ -26,12 +27,14 @@ Future<Project?> showCreateProjectDialog(
   return showDialog<Project>(
     context: context,
     barrierDismissible: false,
-    builder: (context) => CreateProjectDialog(controller: flow),
-  ).whenComplete(() {
-    // Only dispose what this function created; a caller-supplied controller
-    // (a test, or a resumed flow) owns its own lifetime.
-    if (controller == null) flow.onClose();
-  });
+    animationStyle: AppMotion.dialogAnimation(context),
+    // Only what this function created is disposed; a caller-supplied
+    // controller (a test, or a resumed flow) owns its own lifetime.
+    builder: (context) => CreateProjectDialog(
+      controller: flow,
+      ownsController: controller == null,
+    ),
+  );
 }
 
 /// Create Project.
@@ -51,9 +54,20 @@ Future<Project?> showCreateProjectDialog(
 /// A child widget's `build` executes outside that scope, and GetX would not
 /// track what it reads.
 class CreateProjectDialog extends StatefulWidget {
-  const CreateProjectDialog({required this.controller, super.key});
+  const CreateProjectDialog({
+    required this.controller,
+    this.ownsController = false,
+    super.key,
+  });
 
   final CreateProjectController controller;
+
+  /// Dispose [controller] with the dialog. The dialog's widgets outlive the
+  /// `showDialog` future — they are still built while the exit transition
+  /// runs — so disposing the form fields when the future completes used
+  /// them after disposal. The State's own `dispose` runs after the last
+  /// frame that shows them.
+  final bool ownsController;
 
   @override
   State<CreateProjectDialog> createState() => _CreateProjectDialogState();
@@ -67,6 +81,12 @@ class _CreateProjectDialogState extends State<CreateProjectDialog> {
   final GlobalKey<FormState> _sourceForm = GlobalKey<FormState>();
 
   CreateProjectController get controller => widget.controller;
+
+  @override
+  void dispose() {
+    if (widget.ownsController) controller.onClose();
+    super.dispose();
+  }
 
   Future<void> _submit() async {
     final key = switch (controller.step.value) {
@@ -92,24 +112,39 @@ class _CreateProjectDialogState extends State<CreateProjectDialog> {
       builder: (context, sizeClass) {
         final dialogWidth = sizeClass.isCompact ? double.infinity : 560.0;
 
-        return AlertDialog(
-          title: Text('projects.create.title'.tr()),
-          content: SizedBox(
-            width: dialogWidth,
-            child: SingleChildScrollView(
-              child: Obx(
-                () => _buildContent(
-                  context,
-                  controller,
-                  detailsForm: _detailsForm,
-                  sourceForm: _sourceForm,
+        // Escape closes the dialog exactly as Cancel does — and, like
+        // Cancel, not while a request is in flight. The barrier stays
+        // non-dismissible, so a stray click outside never loses the form.
+        return Actions(
+          actions: <Type, Action<Intent>>{
+            DismissIntent: CallbackAction<DismissIntent>(
+              onInvoke: (_) {
+                if (!controller.isSubmitting.value) {
+                  Navigator.of(context).pop(controller.project.value);
+                }
+                return null;
+              },
+            ),
+          },
+          child: AlertDialog(
+            title: Text('projects.create.title'.tr()),
+            content: SizedBox(
+              width: dialogWidth,
+              child: SingleChildScrollView(
+                child: Obx(
+                  () => _buildContent(
+                    context,
+                    controller,
+                    detailsForm: _detailsForm,
+                    sourceForm: _sourceForm,
+                  ),
                 ),
               ),
             ),
+            actions: [
+              Obx(() => _buildActions(context, controller, onSubmit: _submit)),
+            ],
           ),
-          actions: [
-            Obx(() => _buildActions(context, controller, onSubmit: _submit)),
-          ],
         );
       },
     );
@@ -372,8 +407,14 @@ Widget _buildActions(
 
   void close() => Navigator.of(context).pop(controller.project.value);
 
-  return Row(
-    mainAxisAlignment: MainAxisAlignment.end,
+  // An OverflowBar, not a Row: at 200 % text in German the two buttons do
+  // not fit side by side on a phone-width dialog, and they stack instead of
+  // being clipped.
+  return OverflowBar(
+    alignment: MainAxisAlignment.end,
+    overflowAlignment: OverflowBarAlignment.end,
+    spacing: AppSpacing.sm,
+    overflowSpacing: AppSpacing.sm,
     children: [
       if (step != CreateProjectStep.done)
         TextButton(
@@ -382,7 +423,6 @@ Widget _buildActions(
           onPressed: busy ? null : close,
           child: Text('common.cancel'.tr()),
         ),
-      const SizedBox(width: AppSpacing.sm),
       switch (step) {
         CreateProjectStep.details => FilledButton(
           // Disabled while the request is in flight, which is what stops a

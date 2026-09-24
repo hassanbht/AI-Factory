@@ -3,8 +3,10 @@ import 'dart:io';
 
 import 'package:ai_factory_client/core/config/app_config.dart';
 import 'package:ai_factory_client/core/localization/locale_service.dart';
+import 'package:ai_factory_client/core/theme/app_motion.dart';
 import 'package:ai_factory_client/core/theme/app_theme.dart';
 import 'package:ai_factory_client/core/theme/theme_service.dart';
+import 'package:ai_factory_client/presentation/widgets/live_updates.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -128,11 +130,15 @@ class TestAppScope extends StatelessWidget {
     this.startLocale,
     this.initialRoute,
     this.getPages,
+    this.theme,
     super.key,
   });
 
   final Widget? home;
   final Locale? startLocale;
+
+  /// Defaults to the light theme; golden and contrast tests pass the dark one.
+  final ThemeData? theme;
 
   /// Supplied instead of [home] when a test drives the real routing table,
   /// which is the only way to exercise navigation between screens.
@@ -153,10 +159,15 @@ class TestAppScope extends StatelessWidget {
           localizationsDelegates: innerContext.localizationDelegates,
           supportedLocales: innerContext.supportedLocales,
           locale: innerContext.locale,
-          theme: AppTheme.light(),
+          debugShowCheckedModeBanner: false,
+          theme: theme ?? AppTheme.light(),
           home: home,
           initialRoute: initialRoute,
           getPages: getPages,
+          // The production observer, so a pushed route pauses the polling of
+          // the page beneath it exactly as it does in the application.
+          navigatorObservers: [liveRouteObserver],
+          customTransition: AppMotion.pageTransition,
         ),
       ),
     );
@@ -171,6 +182,7 @@ Future<void> pumpScreen(
   List<GetPage<dynamic>>? getPages,
   Size size = TestSizes.expanded,
   Locale? startLocale,
+  ThemeData? theme,
 }) async {
   Get.testMode = true;
   await setSurfaceSize(tester, size);
@@ -180,6 +192,7 @@ Future<void> pumpScreen(
       startLocale: startLocale,
       initialRoute: initialRoute,
       getPages: getPages,
+      theme: theme,
     ),
   );
   await tester.pumpAndSettle();

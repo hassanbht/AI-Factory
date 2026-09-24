@@ -1,5 +1,6 @@
 import 'package:easy_localization/easy_localization.dart';
 
+import '../utils/app_clock.dart';
 import '../utils/formatters.dart';
 
 /// "2 minutes ago" / "vor 2 Minuten".
@@ -19,7 +20,7 @@ class RelativeTime {
   static const Duration absoluteThreshold = Duration(days: 7);
 
   static String format(DateTime timestamp, String locale, {DateTime? now}) {
-    final reference = (now ?? DateTime.now()).toUtc();
+    final reference = (now ?? AppClock.now()).toUtc();
     final value = timestamp.isUtc ? timestamp : timestamp.toUtc();
     final elapsed = reference.difference(value);
 

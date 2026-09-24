@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../core/errors/app_error.dart';
 import '../../core/responsive/breakpoints.dart';
 import '../../core/theme/app_spacing.dart';
+import 'focus_ring.dart';
 
 /// Shared surfaces for the operator screens.
 ///
@@ -101,42 +102,45 @@ class MetricTile extends StatelessWidget {
     final accent = color ?? theme.colorScheme.onSurface;
 
     return Card(
-      child: InkWell(
-        onTap: onTap,
+      child: FocusRing(
         borderRadius: BorderRadius.circular(AppRadius.md),
-        child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.md),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  if (icon != null) ...[
-                    Icon(icon, size: 16, color: accent),
-                    const SizedBox(width: AppSpacing.xs),
-                  ],
-                  Expanded(
-                    child: Text(
-                      label,
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(AppRadius.md),
+          child: Padding(
+            padding: const EdgeInsets.all(AppSpacing.md),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    if (icon != null) ...[
+                      Icon(icon, size: 16, color: accent),
+                      const SizedBox(width: AppSpacing.xs),
+                    ],
+                    Expanded(
+                      child: Text(
+                        label,
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: AppSpacing.sm),
-              Text(
-                value,
-                style: theme.textTheme.headlineSmall?.copyWith(
-                  color: accent,
-                  fontWeight: FontWeight.w600,
+                  ],
                 ),
-              ),
-            ],
+                const SizedBox(height: AppSpacing.sm),
+                Text(
+                  value,
+                  style: theme.textTheme.headlineSmall?.copyWith(
+                    color: accent,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -303,12 +307,76 @@ class ResponsiveTileGrid extends StatelessWidget {
               runSpacing: spacing,
               children: [
                 for (final child in children)
-                  SizedBox(width: width.clamp(1, constraints.maxWidth), child: child),
+                  SizedBox(
+                    width: width.clamp(1, constraints.maxWidth),
+                    child: child,
+                  ),
               ],
             );
           },
         );
       },
+    );
+  }
+}
+
+/// One labelled fact: a caption above a value.
+///
+/// The value is a widget rather than a string because half the facts on a
+/// detail screen are not strings — a status chip, a selectable identifier, a
+/// timestamp with a tooltip.
+class Fact extends StatelessWidget {
+  const Fact({required this.label, required this.child, super.key});
+
+  final String label;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          label,
+          style: theme.textTheme.labelMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.xs),
+        Align(alignment: Alignment.centerLeft, child: child),
+      ],
+    );
+  }
+}
+
+/// Lays [Fact]s out in a wrap: one per row when compact, side by side when
+/// there is room.
+///
+/// [columnWidth] is generous enough for German labels, which run 20–35 %
+/// longer than the English ones.
+class FactList extends StatelessWidget {
+  const FactList({required this.facts, this.columnWidth = 240, super.key});
+
+  final List<Fact> facts;
+  final double columnWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    return ResponsiveBuilder(
+      builder: (context, sizeClass) => Wrap(
+        spacing: AppSpacing.xl,
+        runSpacing: AppSpacing.md,
+        children: [
+          for (final fact in facts)
+            SizedBox(
+              width: sizeClass.isCompact ? double.infinity : columnWidth,
+              child: fact,
+            ),
+        ],
+      ),
     );
   }
 }

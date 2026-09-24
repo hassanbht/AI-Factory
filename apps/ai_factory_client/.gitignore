@@ -55,3 +55,6 @@ app.*.map.json
 !lib/data/
 !lib/data/**
 !pubspec.lock
+
+# Golden comparison output (flutter test writes diffs here on a mismatch).
+**/failures/

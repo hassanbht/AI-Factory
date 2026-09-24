@@ -131,6 +131,47 @@ public sealed class WorkerCompositionRootTests : IDisposable
         Assert.NotNull(resolved);
     }
 
+    // Execution-adapter Phase B — IAgentRuntime is the adapter dispatcher (exactly one
+    // registration; GoldenProjectLifecycleE2ETests relies on that), backed only by
+    // the transitional Hermes adapter over the unchanged HermesAgentRuntime chain.
+    [Fact]
+    public void IAgentRuntime_IsTheAdapterDispatcher_RegisteredExactlyOnce()
+    {
+        using var scope = _host.Services.CreateScope();
+
+        var runtime = Assert.Single(scope.ServiceProvider.GetServices<IAgentRuntime>());
+
+        Assert.IsType<AI.Factory.Application.Execution.AdapterDispatchingAgentRuntime>(runtime);
+    }
+
+    [Fact]
+    public void ExecutionAdapterRegistry_ContainsOnlyTheTransitionalHermesAdapter()
+    {
+        using var scope = _host.Services.CreateScope();
+
+        var registry = scope.ServiceProvider
+            .GetRequiredService<AI.Factory.Application.Abstractions.Execution.IExecutionAdapterRegistry>();
+
+        Assert.Equal(new[] { "Hermes" }, registry.Keys);
+        Assert.True(registry.TryGet("Hermes", out var adapter));
+        Assert.IsType<AI.Factory.Infrastructure.Agents.LegacyHermesRuntimeAdapter>(adapter);
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<AI.Factory.Infrastructure.Agents.HermesAgentRuntime>());
+    }
+
+    [Fact]
+    public void ProductionConfiguration_WithNoExecutionSection_UsesTheBuiltInHermesProfile()
+    {
+        using var scope = _host.Services.CreateScope();
+
+        var options = scope.ServiceProvider.GetRequiredService<AI.Factory.Application.Execution.ExecutionOptions>();
+        var resolver = scope.ServiceProvider.GetRequiredService<AI.Factory.Application.Execution.ExecutionProfileResolver>();
+
+        Assert.Equal("Hermes", options.DefaultProfile);
+        Assert.Equal("Hermes", Assert.Single(options.Profiles).Value.Adapter);
+        Assert.Empty(options.AgentTypeProfiles);
+        Assert.Equal("Hermes", resolver.Resolve("Implementation").AdapterKey);
+    }
+
     [Fact]
     public void RealWorkerServiceGraph_RegistersBothHostedServices()
     {

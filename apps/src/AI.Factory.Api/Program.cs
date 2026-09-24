@@ -192,7 +192,20 @@ builder.Services.AddScoped<IAgentExecutor>(sp =>
 // Phase 18.1.3 — first real IAgentRuntime, adapting the canonical AgentRun
 // model onto the same (already resilience-decorated) Hermes execution path
 // above. Does not replace or bypass IAgentExecutor.
-builder.Services.AddScoped<IAgentRuntime, HermesAgentRuntime>();
+// Execution-adapter Phase B — HermesAgentRuntime is no longer IAgentRuntime
+// itself: the dispatcher resolves AgentType -> Execution profile -> adapter,
+// and the transitional "Hermes" adapter delegates to this unchanged runtime.
+// No "Execution" section = the built-in single Hermes profile (prior behavior).
+var executionOptions = new AI.Factory.Application.Execution.ExecutionOptions();
+builder.Configuration.GetSection(AI.Factory.Application.Execution.ExecutionOptions.SectionName).Bind(executionOptions);
+executionOptions.ApplyBuiltInDefault(LegacyHermesRuntimeAdapter.AdapterKey);
+executionOptions.Validate();
+builder.Services.AddSingleton(executionOptions);
+builder.Services.AddScoped<HermesAgentRuntime>();
+builder.Services.AddScoped<AI.Factory.Application.Abstractions.Execution.IExecutionAdapter, LegacyHermesRuntimeAdapter>();
+builder.Services.AddScoped<AI.Factory.Application.Abstractions.Execution.IExecutionAdapterRegistry, AI.Factory.Application.Execution.ExecutionAdapterRegistry>();
+builder.Services.AddScoped<AI.Factory.Application.Execution.ExecutionProfileResolver>();
+builder.Services.AddScoped<IAgentRuntime, AI.Factory.Application.Execution.AdapterDispatchingAgentRuntime>();
 
 var modelRoutingOptions = new ModelRoutingOptions();
 builder.Configuration.GetSection("ModelRouting").Bind(modelRoutingOptions);

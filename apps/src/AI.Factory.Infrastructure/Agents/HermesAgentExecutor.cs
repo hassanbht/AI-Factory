@@ -36,7 +36,7 @@ public sealed class HermesAgentExecutor : IAgentExecutor
 
         // Phase 18.14 — request.WorkingDirectory now carries the Factory-
         // resolved Project workspace (AgentOrchestrator -> IWorkspaceResolver
-        // -> HermesAgentRuntime), when the AgentRun is WorkItem-backed. Only
+        // -> HermesExecutionAdapter), when the AgentRun is WorkItem-backed. Only
         // when it is empty (the one remaining legitimate case: a
         // Planner-only AgentRun with no WorkItemId) do we fall back to the
         // original fresh, isolated scratch folder — never trust or reuse a
@@ -260,7 +260,8 @@ public sealed class HermesAgentExecutor : IAgentExecutor
                 Truncate(result.StandardOutput),
                 error,
                 stopwatch.ElapsedMilliseconds,
-                workspacePath);
+                workspacePath,
+                ExitCode: result.ExitCode);
         }
         catch (ProcessLaunchException ex)
         {

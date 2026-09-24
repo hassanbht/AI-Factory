@@ -1,0 +1,492 @@
+[
+  {
+    "Scenario": "SuccessWithValidStructuredResult",
+    "ExecutorRequests": [
+      {
+        "Agent": "Coder",
+        "Model": null,
+        "Prompt": "You are a coding agent.\n\nObjective:\r\nImplement the marker change.\r\n\r\nAvailable capabilities: ReadArtifact\r\n\r\nProject context:\r\nProjectId: 22222222-2222-2222-2222-222222222222\r\n\r\nOutput contract:\r\nRespond with exactly one JSON object and nothing else (no prose before or after it), matching this shape:\r\n{\"version\":1,\"status\":\"Succeeded|Failed|Cancelled|TimedOut\",\"summary\":\"<one-line summary>\",\"output\":\"<your textual response>\",\"data\":{},\"warnings\":[],\"errors\":[],\"artifacts\":[],\"metadata\":{}}\r\n- \"version\" must be the number 1.\r\n- \"status\" must reflect whether you actually completed the objective above.\r\n- Expected response format: structured-json-v1.\r\n- Correlation id: 55555555-5555-5555-5555-555555555555.",
+        "WorkingDirectory": ""
+      }
+    ],
+    "ExceptionType": null,
+    "ExceptionMessage": null,
+    "Result": {
+      "Executed": true,
+      "Success": true,
+      "FinalStatus": "Succeeded",
+      "Output": "{\"version\":1,\"status\":\"Succeeded\",\"summary\":\"did it\",\"output\":\"the answer\",\"artifacts\":[\"agent-said.txt\"]}",
+      "ErrorMessage": null,
+      "FailureCategory": null,
+      "ToolCalls": "",
+      "AvailableTools": "ReadArtifact",
+      "CorrelationId": "55555555-5555-5555-5555-555555555555"
+    },
+    "DurationMs": 250,
+    "PersistedStatus": "Succeeded",
+    "PersistedRun": {
+      "Output": "{\"version\":1,\"status\":\"Succeeded\",\"summary\":\"did it\",\"output\":\"the answer\",\"artifacts\":[\"agent-said.txt\"]}",
+      "ErrorMessage": null,
+      "FailureCategory": null,
+      "Provider": null,
+      "Model": null,
+      "PromptTokens": null,
+      "CompletionTokens": null,
+      "TotalTokens": null,
+      "Attempt": 1,
+      "StructuredResultVersion": 1,
+      "HasStartedAt": true,
+      "HasCompletedAt": true
+    },
+    "StructuredResult": "{\"Version\":1,\"Status\":\"Succeeded\",\"Summary\":\"did it\",\"Output\":\"the answer\",\"Data\":null,\"Warnings\":[],\"Errors\":[],\"Artifacts\":[\"agent-said.txt\"],\"Metadata\":{\"AgentType\":\"Implementation\",\"FallbackUsed\":\"false\",\"Attempt\":\"1\"}}",
+    "ArtifactPaths": []
+  },
+  {
+    "Scenario": "SuccessWithMalformedOutput",
+    "ExecutorRequests": [
+      {
+        "Agent": "Coder",
+        "Model": null,
+        "Prompt": "You are a coding agent.\n\nObjective:\r\nImplement the marker change.\r\n\r\nAvailable capabilities: ReadArtifact\r\n\r\nProject context:\r\nProjectId: 22222222-2222-2222-2222-222222222222\r\n\r\nOutput contract:\r\nRespond with exactly one JSON object and nothing else (no prose before or after it), matching this shape:\r\n{\"version\":1,\"status\":\"Succeeded|Failed|Cancelled|TimedOut\",\"summary\":\"<one-line summary>\",\"output\":\"<your textual response>\",\"data\":{},\"warnings\":[],\"errors\":[],\"artifacts\":[],\"metadata\":{}}\r\n- \"version\" must be the number 1.\r\n- \"status\" must reflect whether you actually completed the objective above.\r\n- Expected response format: structured-json-v1.\r\n- Correlation id: 55555555-5555-5555-5555-555555555555.",
+        "WorkingDirectory": ""
+      }
+    ],
+    "ExceptionType": null,
+    "ExceptionMessage": null,
+    "Result": {
+      "Executed": true,
+      "Success": true,
+      "FinalStatus": "Succeeded",
+      "Output": "not json at all",
+      "ErrorMessage": null,
+      "FailureCategory": null,
+      "ToolCalls": "",
+      "AvailableTools": "ReadArtifact",
+      "CorrelationId": "55555555-5555-5555-5555-555555555555"
+    },
+    "DurationMs": 120,
+    "PersistedStatus": "Succeeded",
+    "PersistedRun": {
+      "Output": "not json at all",
+      "ErrorMessage": null,
+      "FailureCategory": null,
+      "Provider": null,
+      "Model": null,
+      "PromptTokens": null,
+      "CompletionTokens": null,
+      "TotalTokens": null,
+      "Attempt": 1,
+      "StructuredResultVersion": 1,
+      "HasStartedAt": true,
+      "HasCompletedAt": true
+    },
+    "StructuredResult": "{\"Version\":1,\"Status\":\"Invalid\",\"Summary\":null,\"Output\":\"not json at all\",\"Data\":null,\"Warnings\":[\"No JSON object found in agent output.\"],\"Errors\":[],\"Artifacts\":[],\"Metadata\":{\"AgentType\":\"Implementation\",\"FallbackUsed\":\"false\",\"Attempt\":\"1\"}}",
+    "ArtifactPaths": []
+  },
+  {
+    "Scenario": "ProcessFailure",
+    "ExecutorRequests": [
+      {
+        "Agent": "Coder",
+        "Model": null,
+        "Prompt": "You are a coding agent.\n\nObjective:\r\nImplement the marker change.\r\n\r\nAvailable capabilities: ReadArtifact\r\n\r\nProject context:\r\nProjectId: 22222222-2222-2222-2222-222222222222\r\n\r\nOutput contract:\r\nRespond with exactly one JSON object and nothing else (no prose before or after it), matching this shape:\r\n{\"version\":1,\"status\":\"Succeeded|Failed|Cancelled|TimedOut\",\"summary\":\"<one-line summary>\",\"output\":\"<your textual response>\",\"data\":{},\"warnings\":[],\"errors\":[],\"artifacts\":[],\"metadata\":{}}\r\n- \"version\" must be the number 1.\r\n- \"status\" must reflect whether you actually completed the objective above.\r\n- Expected response format: structured-json-v1.\r\n- Correlation id: 55555555-5555-5555-5555-555555555555.",
+        "WorkingDirectory": ""
+      }
+    ],
+    "ExceptionType": null,
+    "ExceptionMessage": null,
+    "Result": {
+      "Executed": true,
+      "Success": false,
+      "FinalStatus": "Failed",
+      "Output": "partial stdout",
+      "ErrorMessage": "fatal: stderr text",
+      "FailureCategory": "Agent",
+      "ToolCalls": "",
+      "AvailableTools": "ReadArtifact",
+      "CorrelationId": "55555555-5555-5555-5555-555555555555"
+    },
+    "DurationMs": 90,
+    "PersistedStatus": "Failed",
+    "PersistedRun": {
+      "Output": "partial stdout",
+      "ErrorMessage": "fatal: stderr text",
+      "FailureCategory": "Agent",
+      "Provider": null,
+      "Model": null,
+      "PromptTokens": null,
+      "CompletionTokens": null,
+      "TotalTokens": null,
+      "Attempt": 1,
+      "StructuredResultVersion": 1,
+      "HasStartedAt": true,
+      "HasCompletedAt": true
+    },
+    "StructuredResult": "{\"Version\":1,\"Status\":\"Failed\",\"Summary\":null,\"Output\":\"partial stdout\",\"Data\":null,\"Warnings\":[],\"Errors\":[\"fatal: stderr text\"],\"Artifacts\":[],\"Metadata\":{\"AgentType\":\"Implementation\",\"FallbackUsed\":\"false\",\"Attempt\":\"1\"}}",
+    "ArtifactPaths": []
+  },
+  {
+    "Scenario": "ProcessTimeout",
+    "ExecutorRequests": [
+      {
+        "Agent": "Coder",
+        "Model": null,
+        "Prompt": "You are a coding agent.\n\nObjective:\r\nImplement the marker change.\r\n\r\nAvailable capabilities: ReadArtifact\r\n\r\nProject context:\r\nProjectId: 22222222-2222-2222-2222-222222222222\r\n\r\nOutput contract:\r\nRespond with exactly one JSON object and nothing else (no prose before or after it), matching this shape:\r\n{\"version\":1,\"status\":\"Succeeded|Failed|Cancelled|TimedOut\",\"summary\":\"<one-line summary>\",\"output\":\"<your textual response>\",\"data\":{},\"warnings\":[],\"errors\":[],\"artifacts\":[],\"metadata\":{}}\r\n- \"version\" must be the number 1.\r\n- \"status\" must reflect whether you actually completed the objective above.\r\n- Expected response format: structured-json-v1.\r\n- Correlation id: 55555555-5555-5555-5555-555555555555.",
+        "WorkingDirectory": ""
+      }
+    ],
+    "ExceptionType": null,
+    "ExceptionMessage": null,
+    "Result": {
+      "Executed": true,
+      "Success": false,
+      "FinalStatus": "TimedOut",
+      "Output": "stdout before timeout",
+      "ErrorMessage": "Execution timed out after 300 seconds.",
+      "FailureCategory": "Timeout",
+      "ToolCalls": "",
+      "AvailableTools": "ReadArtifact",
+      "CorrelationId": "55555555-5555-5555-5555-555555555555"
+    },
+    "DurationMs": 300000,
+    "PersistedStatus": "TimedOut",
+    "PersistedRun": {
+      "Output": "stdout before timeout",
+      "ErrorMessage": "Execution timed out after 300 seconds.",
+      "FailureCategory": "Timeout",
+      "Provider": null,
+      "Model": null,
+      "PromptTokens": null,
+      "CompletionTokens": null,
+      "TotalTokens": null,
+      "Attempt": 1,
+      "StructuredResultVersion": 1,
+      "HasStartedAt": true,
+      "HasCompletedAt": true
+    },
+    "StructuredResult": "{\"Version\":1,\"Status\":\"TimedOut\",\"Summary\":null,\"Output\":\"stdout before timeout\",\"Data\":null,\"Warnings\":[],\"Errors\":[\"Execution timed out after 300 seconds.\"],\"Artifacts\":[],\"Metadata\":{\"AgentType\":\"Implementation\",\"FallbackUsed\":\"false\",\"Attempt\":\"1\"}}",
+    "ArtifactPaths": []
+  },
+  {
+    "Scenario": "LaunchFailureMessageOnly",
+    "ExecutorRequests": [
+      {
+        "Agent": "Coder",
+        "Model": null,
+        "Prompt": "You are a coding agent.\n\nObjective:\r\nImplement the marker change.\r\n\r\nAvailable capabilities: ReadArtifact\r\n\r\nProject context:\r\nProjectId: 22222222-2222-2222-2222-222222222222\r\n\r\nOutput contract:\r\nRespond with exactly one JSON object and nothing else (no prose before or after it), matching this shape:\r\n{\"version\":1,\"status\":\"Succeeded|Failed|Cancelled|TimedOut\",\"summary\":\"<one-line summary>\",\"output\":\"<your textual response>\",\"data\":{},\"warnings\":[],\"errors\":[],\"artifacts\":[],\"metadata\":{}}\r\n- \"version\" must be the number 1.\r\n- \"status\" must reflect whether you actually completed the objective above.\r\n- Expected response format: structured-json-v1.\r\n- Correlation id: 55555555-5555-5555-5555-555555555555.",
+        "WorkingDirectory": ""
+      }
+    ],
+    "ExceptionType": null,
+    "ExceptionMessage": null,
+    "Result": {
+      "Executed": true,
+      "Success": false,
+      "FinalStatus": "Failed",
+      "Output": null,
+      "ErrorMessage": "Agent execution failed with no further detail.",
+      "FailureCategory": "Agent",
+      "ToolCalls": "",
+      "AvailableTools": "ReadArtifact",
+      "CorrelationId": "55555555-5555-5555-5555-555555555555"
+    },
+    "DurationMs": 3,
+    "PersistedStatus": "Failed",
+    "PersistedRun": {
+      "Output": null,
+      "ErrorMessage": "Agent execution failed with no further detail.",
+      "FailureCategory": "Agent",
+      "Provider": null,
+      "Model": null,
+      "PromptTokens": null,
+      "CompletionTokens": null,
+      "TotalTokens": null,
+      "Attempt": 1,
+      "StructuredResultVersion": 1,
+      "HasStartedAt": true,
+      "HasCompletedAt": true
+    },
+    "StructuredResult": "{\"Version\":1,\"Status\":\"Failed\",\"Summary\":null,\"Output\":null,\"Data\":null,\"Warnings\":[],\"Errors\":[\"Agent execution failed with no further detail.\"],\"Artifacts\":[],\"Metadata\":{\"AgentType\":\"Implementation\",\"FallbackUsed\":\"false\",\"Attempt\":\"1\"}}",
+    "ArtifactPaths": []
+  },
+  {
+    "Scenario": "CancelledMidFlight",
+    "ExecutorRequests": [
+      {
+        "Agent": "Coder",
+        "Model": null,
+        "Prompt": "You are a coding agent.\n\nObjective:\r\nImplement the marker change.\r\n\r\nAvailable capabilities: ReadArtifact\r\n\r\nProject context:\r\nProjectId: 22222222-2222-2222-2222-222222222222\r\n\r\nOutput contract:\r\nRespond with exactly one JSON object and nothing else (no prose before or after it), matching this shape:\r\n{\"version\":1,\"status\":\"Succeeded|Failed|Cancelled|TimedOut\",\"summary\":\"<one-line summary>\",\"output\":\"<your textual response>\",\"data\":{},\"warnings\":[],\"errors\":[],\"artifacts\":[],\"metadata\":{}}\r\n- \"version\" must be the number 1.\r\n- \"status\" must reflect whether you actually completed the objective above.\r\n- Expected response format: structured-json-v1.\r\n- Correlation id: 55555555-5555-5555-5555-555555555555.",
+        "WorkingDirectory": ""
+      }
+    ],
+    "ExceptionType": null,
+    "ExceptionMessage": null,
+    "Result": {
+      "Executed": true,
+      "Success": false,
+      "FinalStatus": "Cancelled",
+      "Output": null,
+      "ErrorMessage": "Agent execution was cancelled.",
+      "FailureCategory": "Cancelled",
+      "ToolCalls": "",
+      "AvailableTools": "ReadArtifact",
+      "CorrelationId": "55555555-5555-5555-5555-555555555555"
+    },
+    "DurationMs": null,
+    "PersistedStatus": "Cancelled",
+    "PersistedRun": {
+      "Output": null,
+      "ErrorMessage": "Agent execution was cancelled.",
+      "FailureCategory": "Cancelled",
+      "Provider": null,
+      "Model": null,
+      "PromptTokens": null,
+      "CompletionTokens": null,
+      "TotalTokens": null,
+      "Attempt": 1,
+      "StructuredResultVersion": 1,
+      "HasStartedAt": true,
+      "HasCompletedAt": true
+    },
+    "StructuredResult": "{\"Version\":1,\"Status\":\"Cancelled\",\"Summary\":null,\"Output\":null,\"Data\":null,\"Warnings\":[],\"Errors\":[\"Agent execution was cancelled.\"],\"Artifacts\":[],\"Metadata\":{\"AgentType\":\"Implementation\",\"FallbackUsed\":\"false\",\"Attempt\":\"1\"}}",
+    "ArtifactPaths": []
+  },
+  {
+    "Scenario": "ExecutorThrows",
+    "ExecutorRequests": [
+      {
+        "Agent": "Coder",
+        "Model": null,
+        "Prompt": "You are a coding agent.\n\nObjective:\r\nImplement the marker change.\r\n\r\nAvailable capabilities: ReadArtifact\r\n\r\nProject context:\r\nProjectId: 22222222-2222-2222-2222-222222222222\r\n\r\nOutput contract:\r\nRespond with exactly one JSON object and nothing else (no prose before or after it), matching this shape:\r\n{\"version\":1,\"status\":\"Succeeded|Failed|Cancelled|TimedOut\",\"summary\":\"<one-line summary>\",\"output\":\"<your textual response>\",\"data\":{},\"warnings\":[],\"errors\":[],\"artifacts\":[],\"metadata\":{}}\r\n- \"version\" must be the number 1.\r\n- \"status\" must reflect whether you actually completed the objective above.\r\n- Expected response format: structured-json-v1.\r\n- Correlation id: 55555555-5555-5555-5555-555555555555.",
+        "WorkingDirectory": ""
+      }
+    ],
+    "ExceptionType": "System.InvalidOperationException",
+    "ExceptionMessage": "executor exploded",
+    "Result": null,
+    "DurationMs": null,
+    "PersistedStatus": "Running",
+    "PersistedRun": {
+      "Output": null,
+      "ErrorMessage": null,
+      "FailureCategory": null,
+      "Provider": null,
+      "Model": null,
+      "PromptTokens": null,
+      "CompletionTokens": null,
+      "TotalTokens": null,
+      "Attempt": 1,
+      "StructuredResultVersion": null,
+      "HasStartedAt": true,
+      "HasCompletedAt": false
+    },
+    "StructuredResult": null,
+    "ArtifactPaths": []
+  },
+  {
+    "Scenario": "DisabledDefinition",
+    "ExecutorRequests": [],
+    "ExceptionType": null,
+    "ExceptionMessage": null,
+    "Result": {
+      "Executed": true,
+      "Success": false,
+      "FinalStatus": "Failed",
+      "Output": null,
+      "ErrorMessage": "AgentDefinition 'Coder' (11111111-1111-1111-1111-111111111111) is disabled.",
+      "FailureCategory": "Validation",
+      "ToolCalls": "",
+      "AvailableTools": "ReadArtifact",
+      "CorrelationId": "55555555-5555-5555-5555-555555555555"
+    },
+    "DurationMs": 0,
+    "PersistedStatus": "Failed",
+    "PersistedRun": {
+      "Output": null,
+      "ErrorMessage": "AgentDefinition 'Coder' (11111111-1111-1111-1111-111111111111) is disabled.",
+      "FailureCategory": "Validation",
+      "Provider": null,
+      "Model": null,
+      "PromptTokens": null,
+      "CompletionTokens": null,
+      "TotalTokens": null,
+      "Attempt": 1,
+      "StructuredResultVersion": 1,
+      "HasStartedAt": true,
+      "HasCompletedAt": true
+    },
+    "StructuredResult": "{\"Version\":1,\"Status\":\"Failed\",\"Summary\":null,\"Output\":null,\"Data\":null,\"Warnings\":[],\"Errors\":[\"AgentDefinition \\u0027Coder\\u0027 (11111111-1111-1111-1111-111111111111) is disabled.\"],\"Artifacts\":[],\"Metadata\":{\"AgentType\":\"Implementation\",\"FallbackUsed\":\"false\",\"Attempt\":\"1\"}}",
+    "ArtifactPaths": []
+  },
+  {
+    "Scenario": "WorkspaceBackedSuccessRecordsArtifacts",
+    "ExecutorRequests": [
+      {
+        "Agent": "Coder",
+        "Model": null,
+        "Prompt": "You are a coding agent.\n\nObjective:\r\nImplement the marker change.\r\n\r\nAvailable capabilities: ReadArtifact\r\n\r\nProject context:\r\nProjectId: 22222222-2222-2222-2222-222222222222\r\n\r\nOutput contract:\r\nRespond with exactly one JSON object and nothing else (no prose before or after it), matching this shape:\r\n{\"version\":1,\"status\":\"Succeeded|Failed|Cancelled|TimedOut\",\"summary\":\"<one-line summary>\",\"output\":\"<your textual response>\",\"data\":{},\"warnings\":[],\"errors\":[],\"artifacts\":[],\"metadata\":{}}\r\n- \"version\" must be the number 1.\r\n- \"status\" must reflect whether you actually completed the objective above.\r\n- Expected response format: structured-json-v1.\r\n- Correlation id: 55555555-5555-5555-5555-555555555555.",
+        "WorkingDirectory": "<workspace>"
+      }
+    ],
+    "ExceptionType": null,
+    "ExceptionMessage": null,
+    "Result": {
+      "Executed": true,
+      "Success": true,
+      "FinalStatus": "Succeeded",
+      "Output": "{\"version\":1,\"status\":\"Succeeded\",\"summary\":\"did it\",\"output\":\"the answer\",\"artifacts\":[\"agent-said.txt\"]}",
+      "ErrorMessage": null,
+      "FailureCategory": null,
+      "ToolCalls": "",
+      "AvailableTools": "ReadArtifact",
+      "CorrelationId": "55555555-5555-5555-5555-555555555555"
+    },
+    "DurationMs": 250,
+    "PersistedStatus": "Succeeded",
+    "PersistedRun": {
+      "Output": "{\"version\":1,\"status\":\"Succeeded\",\"summary\":\"did it\",\"output\":\"the answer\",\"artifacts\":[\"agent-said.txt\"]}",
+      "ErrorMessage": null,
+      "FailureCategory": null,
+      "Provider": null,
+      "Model": null,
+      "PromptTokens": null,
+      "CompletionTokens": null,
+      "TotalTokens": null,
+      "Attempt": 1,
+      "StructuredResultVersion": 1,
+      "HasStartedAt": true,
+      "HasCompletedAt": true
+    },
+    "StructuredResult": "{\"Version\":1,\"Status\":\"Succeeded\",\"Summary\":\"did it\",\"Output\":\"the answer\",\"Data\":null,\"Warnings\":[],\"Errors\":[],\"Artifacts\":[\"agent-said.txt\"],\"Metadata\":{\"AgentType\":\"Implementation\",\"FallbackUsed\":\"false\",\"Attempt\":\"1\"}}",
+    "ArtifactPaths": [
+      "<workspace>/README.md",
+      "<workspace>/src/Marker.cs"
+    ]
+  },
+  {
+    "Scenario": "WorkspaceBackedFailure",
+    "ExecutorRequests": [
+      {
+        "Agent": "Coder",
+        "Model": null,
+        "Prompt": "You are a coding agent.\n\nObjective:\r\nImplement the marker change.\r\n\r\nAvailable capabilities: ReadArtifact\r\n\r\nProject context:\r\nProjectId: 22222222-2222-2222-2222-222222222222\r\n\r\nOutput contract:\r\nRespond with exactly one JSON object and nothing else (no prose before or after it), matching this shape:\r\n{\"version\":1,\"status\":\"Succeeded|Failed|Cancelled|TimedOut\",\"summary\":\"<one-line summary>\",\"output\":\"<your textual response>\",\"data\":{},\"warnings\":[],\"errors\":[],\"artifacts\":[],\"metadata\":{}}\r\n- \"version\" must be the number 1.\r\n- \"status\" must reflect whether you actually completed the objective above.\r\n- Expected response format: structured-json-v1.\r\n- Correlation id: 55555555-5555-5555-5555-555555555555.",
+        "WorkingDirectory": "<workspace>"
+      }
+    ],
+    "ExceptionType": null,
+    "ExceptionMessage": null,
+    "Result": {
+      "Executed": true,
+      "Success": false,
+      "FinalStatus": "Failed",
+      "Output": "partial stdout",
+      "ErrorMessage": "fatal: stderr text",
+      "FailureCategory": "Agent",
+      "ToolCalls": "",
+      "AvailableTools": "ReadArtifact",
+      "CorrelationId": "55555555-5555-5555-5555-555555555555"
+    },
+    "DurationMs": 90,
+    "PersistedStatus": "Failed",
+    "PersistedRun": {
+      "Output": "partial stdout",
+      "ErrorMessage": "fatal: stderr text",
+      "FailureCategory": "Agent",
+      "Provider": null,
+      "Model": null,
+      "PromptTokens": null,
+      "CompletionTokens": null,
+      "TotalTokens": null,
+      "Attempt": 1,
+      "StructuredResultVersion": 1,
+      "HasStartedAt": true,
+      "HasCompletedAt": true
+    },
+    "StructuredResult": "{\"Version\":1,\"Status\":\"Failed\",\"Summary\":null,\"Output\":\"partial stdout\",\"Data\":null,\"Warnings\":[],\"Errors\":[\"fatal: stderr text\"],\"Artifacts\":[],\"Metadata\":{\"AgentType\":\"Implementation\",\"FallbackUsed\":\"false\",\"Attempt\":\"1\"}}",
+    "ArtifactPaths": []
+  },
+  {
+    "Scenario": "RoutedModelAndProvider",
+    "ExecutorRequests": [
+      {
+        "Agent": "Coder",
+        "Model": "routed-model",
+        "Prompt": "You are a coding agent.\n\nObjective:\r\nImplement the marker change.\r\n\r\nAvailable capabilities: ReadArtifact\r\n\r\nProject context:\r\nProjectId: 22222222-2222-2222-2222-222222222222\r\n\r\nOutput contract:\r\nRespond with exactly one JSON object and nothing else (no prose before or after it), matching this shape:\r\n{\"version\":1,\"status\":\"Succeeded|Failed|Cancelled|TimedOut\",\"summary\":\"<one-line summary>\",\"output\":\"<your textual response>\",\"data\":{},\"warnings\":[],\"errors\":[],\"artifacts\":[],\"metadata\":{}}\r\n- \"version\" must be the number 1.\r\n- \"status\" must reflect whether you actually completed the objective above.\r\n- Expected response format: structured-json-v1.\r\n- Correlation id: 55555555-5555-5555-5555-555555555555.",
+        "WorkingDirectory": ""
+      }
+    ],
+    "ExceptionType": null,
+    "ExceptionMessage": null,
+    "Result": {
+      "Executed": true,
+      "Success": true,
+      "FinalStatus": "Succeeded",
+      "Output": "{\"version\":1,\"status\":\"Succeeded\",\"summary\":\"did it\",\"output\":\"the answer\",\"artifacts\":[\"agent-said.txt\"]}",
+      "ErrorMessage": null,
+      "FailureCategory": null,
+      "ToolCalls": "",
+      "AvailableTools": "ReadArtifact",
+      "CorrelationId": "55555555-5555-5555-5555-555555555555"
+    },
+    "DurationMs": 250,
+    "PersistedStatus": "Succeeded",
+    "PersistedRun": {
+      "Output": "{\"version\":1,\"status\":\"Succeeded\",\"summary\":\"did it\",\"output\":\"the answer\",\"artifacts\":[\"agent-said.txt\"]}",
+      "ErrorMessage": null,
+      "FailureCategory": null,
+      "Provider": "routed-gateway",
+      "Model": "routed-model",
+      "PromptTokens": null,
+      "CompletionTokens": null,
+      "TotalTokens": null,
+      "Attempt": 1,
+      "StructuredResultVersion": 1,
+      "HasStartedAt": true,
+      "HasCompletedAt": true
+    },
+    "StructuredResult": "{\"Version\":1,\"Status\":\"Succeeded\",\"Summary\":\"did it\",\"Output\":\"the answer\",\"Data\":null,\"Warnings\":[],\"Errors\":[],\"Artifacts\":[\"agent-said.txt\"],\"Metadata\":{\"AgentType\":\"Implementation\",\"Category\":\"coding\",\"PrimaryModel\":\"routed-model\",\"SelectedModel\":\"routed-model\",\"Provider\":\"routed-gateway\",\"FallbackUsed\":\"false\",\"Attempt\":\"1\"}}",
+    "ArtifactPaths": []
+  },
+  {
+    "Scenario": "ExplicitModelNoRouting",
+    "ExecutorRequests": [
+      {
+        "Agent": "Coder",
+        "Model": "explicit-model",
+        "Prompt": "You are a coding agent.\n\nObjective:\r\nImplement the marker change.\r\n\r\nAvailable capabilities: ReadArtifact\r\n\r\nProject context:\r\nProjectId: 22222222-2222-2222-2222-222222222222\r\n\r\nOutput contract:\r\nRespond with exactly one JSON object and nothing else (no prose before or after it), matching this shape:\r\n{\"version\":1,\"status\":\"Succeeded|Failed|Cancelled|TimedOut\",\"summary\":\"<one-line summary>\",\"output\":\"<your textual response>\",\"data\":{},\"warnings\":[],\"errors\":[],\"artifacts\":[],\"metadata\":{}}\r\n- \"version\" must be the number 1.\r\n- \"status\" must reflect whether you actually completed the objective above.\r\n- Expected response format: structured-json-v1.\r\n- Correlation id: 55555555-5555-5555-5555-555555555555.",
+        "WorkingDirectory": ""
+      }
+    ],
+    "ExceptionType": null,
+    "ExceptionMessage": null,
+    "Result": {
+      "Executed": true,
+      "Success": true,
+      "FinalStatus": "Succeeded",
+      "Output": "{\"version\":1,\"status\":\"Succeeded\",\"summary\":\"did it\",\"output\":\"the answer\",\"artifacts\":[\"agent-said.txt\"]}",
+      "ErrorMessage": null,
+      "FailureCategory": null,
+      "ToolCalls": "",
+      "AvailableTools": "ReadArtifact",
+      "CorrelationId": "55555555-5555-5555-5555-555555555555"
+    },
+    "DurationMs": 250,
+    "PersistedStatus": "Succeeded",
+    "PersistedRun": {
+      "Output": "{\"version\":1,\"status\":\"Succeeded\",\"summary\":\"did it\",\"output\":\"the answer\",\"artifacts\":[\"agent-said.txt\"]}",
+      "ErrorMessage": null,
+      "FailureCategory": null,
+      "Provider": "explicit-gateway",
+      "Model": "explicit-model",
+      "PromptTokens": null,
+      "CompletionTokens": null,
+      "TotalTokens": null,
+      "Attempt": 1,
+      "StructuredResultVersion": 1,
+      "HasStartedAt": true,
+      "HasCompletedAt": true
+    },
+    "StructuredResult": "{\"Version\":1,\"Status\":\"Succeeded\",\"Summary\":\"did it\",\"Output\":\"the answer\",\"Data\":null,\"Warnings\":[],\"Errors\":[],\"Artifacts\":[\"agent-said.txt\"],\"Metadata\":{\"AgentType\":\"Implementation\",\"PrimaryModel\":\"explicit-model\",\"SelectedModel\":\"explicit-model\",\"Provider\":\"explicit-gateway\",\"FallbackUsed\":\"false\",\"Attempt\":\"1\"}}",
+    "ArtifactPaths": []
+  }
+]

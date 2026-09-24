@@ -7,31 +7,35 @@ using Microsoft.Extensions.Logging;
 namespace AI.Factory.Application.Execution;
 
 /// <summary>
-/// Execution-adapter migration Phase B — the <see cref="IAgentRuntime"/> the
+/// Execution-adapter migration Phase B/C — the <see cref="IAgentRuntime"/> the
 /// Factory registers. It keeps IAgentRuntime's role (AgentOrchestrator and every
-/// test double are unchanged) and only adds the selection step:
+/// test double are unchanged) and adds the Factory-side dispatch steps:
+/// AgentDefinition policy (a disabled definition never reaches an adapter), then
 /// AgentType -> profile -> <see cref="IExecutionAdapter"/>, then maps the
 /// orchestrator's execution snapshot to a provider-neutral
 /// <see cref="AgentExecutionSpec"/> and the adapter's
-/// <see cref="ExecutionOutcome"/> back onto <see cref="AgentRunExecutionResult"/>.
+/// <see cref="ExecutionOutcome"/> back onto <see cref="AgentRunExecutionResult"/>,
+/// tagged with the adapter key and its exit reason.
 ///
 /// It is not a runtime: no processes, no containers, no persistence, no lifecycle
 /// transitions, no acceptance or review. Adapter exceptions (including
-/// cancellation) propagate unchanged, exactly as the wrapped runtime's did.
-/// Selection failures fail closed as a classified Validation result — the same
-/// shape a runtime-side rejection already has — so the orchestrator persists a
-/// terminal Failed AgentRun instead of leaving it Running.
+/// cancellation) propagate unchanged. Policy and selection failures fail closed
+/// as a classified Validation result, so the orchestrator persists a terminal
+/// Failed AgentRun instead of leaving it Running.
 /// </summary>
 public sealed class AdapterDispatchingAgentRuntime : IAgentRuntime
 {
     private readonly ExecutionProfileResolver _resolver;
+    private readonly IFailureClassifier _failureClassifier;
     private readonly ILogger<AdapterDispatchingAgentRuntime> _logger;
 
     public AdapterDispatchingAgentRuntime(
         ExecutionProfileResolver resolver,
+        IFailureClassifier failureClassifier,
         ILogger<AdapterDispatchingAgentRuntime> logger)
     {
         _resolver = resolver;
+        _failureClassifier = failureClassifier;
         _logger = logger;
     }
 
@@ -39,10 +43,23 @@ public sealed class AdapterDispatchingAgentRuntime : IAgentRuntime
         AgentRun agentRun,
         CancellationToken cancellationToken = default)
     {
-        // Same guard, same exception, as the runtime this dispatcher fronts.
         var agentDefinition = agentRun.AgentDefinition
             ?? throw new ArgumentException(
                 "AgentRun.AgentDefinition must be loaded before execution.", nameof(agentRun));
+
+        // Factory policy, not runtime behaviour: a disabled AgentDefinition never
+        // reaches an adapter. Same message, classification and result shape the
+        // runtime produced when this check lived there (before Phase C).
+        if (!agentDefinition.Enabled)
+        {
+            var message = $"AgentDefinition '{agentDefinition.Name}' ({agentDefinition.Id}) is disabled.";
+
+            _logger.LogWarning(
+                "AgentRuntimeFailed AgentRunId={AgentRunId} CorrelationId={CorrelationId} Reason=DefinitionDisabled",
+                agentRun.Id, agentRun.CorrelationId);
+
+            return Rejected(agentRun, message, _failureClassifier.Classify(message, "validation").Category);
+        }
 
         var resolution = _resolver.Resolve(agentDefinition.AgentType);
 
@@ -54,7 +71,8 @@ public sealed class AdapterDispatchingAgentRuntime : IAgentRuntime
                 agentRun.Id, agentDefinition.AgentType, resolution.ProfileName, resolution.AdapterKey,
                 agentRun.CorrelationId, resolution.FailureReason);
 
-            return Rejected(agentRun, resolution.FailureReason ?? "Execution adapter could not be resolved.");
+            return Rejected(
+                agentRun, resolution.FailureReason ?? "Execution adapter could not be resolved.", FailureCategory.Validation);
         }
 
         var adapter = resolution.Adapter!;
@@ -70,7 +88,7 @@ public sealed class AdapterDispatchingAgentRuntime : IAgentRuntime
                 "ExecutionAdapterContractUnsatisfied AgentRunId={AgentRunId} Adapter={Adapter} CorrelationId={CorrelationId} Reason={Reason}",
                 agentRun.Id, adapter.Key, agentRun.CorrelationId, reason);
 
-            return Rejected(agentRun, reason);
+            return Rejected(agentRun, reason, FailureCategory.Validation);
         }
 
         _logger.LogInformation(
@@ -80,7 +98,7 @@ public sealed class AdapterDispatchingAgentRuntime : IAgentRuntime
 
         var outcome = await adapter.ExecuteAsync(spec, cancellationToken);
 
-        return ToRuntimeResult(outcome);
+        return ToRuntimeResult(adapter.Key, outcome);
     }
 
     private static AgentExecutionSpec BuildSpec(AgentRun agentRun, AgentDefinition agentDefinition) => new(
@@ -94,8 +112,7 @@ public sealed class AdapterDispatchingAgentRuntime : IAgentRuntime
             agentDefinition.Id,
             agentDefinition.Name,
             agentDefinition.AgentType,
-            agentDefinition.SystemPrompt,
-            agentDefinition.Enabled),
+            agentDefinition.SystemPrompt),
         Instructions: agentRun.Input,
         Workspace: new ExecutionWorkspace(agentRun.WorkspacePath),
         Model: new ModelRoute(agentRun.Model, agentRun.Provider));
@@ -108,7 +125,7 @@ public sealed class AdapterDispatchingAgentRuntime : IAgentRuntime
     /// a category gets the matching category, so the orchestrator's existing
     /// mapping still yields the same terminal AgentRunStatus.
     /// </summary>
-    private static AgentRunExecutionResult ToRuntimeResult(ExecutionOutcome outcome) => new(
+    private static AgentRunExecutionResult ToRuntimeResult(string adapterKey, ExecutionOutcome outcome) => new(
         Success: outcome.Status == ExecutionOutcomeStatus.Succeeded,
         Output: outcome.Output,
         PromptTokens: outcome.Usage?.PromptTokens,
@@ -125,9 +142,12 @@ public sealed class AdapterDispatchingAgentRuntime : IAgentRuntime
             _ => null
         },
         Provider: outcome.Model.GatewayKey,
-        Model: outcome.Model.ModelId);
+        Model: outcome.Model.ModelId,
+        ExecutionAdapter: adapterKey,
+        ExitReason: outcome.ExitReason);
 
-    private static AgentRunExecutionResult Rejected(AgentRun agentRun, string message) => new(
+    /// <summary>No adapter ran, so no adapter key or exit reason is reported.</summary>
+    private static AgentRunExecutionResult Rejected(AgentRun agentRun, string message, FailureCategory? category) => new(
         Success: false,
         Output: null,
         PromptTokens: null,
@@ -137,7 +157,7 @@ public sealed class AdapterDispatchingAgentRuntime : IAgentRuntime
         ArtifactReferences: Array.Empty<string>(),
         ToolCallNames: Array.Empty<string>(),
         ErrorMessage: message,
-        FailureCategory: FailureCategory.Validation,
+        FailureCategory: category,
         Provider: agentRun.Provider,
         Model: agentRun.Model);
 }

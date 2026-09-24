@@ -36,7 +36,7 @@ namespace AI.Factory.Worker.Tests;
 /// hosted-service instance directly (never via host.Run(), so no unrelated
 /// hosted service is ever started) against a real `docker run` Hermes
 /// container. No fakes anywhere on the AgentRun -> Worker -> Orchestrator ->
-/// HermesAgentRuntime -> HermesAgentExecutor -> Docker path.
+/// dispatcher -> HermesExecutionAdapter -> HermesAgentExecutor -> Docker path.
 /// </summary>
 public sealed class RealHermesE2ETests
 {

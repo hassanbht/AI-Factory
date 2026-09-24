@@ -24,8 +24,16 @@ public enum ExecutionOutcomeStatus
 /// The adapter's normalized classification (existing <see cref="Domain.Enums.FailureCategory"/>
 /// taxonomy — no second classification system). Null on success.
 /// </param>
-/// <param name="ArtifactReferences">Artifact ids/paths the execution recorded; large payloads are never inlined.</param>
+/// <param name="ArtifactReferences">
+/// Artifact ids/paths the runtime itself reports; large payloads are never inlined.
+/// Workspace artifacts are recorded by the Factory after execution, not by adapters.
+/// </param>
 /// <param name="Model">The model/gateway the runtime reports it ran with.</param>
+/// <param name="ExitReason">
+/// Short machine-readable reason the execution ended, in the adapter's own terms
+/// (for example <c>exit:0</c>, <c>exit:1</c>, <c>timeout</c>, <c>cancelled</c>).
+/// Recorded as structured-result metadata; null when the adapter cannot tell.
+/// </param>
 public sealed record ExecutionOutcome(
     ExecutionOutcomeStatus Status,
     string? Output,
@@ -35,7 +43,8 @@ public sealed record ExecutionOutcome(
     ExecutionUsage? Usage,
     IReadOnlyList<string> ArtifactReferences,
     IReadOnlyList<string> ToolCallNames,
-    ModelRoute Model);
+    ModelRoute Model,
+    string? ExitReason = null);
 
 /// <summary>Token usage, when the runtime can report it. Every field is independently optional.</summary>
 public sealed record ExecutionUsage(int? PromptTokens, int? CompletionTokens, int? TotalTokens);

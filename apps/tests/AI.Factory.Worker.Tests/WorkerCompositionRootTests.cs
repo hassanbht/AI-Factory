@@ -131,9 +131,9 @@ public sealed class WorkerCompositionRootTests : IDisposable
         Assert.NotNull(resolved);
     }
 
-    // Execution-adapter Phase B — IAgentRuntime is the adapter dispatcher (exactly one
-    // registration; GoldenProjectLifecycleE2ETests relies on that), backed only by
-    // the transitional Hermes adapter over the unchanged HermesAgentRuntime chain.
+    // Execution-adapter Phases B/C — IAgentRuntime is the adapter dispatcher (exactly
+    // one registration; GoldenProjectLifecycleE2ETests relies on that), backed only
+    // by HermesExecutionAdapter over the resilience-decorated IAgentExecutor chain.
     [Fact]
     public void IAgentRuntime_IsTheAdapterDispatcher_RegisteredExactlyOnce()
     {
@@ -145,7 +145,7 @@ public sealed class WorkerCompositionRootTests : IDisposable
     }
 
     [Fact]
-    public void ExecutionAdapterRegistry_ContainsOnlyTheTransitionalHermesAdapter()
+    public void ExecutionAdapterRegistry_ContainsExactlyOneAdapter_HermesExecutionAdapter()
     {
         using var scope = _host.Services.CreateScope();
 
@@ -154,8 +154,26 @@ public sealed class WorkerCompositionRootTests : IDisposable
 
         Assert.Equal(new[] { "Hermes" }, registry.Keys);
         Assert.True(registry.TryGet("Hermes", out var adapter));
-        Assert.IsType<AI.Factory.Infrastructure.Agents.LegacyHermesRuntimeAdapter>(adapter);
-        Assert.NotNull(scope.ServiceProvider.GetRequiredService<AI.Factory.Infrastructure.Agents.HermesAgentRuntime>());
+        Assert.IsType<AI.Factory.Infrastructure.Agents.HermesExecutionAdapter>(adapter);
+        Assert.Single(scope.ServiceProvider.GetServices<AI.Factory.Application.Abstractions.Execution.IExecutionAdapter>());
+        Assert.IsType<AI.Factory.Infrastructure.Agents.ResilienceAgentExecutorDecorator>(
+            scope.ServiceProvider.GetRequiredService<IAgentExecutor>());
+    }
+
+    [Fact]
+    public void AgentOrchestrator_RecordsArtifactsOnTheFactorySide()
+    {
+        using var scope = _host.Services.CreateScope();
+
+        var orchestrator = Assert.IsType<AI.Factory.Application.Agents.AgentOrchestrator>(
+            scope.ServiceProvider.GetRequiredService<IAgentOrchestrator>());
+
+        foreach (var field in new[] { "_artifactRecorder", "_artifactRepository" })
+        {
+            Assert.NotNull(typeof(AI.Factory.Application.Agents.AgentOrchestrator)
+                .GetField(field, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(orchestrator));
+        }
     }
 
     [Fact]

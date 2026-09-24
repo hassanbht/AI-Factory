@@ -279,7 +279,7 @@ public sealed class AgentOrchestratorTests : IDisposable
         // timeout cancels the SAME token the orchestrator later reused for
         // its own persistence write — the classified Cancelled result was
         // computed correctly but never saved, leaving the AgentRun stuck at
-        // Running forever. HermesAgentRuntime never throws on cancellation —
+        // Running forever. The Hermes adapter never throws on cancellation —
         // it always returns a classified Cancelled result instead — so this
         // must persist even though the token is already cancelled by the
         // time that result comes back (matching real Worker timing: the
@@ -306,7 +306,7 @@ public sealed class AgentOrchestratorTests : IDisposable
     /// <summary>
     /// Cancels the caller's token the moment the runtime is invoked, then
     /// returns a classified Cancelled result without throwing — exactly
-    /// HermesAgentRuntime's real behavior when a Worker execution timeout
+    /// the Hermes execution path's real behavior when a Worker execution timeout
     /// fires mid-call, unlike FakeAgentRuntime.Mode.Cancellation (which
     /// models a runtime that throws instead).
     /// </summary>

@@ -201,20 +201,17 @@ public partial class Program
                 sp.GetRequiredService<ILogger<ResilienceAgentExecutorDecorator>>());
         });
 
-        // Phase 18.1.3 — first real IAgentRuntime, adapting the canonical AgentRun
-        // model onto the same (already resilience-decorated) Hermes execution path
-        // above. Does not replace or bypass IAgentExecutor.
-        // Execution-adapter Phase B — HermesAgentRuntime is no longer IAgentRuntime
-        // itself: the dispatcher resolves AgentType -> Execution profile -> adapter,
-        // and the transitional "Hermes" adapter delegates to this unchanged runtime.
-        // No "Execution" section = the built-in single Hermes profile (prior behavior).
+        // Execution-adapter Phases B/C — IAgentRuntime is the Factory dispatcher
+        // (AgentDefinition policy, then AgentType -> Execution profile -> adapter).
+        // The only adapter is HermesExecutionAdapter, which runs Hermes through the
+        // same resilience-decorated IAgentExecutor above (still also used directly by
+        // review). No "Execution" section = the built-in single Hermes profile.
         var executionOptions = new ExecutionOptions();
         builder.Configuration.GetSection(ExecutionOptions.SectionName).Bind(executionOptions);
-        executionOptions.ApplyBuiltInDefault(LegacyHermesRuntimeAdapter.AdapterKey);
+        executionOptions.ApplyBuiltInDefault(HermesExecutionAdapter.AdapterKey);
         executionOptions.Validate();
         builder.Services.AddSingleton(executionOptions);
-        builder.Services.AddScoped<HermesAgentRuntime>();
-        builder.Services.AddScoped<IExecutionAdapter, LegacyHermesRuntimeAdapter>();
+        builder.Services.AddScoped<IExecutionAdapter, HermesExecutionAdapter>();
         builder.Services.AddScoped<IExecutionAdapterRegistry, ExecutionAdapterRegistry>();
         builder.Services.AddScoped<ExecutionProfileResolver>();
         builder.Services.AddScoped<IAgentRuntime, AdapterDispatchingAgentRuntime>();

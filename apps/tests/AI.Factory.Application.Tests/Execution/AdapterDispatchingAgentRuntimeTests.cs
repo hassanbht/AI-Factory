@@ -1,3 +1,4 @@
+using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Abstractions.Execution;
 using AI.Factory.Application.Execution;
 using AI.Factory.Domain.Entities;
@@ -20,16 +21,18 @@ public sealed class AdapterDispatchingAgentRuntimeTests
 
     private static AdapterDispatchingAgentRuntime Dispatcher(ExecutionOptions options, params IExecutionAdapter[] adapters) =>
         new(new ExecutionProfileResolver(options, new ExecutionAdapterRegistry(adapters)),
+            new FailureClassifier(),
             NullLogger<AdapterDispatchingAgentRuntime>.Instance);
 
-    private static AgentRun MakeRun(string agentType = "Implementation", string? model = "m-1", string? provider = "gw-1")
+    private static AgentRun MakeRun(
+        string agentType = "Implementation", string? model = "m-1", string? provider = "gw-1", bool enabled = true)
     {
         var definition = new AgentDefinition
         {
             Name = "Coder",
             AgentType = agentType,
             SystemPrompt = "You are a coding agent.",
-            Enabled = true
+            Enabled = enabled
         };
 
         return new AgentRun
@@ -67,7 +70,6 @@ public sealed class AdapterDispatchingAgentRuntimeTests
         Assert.Equal("Coder", spec.Agent.Name);
         Assert.Equal("Implementation", spec.Agent.AgentType);
         Assert.Equal("You are a coding agent.", spec.Agent.SystemPrompt);
-        Assert.True(spec.Agent.Enabled);
         Assert.Equal("instruction text", spec.Instructions);
         Assert.Equal("/ws/project", spec.Workspace.Path);
         Assert.Equal(new ModelRoute("m-1", "gw-1"), spec.Model);
@@ -96,6 +98,101 @@ public sealed class AdapterDispatchingAgentRuntimeTests
         Assert.Equal(new[] { "ReadArtifact" }, result.ToolCallNames);
         Assert.Equal("reported-model", result.Model);
         Assert.Equal("reported-gateway", result.Provider);
+        Assert.Equal("Hermes", result.ExecutionAdapter);
+        Assert.Null(result.ExitReason);
+    }
+
+    [Theory]
+    [InlineData(ExecutionOutcomeStatus.Succeeded, "exit:0")]
+    [InlineData(ExecutionOutcomeStatus.Failed, "exit:1")]
+    [InlineData(ExecutionOutcomeStatus.TimedOut, "timeout")]
+    [InlineData(ExecutionOutcomeStatus.Cancelled, "cancelled")]
+    public async Task EveryExecutedOutcome_CarriesTheAdapterKeyAndItsExitReason(ExecutionOutcomeStatus status, string exitReason)
+    {
+        var adapter = new FakeExecutionAdapter("Hermes", execute: (spec, _) =>
+            Task.FromResult(FakeExecutionAdapter.Outcome(status, spec) with { ExitReason = exitReason }));
+
+        var result = await Dispatcher(DefaultOptions(), adapter).ExecuteAsync(MakeRun());
+
+        Assert.Equal("Hermes", result.ExecutionAdapter);
+        Assert.Equal(exitReason, result.ExitReason);
+    }
+
+    // ---- Phase C: AgentDefinition policy is enforced here, before any adapter ----
+
+    [Fact]
+    public async Task DisabledDefinition_IsRejectedBeforeAnyAdapterRuns_WithTheUnchangedValidationResult()
+    {
+        var hermes = new FakeExecutionAdapter("Hermes");
+        var run = MakeRun(enabled: false);
+
+        var result = await Dispatcher(DefaultOptions(), hermes).ExecuteAsync(run);
+
+        Assert.Equal(0, hermes.CallCount);
+        Assert.False(result.Success);
+        Assert.Equal(FailureCategory.Validation, result.FailureCategory);
+        Assert.Equal($"AgentDefinition 'Coder' ({run.AgentDefinition!.Id}) is disabled.", result.ErrorMessage);
+        Assert.Null(result.Output);
+        Assert.Equal(0, result.DurationMs);
+        Assert.Empty(result.ArtifactReferences);
+        Assert.Empty(result.ToolCallNames);
+        Assert.Null(result.PromptTokens);
+        Assert.Equal(run.Model, result.Model);
+        Assert.Equal(run.Provider, result.Provider);
+        Assert.Null(result.ExecutionAdapter);
+        Assert.Null(result.ExitReason);
+    }
+
+    [Fact]
+    public async Task DisabledDefinition_IsRejectedEvenWhenItsProfileCouldNotBeResolved()
+    {
+        var run = MakeRun(enabled: false);
+
+        var result = await Dispatcher(DefaultOptions()).ExecuteAsync(run);
+
+        Assert.Equal(FailureCategory.Validation, result.FailureCategory);
+        Assert.Contains("is disabled", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task EnabledDefinition_ReachesTheAdapter()
+    {
+        var hermes = new FakeExecutionAdapter("Hermes");
+
+        var result = await Dispatcher(DefaultOptions(), hermes).ExecuteAsync(MakeRun(enabled: true));
+
+        Assert.Equal(1, hermes.CallCount);
+        Assert.True(result.Success);
+    }
+
+    [Fact]
+    public async Task DisabledDefinition_UsesTheFactoryFailureClassifier_ValidationHint()
+    {
+        var classifier = new RecordingClassifier();
+        var dispatcher = new AdapterDispatchingAgentRuntime(
+            new ExecutionProfileResolver(DefaultOptions(), new ExecutionAdapterRegistry(new[] { new FakeExecutionAdapter("Hermes") })),
+            classifier,
+            NullLogger<AdapterDispatchingAgentRuntime>.Instance);
+
+        var result = await dispatcher.ExecuteAsync(MakeRun(enabled: false));
+
+        Assert.Equal("validation", classifier.LastHint);
+        Assert.Equal(FailureCategory.Validation, result.FailureCategory);
+    }
+
+    private sealed class RecordingClassifier : IFailureClassifier
+    {
+        private readonly FailureClassifier _inner = new();
+
+        public string? LastHint { get; private set; }
+
+        public FailureClassificationResult Classify(Exception exception) => _inner.Classify(exception);
+
+        public FailureClassificationResult Classify(string reason, string? hintCategory = null)
+        {
+            LastHint = hintCategory;
+            return _inner.Classify(reason, hintCategory);
+        }
     }
 
     [Theory]
@@ -185,6 +282,7 @@ public sealed class AdapterDispatchingAgentRuntimeTests
         Assert.Equal(0, result.DurationMs);
         Assert.Equal(run.Model, result.Model);
         Assert.Equal(run.Provider, result.Provider);
+        Assert.Null(result.ExecutionAdapter);
     }
 
     [Fact]

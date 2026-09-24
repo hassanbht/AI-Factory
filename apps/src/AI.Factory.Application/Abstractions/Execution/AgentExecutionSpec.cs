@@ -26,17 +26,15 @@ public sealed record AgentExecutionSpec(
     ModelRoute Model);
 
 /// <summary>
-/// The agent being executed, as configured on its AgentDefinition.
-/// <see cref="Enabled"/> is carried only so the transitional legacy adapter can
-/// keep enforcing the disabled-definition rule inside the runtime it wraps, where
-/// that rule lives today; it moves to the Factory side in Phase C.
+/// The agent being executed, as configured on its AgentDefinition. Whether the
+/// definition may run at all is Factory policy, decided before any adapter is
+/// invoked, so it is deliberately not part of this contract.
 /// </summary>
 public sealed record ExecutionAgent(
     Guid DefinitionId,
     string Name,
     string AgentType,
-    string SystemPrompt,
-    bool Enabled);
+    string SystemPrompt);
 
 /// <param name="Path">
 /// Factory-resolved workspace (IWorkspaceResolver), or null for a run with no

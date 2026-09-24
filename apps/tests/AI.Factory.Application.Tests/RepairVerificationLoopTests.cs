@@ -358,7 +358,7 @@ public sealed class RepairVerificationLoopTests : IDisposable
     /// which AgentOrchestrator lets propagate (per
     /// AgentOrchestratorTests.ExecuteAsync_RuntimeThrowsCancellation_PropagatesException_LeavingRunRunning)
     /// rather than persisting a terminal status — so it cannot be used to
-    /// reach AgentRunStatus.Cancelled here. This mirrors HermesAgentRuntime's
+    /// reach AgentRunStatus.Cancelled here. This mirrors the Hermes adapter's
     /// real behavior instead: a runtime that returns a classified Cancelled
     /// result without throwing (e.g. the caller's token was cancelled
     /// mid-call and the runtime converts that into a normal result).

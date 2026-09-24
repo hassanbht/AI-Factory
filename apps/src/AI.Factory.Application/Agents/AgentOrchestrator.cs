@@ -12,10 +12,10 @@ namespace AI.Factory.Application.Agents;
 /// The one Factory-owned implementation of <see cref="IAgentOrchestrator"/>.
 /// Coordinates a single AgentRun end to end: state-machine eligibility check,
 /// AgentDefinition load, tool/memory resolution, a single <see cref="IAgentRuntime"/>
-/// call, then the resulting status transition — all through existing
-/// abstractions. It is not itself a runtime: it never touches Docker,
-/// processes, or Hermes, and it never bypasses AgentRun.TransitionTo's
-/// centralized validation.
+/// call, Factory-side workspace artifact recording, then the resulting status
+/// transition — all through existing abstractions. It is not itself a runtime:
+/// it never touches Docker, processes, or Hermes, and it never bypasses
+/// AgentRun.TransitionTo's centralized validation.
 /// </summary>
 public sealed class AgentOrchestrator : IAgentOrchestrator
 {
@@ -29,6 +29,8 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
     private readonly IStructuredAgentResultParser _structuredResultParser;
     private readonly IModelRouter? _modelRouter;
     private readonly ModelRoutingOptions? _routingOptions;
+    private readonly IArtifactRecorder? _artifactRecorder;
+    private readonly IArtifactRepository? _artifactRepository;
     private readonly ILogger<AgentOrchestrator> _logger;
 
     public AgentOrchestrator(
@@ -42,8 +44,17 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
         IStructuredAgentResultParser structuredResultParser,
         ILogger<AgentOrchestrator> logger,
         IModelRouter? modelRouter = null,
-        ModelRoutingOptions? routingOptions = null)
+        ModelRoutingOptions? routingOptions = null,
+        IArtifactRecorder? artifactRecorder = null,
+        IArtifactRepository? artifactRepository = null)
     {
+        if ((artifactRecorder is null) != (artifactRepository is null))
+        {
+            throw new ArgumentException(
+                "Artifact recording needs both an IArtifactRecorder and an IArtifactRepository, or neither.",
+                artifactRecorder is null ? nameof(artifactRecorder) : nameof(artifactRepository));
+        }
+
         _agentRunRepository = agentRunRepository;
         _projectRepository = projectRepository;
         _toolRegistry = toolRegistry;
@@ -54,6 +65,8 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
         _structuredResultParser = structuredResultParser;
         _modelRouter = modelRouter;
         _routingOptions = routingOptions;
+        _artifactRecorder = artifactRecorder;
+        _artifactRepository = artifactRepository;
         _logger = logger;
     }
 
@@ -233,6 +246,14 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
             fallbackUsed = true;
         }
 
+        // Execution-adapter Phase C — workspace artifacts are recorded here, by the
+        // Factory, after the (final) execution has returned, not inside the
+        // runtime. Same recorder, same condition (successful, WorkItem-backed run
+        // with a resolved workspace), same token and same references as before;
+        // a fallback is only ever attempted after a failure, so at most one
+        // execution per AgentRun records artifacts.
+        runtimeResult = await RecordWorkspaceArtifactsAsync(run, workspacePath, runtimeResult, cancellationToken);
+
         _logger.LogInformation(
             "AgentRunModelTelemetry AgentRunId={AgentRunId} AgentType={AgentType} Model={Model} Provider={Provider} "
                 + "FallbackUsed={FallbackUsed} Attempt={Attempt} DurationMs={DurationMs} Success={Success}",
@@ -284,6 +305,43 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
             ErrorMessage: runtimeResult.ErrorMessage,
             FailureCategory: runtimeResult.FailureCategory,
             CorrelationId: run.CorrelationId);
+    }
+
+    /// <summary>
+    /// Records every file in the Factory-resolved workspace as an Artifact (the
+    /// existing IArtifactRecorder semantics) and returns the result carrying the
+    /// WorkItem's artifact ids for this Project. Only for a successful run that
+    /// has both a ProjectId and a WorkItemId and a resolved workspace; every other
+    /// run returns the runtime result unchanged. Recorder/repository exceptions,
+    /// including cancellation, propagate exactly as they did from the runtime.
+    /// </summary>
+    private async Task<AgentRunExecutionResult> RecordWorkspaceArtifactsAsync(
+        AgentRun run,
+        string? workspacePath,
+        AgentRunExecutionResult runtimeResult,
+        CancellationToken cancellationToken)
+    {
+        if (!runtimeResult.Success
+            || _artifactRecorder is null
+            || _artifactRepository is null
+            || run.ProjectId is not { } projectId
+            || run.WorkItemId is not { } workItemId
+            || string.IsNullOrWhiteSpace(workspacePath))
+        {
+            return runtimeResult;
+        }
+
+        await _artifactRecorder.RecordWorkspaceArtifactsAsync(projectId, workItemId, workspacePath, cancellationToken);
+
+        var artifacts = await _artifactRepository.GetByWorkItemIdAsync(workItemId, cancellationToken);
+
+        return runtimeResult with
+        {
+            ArtifactReferences = artifacts
+                .Where(a => a.ProjectId == projectId)
+                .Select(a => a.Id.ToString())
+                .ToArray()
+        };
     }
 
     /// <summary>Memory is contextual, not required — a memory-provider failure must never block execution.</summary>
@@ -523,6 +581,17 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
             metadata["FallbackReason"] = fallbackReason;
         }
         metadata["Attempt"] = run.Attempt.ToString();
+
+        // Execution-adapter Phase C — internal metadata only (no API/DTO surface).
+        if (!string.IsNullOrWhiteSpace(runtimeResult.ExecutionAdapter))
+        {
+            metadata["ExecutionAdapter"] = runtimeResult.ExecutionAdapter;
+        }
+
+        if (!string.IsNullOrWhiteSpace(runtimeResult.ExitReason))
+        {
+            metadata["ExitReason"] = runtimeResult.ExitReason;
+        }
 
         return baseResult with { Metadata = metadata };
     }

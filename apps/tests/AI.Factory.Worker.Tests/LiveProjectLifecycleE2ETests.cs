@@ -25,7 +25,7 @@ namespace AI.Factory.Worker.Tests;
 /// provider) counterpart to <see cref="GoldenProjectLifecycleE2ETests"/>.
 ///
 /// Nothing on the execution path is faked: the real Worker composition root,
-/// the real HermesAgentRuntime/HermesAgentExecutor, real containers, a real
+/// the real HermesExecutionAdapter/HermesAgentExecutor, real containers, a real
 /// Git-initialized Project workspace, the real IVerificationGate running real
 /// <c>dotnet build</c>/<c>dotnet test</c>, the real TaskDispatchScheduler
 /// repair policy and the real ProjectCompletionGate. The only manual lifecycle

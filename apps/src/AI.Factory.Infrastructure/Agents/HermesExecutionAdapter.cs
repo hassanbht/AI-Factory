@@ -1,0 +1,185 @@
+using System.Diagnostics;
+using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Abstractions.Execution;
+using Microsoft.Extensions.Logging;
+
+namespace AI.Factory.Infrastructure.Agents;
+
+/// <summary>
+/// Execution-adapter migration Phase C — the "Hermes" <see cref="IExecutionAdapter"/>
+/// and the single owner of Hermes execution for AgentRuns. It maps the
+/// provider-neutral <see cref="AgentExecutionSpec"/> to a Hermes request (prompt =
+/// system prompt + instructions, agent name, routed model, Factory-resolved
+/// workspace), runs it through the registered <see cref="IAgentExecutor"/> chain
+/// (ResilienceAgentExecutorDecorator -> HermesAgentExecutor, which owns the docker
+/// run arguments, -z/-m/--provider, environment and API-key injection, workspace
+/// mount, process timeout and output truncation), and interprets the result:
+/// timeout, cancellation, failure classification and exit reason.
+///
+/// Behaviour is moved unchanged from the former HermesAgentRuntime. What it does
+/// NOT do, by design: decide whether an AgentDefinition may run (the dispatcher
+/// does), record workspace artifacts (AgentOrchestrator does), touch the database
+/// or AgentRun/WorkItem/Project state, or choose a workspace or model itself.
+/// </summary>
+public sealed class HermesExecutionAdapter : IExecutionAdapter
+{
+    public const string AdapterKey = "Hermes";
+
+    private readonly IAgentExecutor _agentExecutor;
+    private readonly IFailureClassifier _failureClassifier;
+    private readonly ILogger<HermesExecutionAdapter> _logger;
+
+    public HermesExecutionAdapter(
+        IAgentExecutor agentExecutor,
+        IFailureClassifier failureClassifier,
+        ILogger<HermesExecutionAdapter> logger)
+    {
+        _agentExecutor = agentExecutor;
+        _failureClassifier = failureClassifier;
+        _logger = logger;
+    }
+
+    public string Key => AdapterKey;
+
+    // Hermes has always received AgentRun.Model as its -m value.
+    public ExecutionCapabilities Capabilities => ExecutionCapabilities.FactoryRoutedModel;
+
+    public async Task<ExecutionOutcome> ExecuteAsync(
+        AgentExecutionSpec spec,
+        CancellationToken cancellationToken = default)
+    {
+        _logger.LogInformation(
+            "AgentRuntimeStarted AgentRunId={AgentRunId} AgentDefinitionId={AgentDefinitionId} CorrelationId={CorrelationId}",
+            spec.AgentRunId, spec.Agent.DefinitionId, spec.CorrelationId);
+
+        // WorkingDirectory is the workspace AgentOrchestrator resolved for this run,
+        // never chosen here. Empty only for a Planner-only AgentRun with no
+        // WorkItemId, which HermesAgentExecutor falls back to its own fresh
+        // scratch folder for.
+        var request = new AgentExecutionRequest(
+            Agent: spec.Agent.Name,
+            Model: spec.Model.ModelId,
+            Prompt: BuildPrompt(spec),
+            WorkingDirectory: spec.Workspace.Path ?? string.Empty);
+
+        var stopwatch = Stopwatch.StartNew();
+
+        AgentExecutionResult result;
+
+        try
+        {
+            result = await _agentExecutor.ExecuteAsync(request, cancellationToken);
+        }
+        catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
+        {
+            stopwatch.Stop();
+
+            _logger.LogInformation(
+                "AgentRuntimeCancelled AgentRunId={AgentRunId} CorrelationId={CorrelationId} DurationMs={DurationMs}",
+                spec.AgentRunId, spec.CorrelationId, stopwatch.ElapsedMilliseconds);
+
+            return Outcome(
+                spec,
+                ExecutionOutcomeStatus.Cancelled,
+                output: null,
+                error: "Agent execution was cancelled.",
+                _failureClassifier.Classify(ex).Category,
+                stopwatch.ElapsedMilliseconds,
+                ExitReasons.Cancelled);
+        }
+
+        stopwatch.Stop();
+
+        if (result.Success)
+        {
+            _logger.LogInformation(
+                "AgentRuntimeCompleted AgentRunId={AgentRunId} CorrelationId={CorrelationId} DurationMs={DurationMs}",
+                spec.AgentRunId, spec.CorrelationId, result.DurationMs);
+
+            // HermesAgentExecutor reports success only for exit code 0.
+            return Outcome(
+                spec,
+                ExecutionOutcomeStatus.Succeeded,
+                result.Output,
+                error: null,
+                category: null,
+                result.DurationMs,
+                ExitReasons.Exit(result.ExitCode ?? 0));
+        }
+
+        var errorMessage = result.Error ?? "Agent execution failed with no further detail.";
+        var isTimeout = errorMessage.Contains("timed out", StringComparison.OrdinalIgnoreCase)
+            || errorMessage.Contains("timeout", StringComparison.OrdinalIgnoreCase);
+
+        var failureClassification = _failureClassifier.Classify(errorMessage, isTimeout ? "timeout" : "agent");
+
+        if (isTimeout)
+        {
+            _logger.LogWarning(
+                "AgentRuntimeTimedOut AgentRunId={AgentRunId} CorrelationId={CorrelationId} DurationMs={DurationMs}",
+                spec.AgentRunId, spec.CorrelationId, result.DurationMs);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "AgentRuntimeFailed AgentRunId={AgentRunId} CorrelationId={CorrelationId} DurationMs={DurationMs}",
+                spec.AgentRunId, spec.CorrelationId, result.DurationMs);
+        }
+
+        return Outcome(
+            spec,
+            isTimeout ? ExecutionOutcomeStatus.TimedOut : ExecutionOutcomeStatus.Failed,
+            result.Output,
+            errorMessage,
+            failureClassification.Category,
+            result.DurationMs,
+            result.ExitCode is { } exitCode
+                ? ExitReasons.Exit(exitCode)
+                : isTimeout ? ExitReasons.Timeout : ExitReasons.Error);
+    }
+
+    private static string BuildPrompt(AgentExecutionSpec spec)
+    {
+        return string.IsNullOrWhiteSpace(spec.Agent.SystemPrompt)
+            ? spec.Instructions ?? string.Empty
+            : $"{spec.Agent.SystemPrompt}\n\n{spec.Instructions}";
+    }
+
+    /// <summary>
+    /// Hermes reports no token usage, tool calls or artifact references of its
+    /// own, and runs with the model/gateway the Factory routed.
+    /// </summary>
+    private static ExecutionOutcome Outcome(
+        AgentExecutionSpec spec,
+        ExecutionOutcomeStatus status,
+        string? output,
+        string? error,
+        Domain.Enums.FailureCategory? category,
+        long durationMs,
+        string exitReason) => new(
+            status,
+            output,
+            error,
+            category,
+            durationMs,
+            Usage: null,
+            ArtifactReferences: Array.Empty<string>(),
+            ToolCallNames: Array.Empty<string>(),
+            Model: spec.Model,
+            ExitReason: exitReason);
+
+    /// <summary>
+    /// Machine-readable exit reasons: <c>exit:N</c> when the Hermes process ran to
+    /// completion with exit code N; otherwise <c>timeout</c>, <c>cancelled</c>, or
+    /// <c>error</c> (no process exit was observed — launch failure, missing
+    /// workspace, security refusal, retries exhausted, circuit open, bulkhead full).
+    /// </summary>
+    public static class ExitReasons
+    {
+        public const string Timeout = "timeout";
+        public const string Cancelled = "cancelled";
+        public const string Error = "error";
+
+        public static string Exit(int exitCode) => $"exit:{exitCode}";
+    }
+}

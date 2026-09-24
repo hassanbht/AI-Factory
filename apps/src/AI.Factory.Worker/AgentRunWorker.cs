@@ -208,7 +208,7 @@ public sealed class AgentRunWorker : BackgroundService
         }
         catch (OperationCanceledException) when (!stoppingToken.IsCancellationRequested && !_shutdown.IsStopping)
         {
-            // The normal timeout path never reaches here — HermesAgentRuntime
+            // The normal timeout path never reaches here — the execution adapter
             // already converts a cancelled execution into a classified,
             // non-thrown failure result, which the orchestrator persists as
             // TimedOut/Cancelled. This branch only guards a cancellation

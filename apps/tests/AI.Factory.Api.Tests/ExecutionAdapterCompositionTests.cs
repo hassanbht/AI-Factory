@@ -1,5 +1,7 @@
+using System.Reflection;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Abstractions.Execution;
+using AI.Factory.Application.Agents;
 using AI.Factory.Application.Execution;
 using AI.Factory.Infrastructure.Agents;
 using Microsoft.Extensions.DependencyInjection;
@@ -8,9 +10,10 @@ using Xunit;
 namespace AI.Factory.Api.Tests;
 
 /// <summary>
-/// Execution-adapter Phase B — the real Api composition root (WebApplicationFactory
+/// Execution-adapter Phases B/C — the real Api composition root (WebApplicationFactory
 /// runs Program for real) resolves IAgentRuntime to the adapter dispatcher, with
-/// exactly one registration and only the transitional Hermes adapter behind it.
+/// exactly one registration and HermesExecutionAdapter as the only adapter behind
+/// it, and wires Factory-side artifact recording into AgentOrchestrator.
 /// Service resolution only — no agent is executed.
 /// </summary>
 public sealed class ExecutionAdapterCompositionTests : IClassFixture<ApiTestFactory>
@@ -34,7 +37,7 @@ public sealed class ExecutionAdapterCompositionTests : IClassFixture<ApiTestFact
     }
 
     [Fact]
-    public void Registry_ContainsOnlyTheTransitionalHermesAdapter()
+    public void Registry_ContainsExactlyOneAdapter_HermesExecutionAdapter()
     {
         using var scope = _factory.Services.CreateScope();
 
@@ -42,7 +45,8 @@ public sealed class ExecutionAdapterCompositionTests : IClassFixture<ApiTestFact
 
         Assert.Equal(new[] { "Hermes" }, registry.Keys);
         Assert.True(registry.TryGet("Hermes", out var adapter));
-        Assert.IsType<LegacyHermesRuntimeAdapter>(adapter);
+        Assert.IsType<HermesExecutionAdapter>(adapter);
+        Assert.IsType<HermesExecutionAdapter>(Assert.Single(scope.ServiceProvider.GetServices<IExecutionAdapter>()));
     }
 
     [Fact]
@@ -63,11 +67,24 @@ public sealed class ExecutionAdapterCompositionTests : IClassFixture<ApiTestFact
     }
 
     [Fact]
-    public void ExistingHermesExecutionChain_IsStillRegistered()
+    public void IAgentExecutor_StaysRegistered_ForTheAdapterAndForReview()
     {
         using var scope = _factory.Services.CreateScope();
 
-        Assert.NotNull(scope.ServiceProvider.GetRequiredService<HermesAgentRuntime>());
-        Assert.NotNull(scope.ServiceProvider.GetRequiredService<IAgentExecutor>());
+        Assert.IsType<ResilienceAgentExecutorDecorator>(scope.ServiceProvider.GetRequiredService<IAgentExecutor>());
     }
+
+    [Fact]
+    public void AgentOrchestrator_RecordsArtifactsOnTheFactorySide()
+    {
+        using var scope = _factory.Services.CreateScope();
+
+        var orchestrator = Assert.IsType<AgentOrchestrator>(scope.ServiceProvider.GetRequiredService<IAgentOrchestrator>());
+
+        Assert.NotNull(Field(orchestrator, "_artifactRecorder"));
+        Assert.NotNull(Field(orchestrator, "_artifactRepository"));
+    }
+
+    private static object? Field(object instance, string name) =>
+        instance.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(instance);
 }

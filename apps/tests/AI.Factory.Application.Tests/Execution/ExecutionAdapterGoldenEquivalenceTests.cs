@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Agents;
 using AI.Factory.Application.Configuration;
@@ -16,22 +17,29 @@ using Xunit;
 namespace AI.Factory.Application.Tests.Execution;
 
 /// <summary>
-/// Execution-adapter Phase B golden equivalence. The same scripted underlying
-/// Hermes execution (a fake <see cref="IAgentExecutor"/> — the boundary below
-/// which HermesAgentExecutor/docker would run) is driven through two complete,
-/// real AgentOrchestrator pipelines, each on its own isolated database:
+/// Execution-adapter golden equivalence, Phase C.
 ///
-///   OLD: AgentOrchestrator -> HermesAgentRuntime
-///   NEW: AgentOrchestrator -> AdapterDispatchingAgentRuntime -> LegacyHermesRuntimeAdapter -> HermesAgentRuntime
+/// Phase B proved, scenario by scenario, that the old path
+///   AgentOrchestrator -> HermesAgentRuntime
+/// and the dispatcher path
+///   AgentOrchestrator -> AdapterDispatchingAgentRuntime -> LegacyHermesRuntimeAdapter -> HermesAgentRuntime
+/// were observably identical. Before HermesAgentRuntime was removed, the old path's
+/// observations for all 12 scenarios were recorded (on commit 5273f53) into
+/// <c>Golden/phase-b-baseline.json</c>. This test drives the same scripted Hermes
+/// execution (a fake <see cref="IAgentExecutor"/> — the boundary below which
+/// HermesAgentExecutor/docker would run) through the Phase C path
+///   AgentOrchestrator -> AdapterDispatchingAgentRuntime -> HermesExecutionAdapter
+/// with Factory-side artifact recording wired exactly as the composition roots
+/// wire it, and compares against that baseline: executor requests, exceptions,
+/// orchestration result, duration, persisted AgentRun, structured result and
+/// recorded artifacts.
 ///
-/// and everything observable is compared: what reached the executor (agent,
-/// model, prompt, working directory — i.e. every input the Hermes CLI/docker
-/// arguments are built from), the orchestration result, the persisted AgentRun
-/// (status, failure category, error, output, provider, model, tokens, attempt,
-/// full structured result incl. metadata), recorded artifacts, and exception /
-/// cancellation behavior. Artifact ids are the only normalized values (fresh
-/// Guids per database); durations are compared except where HermesAgentRuntime
-/// itself measures wall-clock time (the cancellation path).
+/// The one intended difference: structured-result metadata now also carries
+/// <c>ExecutionAdapter</c> and <c>ExitReason</c> for runs an adapter executed. Those
+/// two keys are asserted explicitly per scenario and then removed before the
+/// baseline comparison; every other byte must match. Normalized values: artifact
+/// ids (fresh Guids per database), the temp workspace path and line endings
+/// (the baseline was captured on Windows).
 /// </summary>
 public sealed class ExecutionAdapterGoldenEquivalenceTests : IDisposable
 {
@@ -43,6 +51,11 @@ public sealed class ExecutionAdapterGoldenEquivalenceTests : IDisposable
 
     private const string ValidStructuredOutput =
         """{"version":1,"status":"Succeeded","summary":"did it","output":"the answer","artifacts":["agent-said.txt"]}""";
+
+    private static readonly JsonSerializerOptions BaselineJson = new()
+    {
+        Converters = { new JsonStringEnumConverter() }
+    };
 
     private readonly string _workspace;
 
@@ -81,40 +94,61 @@ public sealed class ExecutionAdapterGoldenEquivalenceTests : IDisposable
         ExplicitModelNoRouting
     }
 
-    [Theory]
-    [InlineData(Scenario.SuccessWithValidStructuredResult)]
-    [InlineData(Scenario.SuccessWithMalformedOutput)]
-    [InlineData(Scenario.ProcessFailure)]
-    [InlineData(Scenario.ProcessTimeout)]
-    [InlineData(Scenario.LaunchFailureMessageOnly)]
-    [InlineData(Scenario.CancelledMidFlight)]
-    [InlineData(Scenario.ExecutorThrows)]
-    [InlineData(Scenario.DisabledDefinition)]
-    [InlineData(Scenario.WorkspaceBackedSuccessRecordsArtifacts)]
-    [InlineData(Scenario.WorkspaceBackedFailure)]
-    [InlineData(Scenario.RoutedModelAndProvider)]
-    [InlineData(Scenario.ExplicitModelNoRouting)]
-    public async Task OldAndNewPaths_AreObservablyEquivalent(Scenario scenario)
+    [Fact]
+    public void Baseline_CoversEveryScenario_ExactlyOnce()
     {
-        var oldPath = await RunAsync(scenario, useDispatcher: false);
-        var newPath = await RunAsync(scenario, useDispatcher: true);
+        Assert.Equal(
+            Enum.GetNames<Scenario>().OrderBy(n => n, StringComparer.Ordinal),
+            LoadBaseline().Select(b => b.Scenario).OrderBy(n => n, StringComparer.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(Scenario.SuccessWithValidStructuredResult, "exit:0")]
+    [InlineData(Scenario.SuccessWithMalformedOutput, "exit:0")]
+    [InlineData(Scenario.ProcessFailure, "exit:1")]
+    [InlineData(Scenario.ProcessTimeout, "timeout")]
+    [InlineData(Scenario.LaunchFailureMessageOnly, "error")]
+    [InlineData(Scenario.CancelledMidFlight, "cancelled")]
+    [InlineData(Scenario.ExecutorThrows, null)]
+    [InlineData(Scenario.DisabledDefinition, null)]
+    [InlineData(Scenario.WorkspaceBackedSuccessRecordsArtifacts, "exit:0")]
+    [InlineData(Scenario.WorkspaceBackedFailure, "exit:1")]
+    [InlineData(Scenario.RoutedModelAndProvider, "exit:0")]
+    [InlineData(Scenario.ExplicitModelNoRouting, "exit:0")]
+    public async Task PhaseCPath_MatchesTheRecordedPhaseBBaseline(Scenario scenario, string? expectedExitReason)
+    {
+        var baseline = LoadBaseline().Single(b => b.Scenario == scenario.ToString());
+        var actual = await RunAsync(scenario);
 
         // Sanity: each scenario actually exercised the path it claims to.
-        Assert.Equal(ExpectedStatus(scenario), oldPath.PersistedStatus);
+        Assert.Equal(ExpectedStatus(scenario).ToString(), baseline.PersistedStatus);
 
-        Assert.Equal(oldPath.ExecutorRequests, newPath.ExecutorRequests);
-        Assert.Equal(oldPath.ExceptionType, newPath.ExceptionType);
-        Assert.Equal(oldPath.ExceptionMessage, newPath.ExceptionMessage);
-        Assert.Equal(oldPath.Result, newPath.Result);
-        Assert.Equal(oldPath.PersistedStatus, newPath.PersistedStatus);
-        Assert.Equal(oldPath.PersistedRun, newPath.PersistedRun);
-        Assert.Equal(oldPath.StructuredResultJson, newPath.StructuredResultJson);
-        Assert.Equal(oldPath.ArtifactPaths, newPath.ArtifactPaths);
+        Assert.Equal(Normalize(baseline.ExecutorRequests), actual.ExecutorRequests);
+        Assert.Equal(baseline.ExceptionType, actual.ExceptionType);
+        Assert.Equal(baseline.ExceptionMessage, actual.ExceptionMessage);
+        Assert.Equal(baseline.Result, actual.Result);
+        Assert.Equal(baseline.PersistedStatus, actual.PersistedStatus.ToString());
+        Assert.Equal(baseline.PersistedRun, actual.PersistedRun);
+        Assert.Equal(baseline.ArtifactPaths, actual.ArtifactPaths);
 
         if (scenario != Scenario.CancelledMidFlight)
         {
-            Assert.Equal(oldPath.DurationMs, newPath.DurationMs);
+            Assert.Equal(baseline.DurationMs, actual.DurationMs);
         }
+
+        // The documented Phase C addition, then byte-for-byte equality without it.
+        if (expectedExitReason is null)
+        {
+            Assert.Null(actual.ExecutionAdapter);
+            Assert.Null(actual.ExitReason);
+        }
+        else
+        {
+            Assert.Equal("Hermes", actual.ExecutionAdapter);
+            Assert.Equal(expectedExitReason, actual.ExitReason);
+        }
+
+        Assert.Equal(baseline.StructuredResult, actual.StructuredResultJson);
     }
 
     private static AgentRunStatus ExpectedStatus(Scenario scenario) => scenario switch
@@ -139,6 +173,18 @@ public sealed class ExecutionAdapterGoldenEquivalenceTests : IDisposable
         int? PromptTokens, int? CompletionTokens, int? TotalTokens, int Attempt, int? StructuredResultVersion,
         bool HasStartedAt, bool HasCompletedAt);
 
+    private sealed record BaselineEntry(
+        string Scenario,
+        List<ExecutorRequest> ExecutorRequests,
+        string? ExceptionType,
+        string? ExceptionMessage,
+        ResultSnapshot? Result,
+        long? DurationMs,
+        string PersistedStatus,
+        PersistedRunSnapshot PersistedRun,
+        string? StructuredResult,
+        string[] ArtifactPaths);
+
     private sealed record PathObservation(
         string ExecutorRequests,
         string? ExceptionType,
@@ -148,9 +194,16 @@ public sealed class ExecutionAdapterGoldenEquivalenceTests : IDisposable
         AgentRunStatus PersistedStatus,
         PersistedRunSnapshot PersistedRun,
         string? StructuredResultJson,
-        string ArtifactPaths);
+        string? ExecutionAdapter,
+        string? ExitReason,
+        string[] ArtifactPaths);
 
-    /// <summary>Scripted Hermes process outcome, identical for both paths.</summary>
+    /// <summary>
+    /// Scripted Hermes process outcome — the same outputs, errors and durations the
+    /// baseline was recorded with. Exit codes are now also reported (the field did
+    /// not exist in Phase B and was never observable there), mirroring what
+    /// HermesAgentExecutor reports for the equivalent process result.
+    /// </summary>
     private sealed class ScriptedExecutor : IAgentExecutor
     {
         private readonly Scenario _scenario;
@@ -172,10 +225,11 @@ public sealed class ExecutionAdapterGoldenEquivalenceTests : IDisposable
             switch (_scenario)
             {
                 case Scenario.SuccessWithMalformedOutput:
-                    return Task.FromResult(new AgentExecutionResult(true, "not json at all", null, 120, workspace));
+                    return Task.FromResult(new AgentExecutionResult(true, "not json at all", null, 120, workspace, ExitCode: 0));
                 case Scenario.ProcessFailure:
                 case Scenario.WorkspaceBackedFailure:
-                    return Task.FromResult(new AgentExecutionResult(false, "partial stdout", "fatal: stderr text", 90, workspace));
+                    return Task.FromResult(new AgentExecutionResult(
+                        false, "partial stdout", "fatal: stderr text", 90, workspace, ExitCode: 1));
                 case Scenario.ProcessTimeout:
                     return Task.FromResult(new AgentExecutionResult(
                         false, "stdout before timeout", "Execution timed out after 300 seconds.", 300_000, workspace));
@@ -187,12 +241,12 @@ public sealed class ExecutionAdapterGoldenEquivalenceTests : IDisposable
                 case Scenario.ExecutorThrows:
                     throw new InvalidOperationException("executor exploded");
                 default:
-                    return Task.FromResult(new AgentExecutionResult(true, ValidStructuredOutput, null, 250, workspace));
+                    return Task.FromResult(new AgentExecutionResult(true, ValidStructuredOutput, null, 250, workspace, ExitCode: 0));
             }
         }
     }
 
-    private async Task<PathObservation> RunAsync(Scenario scenario, bool useDispatcher)
+    private async Task<PathObservation> RunAsync(Scenario scenario)
     {
         using var connection = new SqliteConnection("Data Source=:memory:");
         connection.Open();
@@ -216,27 +270,20 @@ public sealed class ExecutionAdapterGoldenEquivalenceTests : IDisposable
 
         await using (var db = new FactoryDbContext(options))
         {
-            var hermesRuntime = new HermesAgentRuntime(
-                executor,
-                new FailureClassifier(),
-                new FileSystemArtifactRecorder(db),
-                new ArtifactRepository(db),
-                NullLogger<HermesAgentRuntime>.Instance);
+            var executionOptions = new ExecutionOptions();
+            executionOptions.ApplyBuiltInDefault(HermesExecutionAdapter.AdapterKey);
+            executionOptions.Validate();
 
-            IAgentRuntime runtime = hermesRuntime;
-
-            if (useDispatcher)
-            {
-                var executionOptions = new ExecutionOptions();
-                executionOptions.ApplyBuiltInDefault(LegacyHermesRuntimeAdapter.AdapterKey);
-                executionOptions.Validate();
-
-                runtime = new AdapterDispatchingAgentRuntime(
-                    new ExecutionProfileResolver(
-                        executionOptions,
-                        new ExecutionAdapterRegistry(new[] { new LegacyHermesRuntimeAdapter(hermesRuntime) })),
-                    NullLogger<AdapterDispatchingAgentRuntime>.Instance);
-            }
+            var failureClassifier = new FailureClassifier();
+            var runtime = new AdapterDispatchingAgentRuntime(
+                new ExecutionProfileResolver(
+                    executionOptions,
+                    new ExecutionAdapterRegistry(new[]
+                    {
+                        new HermesExecutionAdapter(executor, failureClassifier, NullLogger<HermesExecutionAdapter>.Instance)
+                    })),
+                failureClassifier,
+                NullLogger<AdapterDispatchingAgentRuntime>.Instance);
 
             var orchestrator = new AgentOrchestrator(
                 new AgentRunRepository(db),
@@ -249,7 +296,9 @@ public sealed class ExecutionAdapterGoldenEquivalenceTests : IDisposable
                 new StructuredAgentResultParser(),
                 NullLogger<AgentOrchestrator>.Instance,
                 routing is null ? null : new ModelRouter(routing),
-                routing);
+                routing,
+                new FileSystemArtifactRecorder(db),
+                new ArtifactRepository(db));
 
             try
             {
@@ -264,12 +313,11 @@ public sealed class ExecutionAdapterGoldenEquivalenceTests : IDisposable
 
         await using var verifyDb = new FactoryDbContext(options);
         var persisted = (await new AgentRunRepository(verifyDb).GetByIdAsync(RunId))!;
-        var artifactPaths = await verifyDb.Artifacts
-            .Select(a => a.Path)
-            .ToListAsync();
+        var artifactPaths = await verifyDb.Artifacts.Select(a => a.Path).ToListAsync();
+        var (structured, adapterKey, exitReason) = SplitPhaseCMetadata(persisted.StructuredResult);
 
         return new PathObservation(
-            ExecutorRequests: JsonSerializer.Serialize(executor.Requests),
+            ExecutorRequests: Normalize(executor.Requests),
             ExceptionType: exceptionType,
             ExceptionMessage: exceptionMessage,
             Result: result is null
@@ -278,31 +326,89 @@ public sealed class ExecutionAdapterGoldenEquivalenceTests : IDisposable
                     result.Executed, result.Success, result.FinalStatus, result.Output, result.ErrorMessage,
                     result.FailureCategory, string.Join(",", result.ToolCallNames),
                     string.Join(",", result.AvailableToolNames), result.CorrelationId),
-            DurationMs: result?.DurationMs,
+            DurationMs: scenario == Scenario.CancelledMidFlight ? null : result?.DurationMs,
             PersistedStatus: persisted.Status,
             PersistedRun: new PersistedRunSnapshot(
                 persisted.Output, persisted.ErrorMessage, persisted.FailureCategory, persisted.Provider, persisted.Model,
                 persisted.PromptTokens, persisted.CompletionTokens, persisted.TotalTokens, persisted.Attempt,
                 persisted.StructuredResultVersion, persisted.StartedAtUtc is not null, persisted.CompletedAtUtc is not null),
-            StructuredResultJson: NormalizeStructuredResult(persisted.StructuredResult),
-            ArtifactPaths: string.Join("|", artifactPaths.OrderBy(p => p, StringComparer.Ordinal)));
+            StructuredResultJson: structured,
+            ExecutionAdapter: adapterKey,
+            ExitReason: exitReason,
+            ArtifactPaths: artifactPaths.Select(NormalizePath).OrderBy(p => p, StringComparer.Ordinal).ToArray());
     }
 
-    /// <summary>Artifact references are fresh per-database Guids — compared by count/position only.</summary>
-    private static string? NormalizeStructuredResult(string? json)
+    /// <summary>
+    /// Removes the two Phase C metadata keys (returning their values) and applies
+    /// the same artifact-id normalization the baseline was recorded with.
+    /// </summary>
+    private static (string? Json, string? ExecutionAdapter, string? ExitReason) SplitPhaseCMetadata(string? json)
     {
         if (json is null)
         {
-            return null;
+            return (null, null, null);
         }
 
         var parsed = JsonSerializer.Deserialize<StructuredAgentResult>(json, StructuredAgentResult.JsonOptions)!;
+        string? adapterKey = null;
+        string? exitReason = null;
+        Dictionary<string, string>? metadata = null;
+
+        if (parsed.Metadata is not null)
+        {
+            metadata = new Dictionary<string, string>();
+            foreach (var (key, value) in parsed.Metadata)
+            {
+                switch (key)
+                {
+                    case "ExecutionAdapter":
+                        adapterKey = value;
+                        break;
+                    case "ExitReason":
+                        exitReason = value;
+                        break;
+                    default:
+                        metadata[key] = value;
+                        break;
+                }
+            }
+        }
+
         var normalized = parsed with
         {
-            Artifacts = parsed.Artifacts.Select((a, i) => Guid.TryParse(a, out _) ? $"artifact-id-{i}" : a).ToArray()
+            Artifacts = parsed.Artifacts.Select((a, i) => Guid.TryParse(a, out _) ? $"artifact-id-{i}" : a).ToArray(),
+            Metadata = metadata
         };
 
-        return JsonSerializer.Serialize(normalized, StructuredAgentResult.JsonOptions);
+        return (JsonSerializer.Serialize(normalized, StructuredAgentResult.JsonOptions), adapterKey, exitReason);
+    }
+
+    private string NormalizePath(string path) => path.Replace(_workspace, "<workspace>").Replace('\\', '/');
+
+    private string Normalize(IEnumerable<ExecutorRequest> requests) => JsonSerializer.Serialize(requests.Select(r => r with
+    {
+        WorkingDirectory = NormalizePath(r.WorkingDirectory),
+        Prompt = r.Prompt.Replace(_workspace, "<workspace>").Replace("\r\n", "\n")
+    }));
+
+    private static IReadOnlyList<BaselineEntry> LoadBaseline()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "AI.Factory.slnx")))
+        {
+            dir = dir.Parent;
+        }
+
+        if (dir is null)
+        {
+            throw new InvalidOperationException("Could not locate AI.Factory.slnx above the test assembly.");
+        }
+
+        var path = Path.Combine(
+            dir.FullName, "tests", "AI.Factory.Application.Tests", "Execution", "Golden", "phase-b-baseline.json");
+
+        return JsonSerializer.Deserialize<List<BaselineEntry>>(File.ReadAllText(path), BaselineJson)!;
     }
 
     private static ModelRoutingOptions RoutingOptions()

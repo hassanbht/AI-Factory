@@ -7,9 +7,9 @@ using Xunit;
 namespace AI.Factory.Application.Tests.Execution;
 
 /// <summary>
-/// Execution-adapter Phase B — structural guarantees for the new seam, checked
-/// by reflection over the built assemblies and by scanning the new source files,
-/// so the boundary is enforced rather than merely intended.
+/// Execution-adapter Phases B/C — structural guarantees for the seam, checked by
+/// reflection over the built assemblies and by scanning source files, so the
+/// boundary is enforced rather than merely intended.
 /// </summary>
 public sealed class ExecutionAdapterArchitectureTests
 {
@@ -17,7 +17,7 @@ public sealed class ExecutionAdapterArchitectureTests
     private const string ExecutionNamespace = "AI.Factory.Application.Execution";
 
     private static readonly Assembly ApplicationAssembly = typeof(AdapterDispatchingAgentRuntime).Assembly;
-    private static readonly Assembly InfrastructureAssembly = typeof(LegacyHermesRuntimeAdapter).Assembly;
+    private static readonly Assembly InfrastructureAssembly = typeof(HermesExecutionAdapter).Assembly;
 
     private static IEnumerable<Type> NewSeamTypes() => ApplicationAssembly.GetTypes().Where(t =>
         t.Namespace is AbstractionsNamespace or ExecutionNamespace);
@@ -80,14 +80,15 @@ public sealed class ExecutionAdapterArchitectureTests
     }
 
     [Fact]
-    public void Dispatcher_DependsOnlyOnTheResolverAndALogger()
+    public void Dispatcher_DependsOnlyOnTheResolverTheFailureClassifierAndALogger()
     {
         var parameters = typeof(AdapterDispatchingAgentRuntime).GetConstructors().Single().GetParameters()
             .Select(p => p.ParameterType)
             .ToArray();
 
-        Assert.Equal(2, parameters.Length);
+        Assert.Equal(3, parameters.Length);
         Assert.Contains(typeof(ExecutionProfileResolver), parameters);
+        Assert.Contains(typeof(AI.Factory.Application.Abstractions.IFailureClassifier), parameters);
         Assert.Contains(parameters, p => p.IsGenericType && p.GetGenericTypeDefinition().Name == "ILogger`1");
     }
 
@@ -117,14 +118,95 @@ public sealed class ExecutionAdapterArchitectureTests
     }
 
     [Fact]
-    public void OnlyTheTransitionalHermesAdapter_Exists_NoFuturePlaceholders()
+    public void HermesExecutionAdapter_IsTheOnlyAdapter_NoFuturePlaceholders()
     {
         var adapters = new[] { ApplicationAssembly, InfrastructureAssembly }
             .SelectMany(a => a.GetTypes())
             .Where(t => !t.IsAbstract && !t.IsInterface && typeof(IExecutionAdapter).IsAssignableFrom(t))
             .ToArray();
 
-        Assert.Equal(new[] { typeof(LegacyHermesRuntimeAdapter) }, adapters);
+        Assert.Equal(new[] { typeof(HermesExecutionAdapter) }, adapters);
+    }
+
+    [Fact]
+    public void TransitionalAndLegacyRuntimeLayers_AreGone()
+    {
+        var names = new[] { ApplicationAssembly, InfrastructureAssembly }
+            .SelectMany(a => a.GetTypes())
+            .Select(t => t.Name)
+            .ToArray();
+
+        Assert.DoesNotContain("LegacyHermesRuntimeAdapter", names);
+        Assert.DoesNotContain("HermesAgentRuntime", names);
+        Assert.DoesNotContain("IHermesAgentRuntime", names);
+    }
+
+    [Fact]
+    public void TheDispatcher_IsTheOnlyAgentRuntime()
+    {
+        var runtimes = new[] { ApplicationAssembly, InfrastructureAssembly }
+            .SelectMany(a => a.GetTypes())
+            .Where(t => !t.IsAbstract && !t.IsInterface
+                && typeof(AI.Factory.Application.Abstractions.IAgentRuntime).IsAssignableFrom(t))
+            .ToArray();
+
+        Assert.Equal(new[] { typeof(AdapterDispatchingAgentRuntime) }, runtimes);
+    }
+
+    [Fact]
+    public void HermesAdapter_DependsOnlyOnTheHermesExecutorChainTheClassifierAndALogger()
+    {
+        var parameters = typeof(HermesExecutionAdapter).GetConstructors().Single().GetParameters()
+            .Select(p => p.ParameterType)
+            .ToArray();
+
+        Assert.Equal(3, parameters.Length);
+        Assert.Contains(typeof(AI.Factory.Application.Abstractions.IAgentExecutor), parameters);
+        Assert.Contains(typeof(AI.Factory.Application.Abstractions.IFailureClassifier), parameters);
+        Assert.Contains(parameters, p => p.IsGenericType && p.GetGenericTypeDefinition().Name == "ILogger`1");
+
+        // No persistence, artifact store or lifecycle state is reachable from it.
+        var fieldTypes = typeof(HermesExecutionAdapter)
+            .GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
+            .Select(f => f.FieldType)
+            .ToArray();
+        Assert.All(fieldTypes, t => Assert.True(
+            t == typeof(AI.Factory.Application.Abstractions.IAgentExecutor)
+                || t == typeof(AI.Factory.Application.Abstractions.IFailureClassifier)
+                || (t.IsGenericType && t.GetGenericTypeDefinition().Name == "ILogger`1"),
+            $"Unexpected dependency {t.FullName}"));
+    }
+
+    [Fact]
+    public void HermesAdapterSource_DoesNotTouchPersistenceArtifactsLifecycleOrDefinitionPolicy()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            FindSourceRoot(), "AI.Factory.Infrastructure", "Agents", "HermesExecutionAdapter.cs"));
+
+        var forbidden = new[]
+        {
+            "DbContext", "IArtifactRecorder", "IArtifactRepository", "ArtifactRepository", "RecordWorkspaceArtifacts",
+            "Repository", "TransitionTo", "AgentRunStatus", "WorkItemStatus", "ProjectStatus", ".Enabled",
+            "IWorkspaceResolver", "ProjectWorkspaceResolver"
+        };
+
+        foreach (var term in forbidden)
+        {
+            Assert.DoesNotContain(term, source, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void AgentOrchestrator_NeverConstructsRuntimeSpecificTypes()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            FindSourceRoot(), "AI.Factory.Application", "Agents", "AgentOrchestrator.cs"));
+
+        Assert.DoesNotContain("new Hermes", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExecutionAdapter(", source, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            typeof(AI.Factory.Application.Agents.AgentOrchestrator).Assembly.GetReferencedAssemblies(),
+            a => a.Name!.StartsWith("AI.Factory.Infrastructure", StringComparison.Ordinal));
     }
 
     private static IEnumerable<Type> Flatten(Type type)
@@ -150,7 +232,9 @@ public sealed class ExecutionAdapterArchitectureTests
         }
     }
 
-    private static string FindApplicationSourceDirectory()
+    private static string FindApplicationSourceDirectory() => Path.Combine(FindSourceRoot(), "AI.Factory.Application");
+
+    private static string FindSourceRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
 
@@ -164,6 +248,6 @@ public sealed class ExecutionAdapterArchitectureTests
             throw new InvalidOperationException("Could not locate AI.Factory.slnx above the test assembly.");
         }
 
-        return Path.Combine(dir.FullName, "src", "AI.Factory.Application");
+        return Path.Combine(dir.FullName, "src");
     }
 }

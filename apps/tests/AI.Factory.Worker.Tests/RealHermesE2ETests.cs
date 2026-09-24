@@ -21,6 +21,8 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
+using AI.Factory.Worker.Tests.Fixtures;
+
 namespace AI.Factory.Worker.Tests;
 
 /// <summary>
@@ -47,8 +49,13 @@ public sealed class RealHermesE2ETests
     // completion is actually reachable in this environment — OpenRouter directly (the previously
     // configured default provider) has no billing/credits for the model Hermes selects by
     // default. See .ai/context/phase-18.1.7-agent-e2e-stability.md for the full investigation.
-    private const string OmniRouteModel = "auto/coding:free";
-    private const string OmniRouteBaseUrl = "http://host.docker.internal:20128/v1";
+    //
+    // Phase D — the gateway, model and key-secret NAME now come from the same
+    // AI_FACTORY_LIVE_* variables LiveWorkerHost already reads, whose defaults are
+    // exactly the OmniRoute values that used to be hard-coded here. Unset, nothing
+    // changes; set, these tests follow the same live provider as every other one.
+    private static string OmniRouteModel => LiveWorkerHost.LiveModel;
+    private static string OmniRouteBaseUrl => LiveWorkerHost.LiveBaseUrl;
 
     private static bool Enabled =>
         bool.TryParse(Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_SMOKE_TEST"), out var enabled) && enabled;
@@ -1081,7 +1088,7 @@ public sealed class RealHermesE2ETests
             NetworkMode = "bridge",
             Provider = "openrouter",
             ProviderApiKeyEnvironmentVariable = "OPENROUTER_API_KEY",
-            ProviderApiKeySecretName = "OMNIROUTE_API_KEY"
+            ProviderApiKeySecretName = LiveWorkerHost.LiveApiKeySecretName
         };
         hermesOptions.AdditionalEnvironmentVariables["OPENROUTER_BASE_URL"] = OmniRouteBaseUrl;
         configureHermes?.Invoke(hermesOptions);

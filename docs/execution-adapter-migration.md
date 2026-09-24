@@ -13,8 +13,8 @@ AI Factory stays the control plane. Adapters execute one AgentRun and report an 
 |---|---|---|
 | A | Architecture assessment and migration plan | Done (Gate 1 approved) |
 | B | Execution-adapter abstraction with no behaviour change | Done, see below |
-| **C** | **Real `HermesExecutionAdapter`; artifact recording and disabled-definition policy moved to the Factory** | **Done, see below** |
-| D | Full and live Hermes regression | Not started |
+| C | Real `HermesExecutionAdapter`; artifact recording and disabled-definition policy moved to the Factory | Done, see below |
+| **D** | **Full and live Hermes regression** | **Done, see below** |
 | D.1 | Runtime lifecycle hardening (named containers, cleanup, no hidden timeout retries, single timeout, pinned image) | Not started |
 | E | `OpenHandsExecutionAdapter` (pinned Agent Server, per-run container) | Not started |
 | F / G | Dual-run harness and empirical Hermes vs OpenHands comparison | Not started |
@@ -326,3 +326,160 @@ Evidence recorded 2026-09-24 on the working tree over `5273f53`.
   - the gateway still bound globally through `HermesOptions.Provider`.
 - **Artifact semantics:** changed-files-only recording (G-ARTIFACTS).
 - **Test evidence:** gated live tests still report *Passed* when disabled (see Phase B).
+
+## Phase D: Real Hermes Regression and Live End-to-End Validation
+
+Recorded 2026-09-24 on `0283c8e` (Phase C) plus the Phase D test-only changes listed under *Files*. Validation only: no production code, configuration, schema, API or Flutter change.
+
+### Environment
+
+| Item | Value |
+|---|---|
+| Docker | Docker Desktop, server 29.8.0 (WSL 2 backend). It was stopped at the start and was started for this phase. |
+| Hermes image | `nousresearch/hermes-agent:latest`, image id `ef2bbf0546f7`, pulled 5 days before the run (not pinned; see D.1) |
+| Live gate | `AI_FACTORY_HERMES_SMOKE_TEST=true`, loaded from the git-ignored `.env.live` into the test process only |
+| Gateway | **OpenRouter**, `AI_FACTORY_LIVE_BASE_URL=https://openrouter.ai/api/v1`, key secret name `AI_FACTORY_LIVE_API_KEY_SECRET=OPENROUTER_API_KEY` (PRESENT). OmniRoute was also exercised; see *Gateway*. |
+| Models | Planner, Review and general roles: `deepseek/deepseek-v4-flash-0731`. Implementation, Repair, Test and Documentation: `qwen/qwen3-coder`. |
+| Model override | `.env.live` names `deepseek/deepseek-v4-flash-0731:free`. OpenRouter now answers that slug with `HTTP 404: This model is unavailable for free` and names the paid slug instead. For the test processes only, the three `:free` values were replaced by the provider-named slug; `.env.live` was not edited. |
+| Databases | One throwaway SQLite file per test (`%TEMP%\live-e2e-*\factory.db`, WAL), in-memory SQLite for `RealHermesE2ETests`, and `%TEMP%\phase-d-proc-*\factory.db` for the process-level run. `C:\AI-Factory\data\factory.db` and the production Docker volumes were not touched. |
+| Workspaces | Disposable temp directories only. Every Hermes data volume was disposable after the first smoke attempt (see *Failures*, F-1). |
+| Credentials | `OPENROUTER_API_KEY` = PRESENT, `OMNIROUTE_API_KEY` = PRESENT. Values were never printed, and every captured log was checked mechanically for them. Spend for the whole phase: about USD 0.42. |
+
+Starting Docker Desktop also started the existing `ai-factory` compose stack (`ai-factory-api-1`, `ai-factory-worker-1`, `hermes`), because their restart policy is `unless-stopped`. They were left as they were. They use their own volumes and never shared a database with the runs below.
+
+### Test-only changes made in this phase
+
+- `Fixtures/LiveExecutionEvidence.cs` (new). It reads back from the live run's own database the AgentRuns (id, WorkItem, attempt, provider, model, status, failure category, `ExecutionAdapter`, `ExitReason`), artifact rows per WorkItem, ValidationRuns and ReviewRuns. It asserts that every succeeded AgentRun persisted `ExecutionAdapter=Hermes` and a non-empty `ExitReason`. `LivePlannerE2ETests` and `LiveProjectLifecycleE2ETests` call it just before the approval step.
+- `RealHermesE2ETests` and `RealHermesApiE2ETests` hard-coded the OmniRoute base URL, key secret name and model. They now read the same `AI_FACTORY_LIVE_BASE_URL`, `AI_FACTORY_LIVE_API_KEY_SECRET` and `AI_FACTORY_LIVE_MODEL` variables that `LiveWorkerHost` already reads, with the previous OmniRoute values as defaults. With the variables unset nothing changes. No new variable names were introduced.
+
+### Real execution evidence
+
+"Live" means the gate was enabled, a real Hermes container ran, and a real model request was made. Tests whose gate was off are not counted here.
+
+| Test | Result | Evidence | Duration | AgentRun | WorkItem | Model | Gateway |
+|---|---|---|---|---|---|---|---|
+| `HermesSmokeTest` (executor level, bypasses the adapter) | **Passed** | container created, started, died and destroyed; `hello.txt` written with the exact content | 37 s | n/a (executor only) | n/a | deepseek-v4-flash-0731 | OpenRouter |
+| `RealHermesApiE2ETests` (OmniRoute defaults) | Failed (D) | `POST /api/agents/runs` → claim → orchestrate → `HermesExecutionAdapter` → Hermes exit 2; OmniRoute's own call log recorded `POST /v1/chat/completions` combo `auto/coding:free` → 403 from `oc/big-pickle` | 47 s | `63df3493-1fe7-4278-a0f7-46353cf126a0` | none | auto/coding:free | OmniRoute |
+| `RealHermesApiE2ETests` (OpenRouter) | **Passed** | API POST → Factory claim → adapter → Hermes exit 0 in 37,962 ms → API GET `Succeeded` with the marker in the output | 41 s | `baa8dad1-b176-4d47-a1c1-992af9445428` | none | deepseek-v4-flash-0731 | OpenRouter |
+| `LivePlannerE2ETests.AutonomousStart_…_HumanApproval` | **Passed** | full lifecycle below; 6 containers (4 AgentRuns + 2 reviews), all removed | 9 m 16 s | Planner `54102027-b45f-4f14-9659-e1acdfddf44a`, Implementation `8778b446-571a-4db7-b1bc-f235fea4bfee`, Repair `2021926e-21ef-4c7c-85bb-a53d030c8daa`, Documentation `bfaf03d5-47c4-402e-b4d4-e7712479a67e` | `4b3d7ea8-6aae-4084-8bc2-2aa89d4a4da2`, `741f465d-961e-41cf-a46c-e386baadb902` | deepseek (Planner, Review), qwen3-coder (the rest) | OpenRouter |
+| `LiveProjectLifecycleE2ETests` | Failed (F) | T01 and T02 both executed live (exit 0), passed real verification, were reviewed and reached `Completed`; the test then failed on its own expectation that T02 enters `Repairing` | 8 m 19 s | `0f550924-b275-4677-9946-e3bf821ae2aa`, `427b9539-a98a-41b0-b117-a4f02eb1c9d1` | `6943da62-0be3-4d77-bef2-e8bd5cb87127`, `03ada6c7-aac4-4519-985f-fcfc95cf5030` | qwen3-coder | OpenRouter |
+| `RealHermesE2ETests` (11 tests, OpenRouter) | 2 passed, 9 failed (B/F) | 14 containers created, 11 started; see *Failures* | 19.5 min | several | | deepseek-v4-flash-0731 | OpenRouter |
+| `LiveWorkerRecoveryE2ETests` | Failed (B), 4 of 4 runs | Planner AgentRun `1cdbdde1-a6aa-4257-846e-dddf4b9767cf` genuinely `Running` when the Worker was interrupted | 14–17 s | `1cdbdde1-…` | none | deepseek-v4-flash-0731 | OpenRouter |
+| **Process-level run** (real `AI.Factory.Api` and `AI.Factory.Worker` executables, Production environment, driven only over HTTP) | **Completed** | lifecycle and HTTP approval below; 6 containers, all removed | 44 min wall clock (31 min of it waiting for AgentDefinition registration, see G-1) | Planner `22778351-8096-4492-83B5-9F19D8BB60E3`, Implementation `1E641431-FA9C-4EAA-8888-37E8C346508D`, Repair `B3341852-E867-4B88-9F6B-F2168F013C63`, Documentation `0F67F51B-14DF-47B7-A441-7A3C4F2C8C03` | `DBCD482D-B4E4-46DD-A5BA-82634BF758B2`, `E50C6E8A-D1D3-47EB-9811-B5AF12632D75` | deepseek (Planner, Review), qwen3-coder (the rest) | OpenRouter |
+
+### Lifecycle evidence
+
+From the process-level run, Project `4ac8931f-03ba-4f06-823c-8b17e60f4d7e`. Every value comes from the HTTP responses and the persisted audit trail. The in-process `LivePlannerE2ETests` run showed the same sequence for Project `fae1ac84-5f58-474e-bcdd-4c1b1df4dd6a`.
+
+| Stage | Evidence | Actor |
+|---|---|---|
+| Create | `POST /api/projects` → 201 | operator (HTTP) |
+| Source | `POST /api/projects/{id}/source` (GitRepository, a real bare repo) → 200 | operator (HTTP) |
+| Start | `POST /api/projects/{id}/start` → 200; audit `WorkflowStarted Analyzing` | Human/qa-lead@factory.local |
+| Specification, Architecture, Planning | audit `WorkflowStateChanged` | System/ProjectLifecycleOrchestrator |
+| Planner | AgentRun `22778351…` Succeeded; plan materialized into 2 WorkItems with a dependency (`release.notes` ← `greeting.update` in the in-process run) | Factory dispatch |
+| WorkItems, Execution | Implementation run, then verification **failed** (the pinned greeting test broke, by construction), then Repair run (`RepairAttemptCount=1`), then verification passed; the Documentation run was dispatched only after its prerequisite `Completed` | Factory |
+| Acceptance | ValidationRuns: both WorkItems Success=1, Build=1, Tests=1; `WorkItemAcceptancePassed`; project-level `ValidationResult Passed` | System/ProjectCompletionGate |
+| Reviewing | audit `WorkflowStateChanged Reviewing`; ReviewRuns persisted for both WorkItems (see *Failures*, G-2) | System/ProjectCompletionGate |
+| HumanReview | `GET` 20:58:59 → `HumanReview`; held 20 s; `GET` 20:59:19 → still `HumanReview`, same `updatedAtUtc` | System/ProjectCompletionGate |
+| Approve | `POST /api/projects/{id}/approve` `{"actor":"qa-lead@factory.local"}` → **200**, body `status: Completed`; audit `HumanApproval Approved` | Human/qa-lead@factory.local |
+| Completed | `GET /api/projects/{id}` → `Completed` | the approval only |
+
+No agent or runtime moved the Project to `Completed`. The only transition into `Completed` is the `HumanApproval` audit entry from the Human actor. The in-process test also re-proved that the generic `TransitionStatusAsync(…, Completed)` throws `ConflictException`.
+
+The workspace really changed: `GetGreeting()` returns `Hello, AI Factory!`, `RELEASE_NOTES.md` contains exactly that line, and the repair updated the pinned test. Only the project's own workspace existed under the throwaway projects root. Each container mounted only that workspace and its own disposable data volume.
+
+### Artifacts
+
+Recorded by `AgentOrchestrator` (Phase C) from the Factory-resolved workspace:
+
+| Run | WorkItem | ProjectId | Rows | Distinct paths |
+|---|---|---|---|---|
+| process-level | `DBCD482D…` (Implementation plus Repair) | `4AC8931F…` | 12 | 6 |
+| process-level | `E50C6E8A…` (Documentation) | `4AC8931F…` | 6 | 6 |
+| `LivePlannerE2ETests` | `4b3d7ea8…` (Implementation plus Repair) | `fae1ac84…` | 12 | 6 |
+| `LivePlannerE2ETests` | `741f465d…` (Documentation) | `fae1ac84…` | 6 | 6 |
+
+The paths are the six workspace files (`Demo.slnx`, `src/Demo.csproj`, `src/GreetingService.cs`, `tests/Demo.Tests.csproj`, `tests/GreetingServiceTests.cs`, `RELEASE_NOTES.md`) under the project's own root. Every row carries the correct ProjectId and WorkItemId.
+
+Recording happens once per successful WorkItem-backed AgentRun. The Implementation and Repair runs each recorded the full file set, which gives 12 rows for 6 paths. That is exactly the preserved "record every file on every successful run" semantics. Duplicate rows per path are a G-ARTIFACTS item, not a Phase C change. The Planner run has no WorkItem and recorded nothing, as specified.
+
+### Metadata
+
+`ExecutionAdapter` and `ExitReason` were persisted for every live AgentRun that an adapter executed:
+
+| Source | AgentRuns | `ExecutionAdapter` | `ExitReason` |
+|---|---|---|---|
+| process-level DB | all 4 (Planner, Implementation, Repair, Documentation) | `Hermes` | `exit:0` |
+| `LivePlannerE2ETests` DB, asserted | all 4 | `Hermes` | `exit:0` |
+
+Failure paths observed live, from `RealHermesE2ETests`:
+- timeout: status `TimedOut`, category `Timeout`
+- worker-execution cancellation: status `Cancelled`, category `Cancelled`
+- invalid network: `docker run` exit 125, retries exhausted, category `Agent`
+
+The in-memory databases of those tests are not reachable afterwards, so their `ExitReason` values (`timeout`, `cancelled`, `error`) were not read back live. They are covered deterministically by the golden and adapter tests.
+
+### Gateway
+
+- **OpenRouter** executed. Its `/api/v1/key` usage rose from USD 2.501 to 2.924 across the phase. The Worker's `ModelRoutingPreflight` verified every configured model against it at startup: `anthropic/claude-sonnet-5`, `openai/gpt-5.1`, `deepseek/deepseek-v4-flash-0731` and `qwen/qwen3-coder`.
+- **OmniRoute** executed and was genuinely in the path, not bypassed. Its own call log (`~/.omniroute/call_logs/2026-09-24`) recorded `POST /v1/chat/completions` combo `auto/coding:free` at 19:31:11 UTC. OmniRoute routed it upstream to `oc/big-pickle`, which answered 403. OmniRoute was not running at the start; it was started for this phase and left running.
+
+### Failures
+
+Categories follow §28.
+
+| Id | Test | Exact error | Component | Repro | Class | Code change? | Blocks? |
+|---|---|---|---|---|---|---|---|
+| F-1 | `HermesSmokeTest`, first attempt | `Hermes execution failed` (s6 log only); Hermes warned that the SQLite WAL was on a cross-VM filesystem | test default data volume `D:\Project\.hermes`, which is shared with the user's running `hermes` container | 1 | C | no; reran with the existing `AI_FACTORY_HERMES_DATA` variable pointing at a disposable directory | no |
+| D-1 | all live tests, first attempt | `HTTP 404: This model is unavailable for free` for `deepseek/deepseek-v4-flash-0731:free` | OpenRouter catalog | 2 | D | no; provider-named paid slug used in the test process only. The shipped `appsettings.Production.json` also routes planning to this slug. | no |
+| C-1 | OmniRoute-wired tests, first attempt | `Invalid API key` from OmniRoute | `.env.live` `OMNIROUTE_API_KEY` | 1 | C | no; the user corrected the key | no |
+| D-2 | `RealHermesApiE2ETests` (OmniRoute) | `[403] oc/big-pickle … OpenCode's free tier can only be used from within OpenCode` | OmniRoute upstream for `auto/coding:free` | 1 | D | no; the same test passes on OpenRouter | no |
+| F-2 | `LiveProjectLifecycleE2ETests` | `WorkItem 03ada6c7… reached terminal status Completed instead of Repairing` | test expectation | 1 | F | no; the test waits for `Repairing` although nothing in T02 fails verification. It passed in Phase 18.22 only because that model missed the file on its first try. | no |
+| B-1 | `RealHermesE2ETests`: Smoke, StructuredResult, Planner, Memory, Stability, WorkerRecovery, FullProjectLifecycle_WithRepair | `Assert.NotNull() Failure` after the wait. Hermes exited 0 and `AgentRuntimeCompleted` was logged, then `AgentOrchestrator.ExecuteAsync` (line 283) → `AgentRunRepository.UpdateAsync` threw `ConcurrencyConflictException` (0 rows affected), plus `SQLite Error 5: database is locked` | this harness: one shared in-memory `SqliteConnection` across the worker, heartbeat and test contexts | reproduced identically on **Phase B `5273f53`** (Smoke, Stability, FullProjectLifecycle) | B | no; not a Phase C change. The file-based `LiveWorkerHost` tests do not hit it. | no |
+| B-2 | `RealHermesE2ETests`: WorkItemExecution_…UpdatesPersistedWorkItemState, RealHermes_WorkItemExecution_… | `AgentWorkspaceResolutionFailed`: workspace under `C:\ProgramData\AI-Factory\workspace\…` does not exist / path resolves outside the configured root | the test provisions workspaces outside what the Windows production overlay resolves | reproduced identically on Phase B | B | no | no |
+| B-3 | `LiveWorkerRecoveryE2ETests` | `The orphaned AgentRun was not marked as recovered by orphan recovery.` The interrupted run ended `Cancelled/Cancelled`, written by the dying Worker, instead of being left for orphan recovery | worker shutdown vs recovery expectation | 4 of 4 (2 on Phase B, 2 on Phase D) | B | no | no |
+
+No failure was classified A (Phase C regression). Every A/B comparison against `5273f53` behaved identically, and no production code was changed.
+
+### Known pre-existing flake
+
+`MultiWorkerRecoveryAcceptanceTests.TwoWorkers_SharingSqlite_…` (SQLite recovery race, documented under Phase C: 3 of 20 isolated failures on clean HEAD). It did **not** fail in any of the four full-suite runs in this phase, and it is unrelated to the live paths above.
+
+### D.1 findings (observed, not changed)
+
+- **Unnamed containers and cleanup.** Every container gets a random name (for example `vigorous_bell`, `optimistic_cerf`).
+  - When the test host was killed mid-run, its container kept running for about 25–30 s until its one-shot command finished.
+  - A cancellation or timeout before `docker run` started a container left two containers permanently in `Created` state with `AutoRemove=true` (`upbeat_cartwright`, `crazy_austin`, mounts `ai-factory-e2e-*`, from the Phase B A/B run of the same unchanged executor). Auto-remove never fires for a container that never started.
+  - At the end of that run a third container was still `Up` after the test finished.
+- **Hidden retries.** The Hermes process timeout (2 s) was reported as `Transient agent execution error: Execution timed out` and retried three times before `TimedOut`. A deterministic configuration error (`network ai-factory-invalid-network not found`, exit 125) was also retried three times as "Transient", creating three containers that never started.
+- **Timeout layers.** Hermes `TimeoutSeconds` (a docker-run ceiling), the resilience decorator's attempt budget, and `AgentWorker.ExecutionTimeout` all acted in the timeout and cancellation tests. `AgentRuntimeTimedOut` then reported `DurationMs=0` after retries were exhausted.
+- **Image pinning.** `:latest` resolved to `ef2bbf0546f7`, 5 days old. This image prints `[stage2]` bootstrap lines and a config-migration warning to stdout. That breaks review parsing (G-2) and is a behaviour change the Factory did not choose.
+
+### Known limitations (G)
+
+- **G-1:** a fresh database has no AgentDefinitions. Until an operator registers them, the Factory holds the project in `Planning` and reports `No enabled AgentDefinition with AgentType 'Planner'`. That matches the documented v1.0.0 behaviour ("operational data, not seed data"). In the process-level run they were registered through the existing `POST /api/agents/definitions`, and the same Project then continued by itself.
+- **G-2:** review ran for real, but its findings could not be parsed. `AgentCodeReviewer` still calls `IAgentExecutor` directly (Phase H) with `deepseek/deepseek-v4-flash-0731`. Each review container exited 0, but the image's stdout noise made the findings unparseable, so each review degraded to one non-blocking Info finding. The review stage was executed and persisted; its content was not useful. `AgentCodeReviewer` is unchanged by Phase C.
+
+### Regression after live execution
+
+| Check | Result |
+|---|---|
+| Baseline before any live run: `dotnet build apps/AI.Factory.slnx` | 0 warnings, 0 errors |
+| Baseline full suite, run 1 and run 2 | 1,477 / 1,477 each (Api 315, Application 1,057, Worker 105) |
+| After live execution: build | 0 warnings, 0 errors |
+| After live execution: full suite, run 1 and run 2 | 1,477 / 1,477 each (Api 315, Application 1,057, Worker 105) |
+| `dotnet format --verify-no-changes` on the Phase D files | new code clean; the only findings are the pre-existing mis-indented comment block at `LivePlannerE2ETests.cs:313-320`, which this phase did not touch (its diff starts at line 356) |
+
+The full suite runs with the live gate unset. Its live tests return early there and are **not** counted as live evidence. The focused Hermes, adapter, lifecycle, Worker-recovery, composition-root and architecture tests are all part of those four green runs. The live results are only the ones in *Real execution evidence*.
+
+### Live execution summary
+
+| Runtime | Status |
+|---|---|
+| Hermes | EXECUTED |
+| OpenRouter | EXECUTED |
+| OmniRoute | EXECUTED (reached; upstream returned 403) |
+| OpenHands | NOT EXECUTED |
+
+No database schema or migration change; the process-level run applied the existing migrations to a throwaway file. No API, DTO or endpoint change. No Flutter change.

@@ -353,6 +353,10 @@ public sealed class LivePlannerE2ETests
             // rather than inferred from the final status.
             await AssertLifecycleEvidenceAsync(live, projectId, cancellationToken);
 
+            // Phase D — persisted execution evidence (adapter metadata,
+            // artifacts, verification, review), read back before the approval.
+            await LiveExecutionEvidence.ReportAsync(live, projectId, _output, cancellationToken);
+
             // §13.6/§13.7 — the generic transition stays refused; approval is the
             // one manual step and the only way out.
             await using (var scope = live.Host.Services.CreateAsyncScope())

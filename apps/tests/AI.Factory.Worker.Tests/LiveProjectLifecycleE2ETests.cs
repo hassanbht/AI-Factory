@@ -256,6 +256,10 @@ public sealed class LiveProjectLifecycleE2ETests
         Assert.Equal(ProjectStatus.HumanReview, humanReviewProject.Status);
         _output.WriteLine("Project reached HumanReview.");
 
+        // Phase D — persisted execution evidence (adapter metadata, artifacts,
+        // verification, review), read back before the approval.
+        await LiveExecutionEvidence.ReportAsync(live, projectId, _output, cancellationToken);
+
         // ── 8. Human approval is the only way out of HumanReview (§20) ──────
         await using (var scope = live.Host.Services.CreateAsyncScope())
         {

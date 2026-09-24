@@ -25,6 +25,17 @@ public sealed class RealHermesApiE2ETests
     private static bool Enabled =>
         bool.TryParse(Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_SMOKE_TEST"), out var enabled) && enabled;
 
+    // Phase D — the same AI_FACTORY_LIVE_* variables the Worker live harness reads
+    // (LiveWorkerHost), with the previously hard-coded OmniRoute values as defaults.
+    private static string LiveBaseUrl =>
+        Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_BASE_URL") ?? "http://host.docker.internal:20128/v1";
+
+    private static string LiveModel =>
+        Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_MODEL") ?? "auto/coding:free";
+
+    private static string LiveApiKeySecretName =>
+        Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_API_KEY_SECRET") ?? "OMNIROUTE_API_KEY";
+
     [Fact]
     public async Task PostRun_ThenRealClaimAndOrchestrate_ThenGet_ShowsSucceeded()
     {
@@ -60,9 +71,9 @@ public sealed class RealHermesApiE2ETests
                 NetworkMode = "bridge",
                 Provider = "openrouter",
                 ProviderApiKeyEnvironmentVariable = "OPENROUTER_API_KEY",
-                ProviderApiKeySecretName = "OMNIROUTE_API_KEY"
+                ProviderApiKeySecretName = LiveApiKeySecretName
             };
-            hermesOptions.AdditionalEnvironmentVariables["OPENROUTER_BASE_URL"] = "http://host.docker.internal:20128/v1";
+            hermesOptions.AdditionalEnvironmentVariables["OPENROUTER_BASE_URL"] = LiveBaseUrl;
             services.AddSingleton(hermesOptions);
         }));
 
@@ -99,7 +110,7 @@ public sealed class RealHermesApiE2ETests
                 // directly so HermesAgentExecutor's -m flag selects a real,
                 // reachable model via OmniRoute.
                 var created = await runRepository.GetByIdAsync(runId);
-                created!.Model = "auto/coding:free";
+                created!.Model = LiveModel;
                 await runRepository.UpdateAsync(created);
 
                 var claimed = await runRepository.TryClaimNextPendingAsync();

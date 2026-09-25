@@ -1,5 +1,11 @@
 using System.Text.Json;
+using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Abstractions.Execution;
+using AI.Factory.Domain.Enums;
+using AI.Factory.Infrastructure.Agents;
+using AI.Factory.Infrastructure.Agents.OpenHands;
 using AI.Factory.Worker.Tests.Fixtures;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -23,23 +29,37 @@ public sealed class RuntimeBenchmarkE2ETests
         (bool.TryParse(Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_SMOKE_TEST"), out var h) && h) ||
         (bool.TryParse(Environment.GetEnvironmentVariable("AI_FACTORY_OPENHANDS_SMOKE_TEST"), out var o) && o);
 
-    [Fact]
-    public void CanonicalBaseline_CreatesReproducibleState_WithIdenticalTreeHash()
+    [Theory]
+    [InlineData("TaskA")]
+    [InlineData("TaskB")]
+    [InlineData("TaskC")]
+    [InlineData("TaskD")]
+    public void CanonicalBaseline_CreatesReproducibleState_AcrossAllRepresentativeTaskCategories(string taskKey)
     {
-        var tempA = Path.Combine(Path.GetTempPath(), "aif-bench-baseline-a-" + Guid.NewGuid().ToString("N")[..8]);
-        var tempB = Path.Combine(Path.GetTempPath(), "aif-bench-baseline-b-" + Guid.NewGuid().ToString("N")[..8]);
+        var task = taskKey switch
+        {
+            "TaskA" => BenchmarkTaskDefinition.TaskA_SingleFile(),
+            "TaskB" => BenchmarkTaskDefinition.TaskB_MultiFile(),
+            "TaskC" => BenchmarkTaskDefinition.TaskC_BugFix(),
+            "TaskD" => BenchmarkTaskDefinition.TaskD_TestRepair(),
+            _ => throw new ArgumentOutOfRangeException(nameof(taskKey))
+        };
+
+        var tempA = Path.Combine(Path.GetTempPath(), $"aif-bench-baseline-a-{task.TaskId}-" + Guid.NewGuid().ToString("N")[..8]);
+        var tempB = Path.Combine(Path.GetTempPath(), $"aif-bench-baseline-b-{task.TaskId}-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(tempA);
         Directory.CreateDirectory(tempB);
 
         try
         {
-            var (repoA, shaA, hashA) = BenchmarkHarness.CreateCanonicalBaselineBareRepo(tempA);
-            var (repoB, shaB, hashB) = BenchmarkHarness.CreateCanonicalBaselineBareRepo(tempB);
+            var (repoA, shaA, hashA) = BenchmarkHarness.CreateCanonicalBaselineBareRepo(tempA, task);
+            var (repoB, shaB, hashB) = BenchmarkHarness.CreateCanonicalBaselineBareRepo(tempB, task);
 
             Assert.True(File.Exists(Path.Combine(repoA, "HEAD")));
             Assert.True(File.Exists(Path.Combine(repoB, "HEAD")));
             Assert.NotEmpty(shaA);
             Assert.NotEmpty(shaB);
+            Assert.Equal(shaA, shaB);
             Assert.Equal(hashA, hashB);
         }
         finally
@@ -55,6 +75,8 @@ public sealed class RuntimeBenchmarkE2ETests
         var record = new BenchmarkRunRecord
         {
             BenchmarkId = "BENCH-001",
+            TaskCategory = "MultiFileFeature",
+            TaskTitle = "Implement Multiply in Calculator",
             Runtime = "Hermes",
             RunId = Guid.NewGuid(),
             WorkItemId = Guid.NewGuid(),
@@ -88,6 +110,7 @@ public sealed class RuntimeBenchmarkE2ETests
 
         Assert.NotNull(deserialized);
         Assert.Equal(record.BenchmarkId, deserialized!.BenchmarkId);
+        Assert.Equal(record.TaskCategory, deserialized.TaskCategory);
         Assert.Equal(record.Runtime, deserialized.Runtime);
         Assert.Equal(record.RunId, deserialized.RunId);
         Assert.Null(deserialized.InputTokens);
@@ -97,39 +120,193 @@ public sealed class RuntimeBenchmarkE2ETests
     }
 
     [Fact]
-    public void FileClassification_CategorizesRequiredAndIncidentalCorrectly()
+    public void FileClassification_CategorizesRequiredAndIncidentalCorrectly_ForEveryTask()
     {
-        var testPaths = new[]
+        var tasks = new[]
         {
-            ("src/Calculator.cs", "Required"),
-            ("tests/CalculatorTests.cs", "Required"),
-            ("NOTES.md", "Required"),
-            ("src/obj/Debug/net10.0/Demo.dll", "AcceptableIncidental"),
-            ("src/bin/Debug/net10.0/Demo.dll", "AcceptableIncidental"),
-            (".git/index", "AcceptableIncidental"),
-            ("unexpected_file.txt", "Unexpected")
+            BenchmarkTaskDefinition.TaskA_SingleFile(),
+            BenchmarkTaskDefinition.TaskB_MultiFile(),
+            BenchmarkTaskDefinition.TaskC_BugFix(),
+            BenchmarkTaskDefinition.TaskD_TestRepair()
         };
 
-        foreach (var (path, expected) in testPaths)
+        foreach (var task in tasks)
         {
-            string actual;
-            if (path.Equals("src/Calculator.cs", StringComparison.OrdinalIgnoreCase) ||
-                path.Equals("tests/CalculatorTests.cs", StringComparison.OrdinalIgnoreCase) ||
-                path.Equals("NOTES.md", StringComparison.OrdinalIgnoreCase))
-            {
-                actual = "Required";
-            }
-            else if (path.Contains("obj/") || path.Contains("bin/") || path.Contains(".git/"))
-            {
-                actual = "AcceptableIncidental";
-            }
-            else
-            {
-                actual = "Unexpected";
-            }
-
-            Assert.Equal(expected, actual);
+            Assert.NotNull(task.FileClassifier);
+            Assert.Equal("AcceptableIncidental", task.FileClassifier("src/obj/Debug/net10.0/Demo.dll"));
+            Assert.Equal("AcceptableIncidental", task.FileClassifier("src/bin/Debug/net10.0/Demo.dll"));
+            Assert.Equal("AcceptableIncidental", task.FileClassifier(".git/index"));
+            Assert.Equal("Unexpected", task.FileClassifier("arbitrary_foreign_file.exe"));
         }
+    }
+
+    [Fact]
+    public async Task CancellationMatrix_CancelBeforeLaunch_BothAdapters_TerminateCancelledWithoutContainers()
+    {
+        var tempWs = Path.Combine(Path.GetTempPath(), "aif-cancel-test-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tempWs);
+
+        try
+        {
+            var spec = new AgentExecutionSpec(
+                AgentRunId: Guid.NewGuid(),
+                CorrelationId: Guid.NewGuid(),
+                ProjectId: Guid.NewGuid(),
+                WorkItemId: Guid.NewGuid(),
+                Attempt: 1,
+                Iteration: 0,
+                Agent: new ExecutionAgent(Guid.NewGuid(), "Coder", "Implementation", "sys"),
+                Instructions: "inst",
+                Workspace: new ExecutionWorkspace(tempWs),
+                Model: new ModelRoute("deepseek/deepseek-v4-flash-0731", "openrouter"),
+                Deadline: DateTimeOffset.UtcNow.AddMinutes(5));
+
+            using var cts = new CancellationTokenSource();
+            cts.Cancel(); // Cancel before launch
+
+            var classifier = new FailureClassifier();
+
+            // 1. Hermes
+            var hermesExecutor = new StubExecutor();
+            var hermesAdapter = new HermesExecutionAdapter(
+                hermesExecutor, classifier, NullLogger<HermesExecutionAdapter>.Instance);
+
+            var hermesOutcome = await hermesAdapter.ExecuteAsync(spec, cts.Token);
+
+            Assert.Equal(ExecutionOutcomeStatus.Cancelled, hermesOutcome.Status);
+            Assert.Equal(HermesExecutionAdapter.ExitReasons.Cancelled, hermesOutcome.ExitReason);
+            Assert.Equal(1, hermesExecutor.CallCount); // Delegated with token to executor
+
+            // 2. OpenHands
+            var ohRunner = new StubProcessRunner();
+            var ohLifecycle = new StubLifecycleManager();
+            var ohClientFactory = new StubClientFactory();
+            var ohAdapter = new OpenHandsExecutionAdapter(
+                new OpenHandsOptions(),
+                ohRunner,
+                ohLifecycle,
+                classifier,
+                NullLogger<OpenHandsExecutionAdapter>.Instance,
+                ohClientFactory);
+
+            var ohOutcome = await ohAdapter.ExecuteAsync(spec, cts.Token);
+
+            Assert.Equal(ExecutionOutcomeStatus.Cancelled, ohOutcome.Status);
+            Assert.Equal(OpenHandsExecutionAdapter.ExitReasons.Cancelled, ohOutcome.ExitReason);
+            Assert.Contains(spec.AgentRunId, ohLifecycle.CleanedRuns); // Guaranteed cleanup verified
+        }
+        finally
+        {
+            try { Directory.Delete(tempWs, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task TimeoutMatrix_ExpiredDeadlineBeforeLaunch_BothAdapters_TerminateTimedOutWithoutContainers()
+    {
+        var tempWs = Path.Combine(Path.GetTempPath(), "aif-timeout-test-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tempWs);
+
+        try
+        {
+            var expiredSpec = new AgentExecutionSpec(
+                AgentRunId: Guid.NewGuid(),
+                CorrelationId: Guid.NewGuid(),
+                ProjectId: Guid.NewGuid(),
+                WorkItemId: Guid.NewGuid(),
+                Attempt: 1,
+                Iteration: 0,
+                Agent: new ExecutionAgent(Guid.NewGuid(), "Coder", "Implementation", "sys"),
+                Instructions: "inst",
+                Workspace: new ExecutionWorkspace(tempWs),
+                Model: new ModelRoute("deepseek/deepseek-v4-flash-0731", "openrouter"),
+                Deadline: DateTimeOffset.UtcNow.AddSeconds(-10)); // Expired deadline
+
+            var classifier = new FailureClassifier();
+
+            // 1. Hermes
+            var hermesExecutor = new StubExecutor();
+            var hermesAdapter = new HermesExecutionAdapter(
+                hermesExecutor, classifier, NullLogger<HermesExecutionAdapter>.Instance);
+
+            var hermesOutcome = await hermesAdapter.ExecuteAsync(expiredSpec, CancellationToken.None);
+
+            Assert.Equal(ExecutionOutcomeStatus.TimedOut, hermesOutcome.Status);
+            Assert.Equal(HermesExecutionAdapter.ExitReasons.Timeout, hermesOutcome.ExitReason);
+            Assert.Equal(0, hermesExecutor.CallCount);
+
+            // 2. OpenHands
+            var ohRunner = new StubProcessRunner();
+            var ohLifecycle = new StubLifecycleManager();
+            var ohClientFactory = new StubClientFactory();
+            var ohAdapter = new OpenHandsExecutionAdapter(
+                new OpenHandsOptions(),
+                ohRunner,
+                ohLifecycle,
+                classifier,
+                NullLogger<OpenHandsExecutionAdapter>.Instance,
+                ohClientFactory);
+
+            var ohOutcome = await ohAdapter.ExecuteAsync(expiredSpec, CancellationToken.None);
+
+            Assert.Equal(ExecutionOutcomeStatus.TimedOut, ohOutcome.Status);
+            Assert.Equal(OpenHandsExecutionAdapter.ExitReasons.Timeout, ohOutcome.ExitReason);
+            Assert.Equal(0, ohRunner.CallCount);
+        }
+        finally
+        {
+            try { Directory.Delete(tempWs, recursive: true); } catch { }
+        }
+    }
+
+    private sealed class StubExecutor : IAgentExecutor
+    {
+        public int CallCount { get; private set; }
+        public Task<AgentExecutionResult> ExecuteAsync(AgentExecutionRequest request, CancellationToken cancellationToken = default)
+        {
+            CallCount++;
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new AgentExecutionResult(true, "Stub output", null, 100, null, 0));
+        }
+    }
+
+    private sealed class StubProcessRunner : IProcessRunner
+    {
+        public int CallCount { get; private set; }
+        public Task<ProcessRunResult> RunAsync(ProcessRunRequest request, CancellationToken cancellationToken = default)
+        {
+            CallCount++;
+            return Task.FromResult(new ProcessRunResult(0, string.Empty, string.Empty, false));
+        }
+    }
+
+    private sealed class StubLifecycleManager : IContainerLifecycleManager
+    {
+        public List<Guid> CleanedRuns { get; } = new();
+        public Task EnsureCleanupAsync(Guid agentRunId, CancellationToken cancellationToken = default)
+        {
+            CleanedRuns.Add(agentRunId);
+            return Task.CompletedTask;
+        }
+        public Task<int> SweepOrphanContainersAsync(CancellationToken cancellationToken = default) => Task.FromResult(0);
+    }
+
+    private sealed class StubClientFactory : IOpenHandsClientFactory
+    {
+        public IOpenHandsClient CreateClient(string serverUrl, string? sessionApiKey) => new StubOpenHandsClient();
+    }
+
+    private sealed class StubOpenHandsClient : IOpenHandsClient
+    {
+        public Task<bool> CheckHealthAsync(CancellationToken cancellationToken = default) => Task.FromResult(true);
+        public Task<OpenHandsConversationInfo> CreateConversationAsync(OpenHandsCreateConversationRequest request, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new OpenHandsConversationInfo { Id = "stub-conv", ExecutionStatus = "idle" });
+        public Task<bool> SendMessageAsync(string conversationId, string message, bool run = true, CancellationToken cancellationToken = default) => Task.FromResult(true);
+        public Task<OpenHandsConversationInfo> GetConversationAsync(string conversationId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new OpenHandsConversationInfo { Id = conversationId, ExecutionStatus = "finished" });
+        public Task<string?> GetFinalResponseAsync(string conversationId, CancellationToken cancellationToken = default) => Task.FromResult<string?>("Done");
+        public Task<bool> InterruptAsync(string conversationId, CancellationToken cancellationToken = default) => Task.FromResult(true);
+        public Task<bool> DeleteConversationAsync(string conversationId, CancellationToken cancellationToken = default) => Task.FromResult(true);
     }
 
     [Fact]

@@ -45,90 +45,29 @@ public static class BenchmarkHarness
         "In NOTES.md, append `- Multiply` to the Features list.\n" +
         "Do not modify any other file.";
 
-    public static (string BareRepoPath, string CommitSha, string BaselineHash) CreateCanonicalBaselineBareRepo(string tempDir)
+    public static (string BareRepoPath, string CommitSha, string BaselineHash) CreateCanonicalBaselineBareRepo(
+        string tempDir,
+        BenchmarkTaskDefinition? task = null)
     {
+        task ??= BenchmarkTaskDefinition.TaskB_MultiFile();
         var seedDir = Path.Combine(tempDir, "baseline-seed");
         Directory.CreateDirectory(seedDir);
 
-        var srcDir = Path.Combine(seedDir, "src");
-        var testsDir = Path.Combine(seedDir, "tests");
-        Directory.CreateDirectory(srcDir);
-        Directory.CreateDirectory(testsDir);
-
-        File.WriteAllText(Path.Combine(seedDir, "Demo.slnx"), """
-            <Solution>
-              <Project Path="src/Demo.csproj" />
-              <Project Path="tests/Demo.Tests.csproj" />
-            </Solution>
-            """);
-
-        File.WriteAllText(Path.Combine(seedDir, "NOTES.md"), """
-            # Demo Calculator Notes
-            Version: 1.0.0
-
-            Features:
-            - Add
-            """);
-
-        File.WriteAllText(Path.Combine(srcDir, "Demo.csproj"), """
-            <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup>
-                <TargetFramework>net10.0</TargetFramework>
-                <Nullable>enable</Nullable>
-              </PropertyGroup>
-            </Project>
-            """);
-
-        File.WriteAllText(Path.Combine(srcDir, "Calculator.cs"), """
-            namespace Demo;
-
-            public class Calculator
-            {
-                public int Add(int a, int b) => a + b;
-            }
-            """);
-
-        File.WriteAllText(Path.Combine(testsDir, "Demo.Tests.csproj"), """
-            <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup>
-                <TargetFramework>net10.0</TargetFramework>
-                <IsPackable>false</IsPackable>
-                <Nullable>enable</Nullable>
-              </PropertyGroup>
-              <ItemGroup>
-                <PackageReference Include="xunit" Version="2.9.3" />
-                <PackageReference Include="xunit.runner.visualstudio" Version="3.0.2">
-                  <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-                  <PrivateAssets>all</PrivateAssets>
-                </PackageReference>
-                <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
-                <ProjectReference Include="../src/Demo.csproj" />
-              </ItemGroup>
-            </Project>
-            """);
-
-        File.WriteAllText(Path.Combine(testsDir, "CalculatorTests.cs"), """
-            using Xunit;
-
-            namespace Demo.Tests;
-
-            public class CalculatorTests
-            {
-                [Fact]
-                public void Add_ReturnsSum()
-                {
-                    var calc = new Calculator();
-                    Assert.Equal(5, calc.Add(2, 3));
-                }
-            }
-            """);
+        if (task.SetupBaselineAction is not null)
+        {
+            task.SetupBaselineAction(seedDir);
+        }
+        else
+        {
+            BenchmarkTaskDefinition.TaskB_MultiFile().SetupBaselineAction!(seedDir);
+        }
 
         RunGit(seedDir, "init", "-b", "main");
         RunGit(seedDir, "config", "user.email", "benchmark@ai-factory.local");
         RunGit(seedDir, "config", "user.name", "BenchmarkRunner");
         RunGit(seedDir, "config", "commit.gpgsign", "false");
         RunGit(seedDir, "add", ".");
-        RunGit(seedDir, "commit", "-m", "Canonical benchmark baseline");
+        RunGit(seedDir, "commit", "-m", $"Canonical benchmark baseline for {task.TaskId}");
 
         var commitSha = RunGitWithOutput(seedDir, "rev-parse", "HEAD");
         var baselineHash = ComputeDirectoryHash(seedDir);
@@ -147,8 +86,10 @@ public static class BenchmarkHarness
         string baselineHash,
         string model,
         string? openRouterApiKey = null,
-        ITestOutputHelper? output = null)
+        ITestOutputHelper? output = null,
+        BenchmarkTaskDefinition? task = null)
     {
+        task ??= BenchmarkTaskDefinition.TaskB_MultiFile();
         var iterationTemp = Path.Combine(Path.GetTempPath(), $"aif-bench-{adapter.ToLowerInvariant()}-{runIndex}-{Guid.NewGuid():N}"[..24]);
         Directory.CreateDirectory(iterationTemp);
 
@@ -185,7 +126,7 @@ public static class BenchmarkHarness
                 resolver, new SystemProcessRunner(commandPolicyOptions), executionLimitsOptions, NullLogger<ProjectSourceInitializer>.Instance);
             var projectService = new ProjectService(new ProjectRepository(db), provisioner, sourceInitializer: sourceInitializer);
 
-            var project = await projectService.CreateAsync($"Benchmark {adapter} Run {runIndex}", "Phase F benchmark run");
+            var project = await projectService.CreateAsync($"Benchmark {adapter} {task.TaskId} Run {runIndex}", "Phase G benchmark run");
             projectId = project.Id;
             resolvedProjectRoot = resolver.Resolve(project).Path!;
 
@@ -197,7 +138,7 @@ public static class BenchmarkHarness
 
             var workItems = new WorkItemService(new WorkItemRepository(db), new ProjectRepository(db));
             var item = await workItems.CreateAsync(
-                projectId, WorkItemType.Implementation, TaskTitle, TaskDescription, "Normal");
+                projectId, WorkItemType.Implementation, task.Title, task.Description, "Normal");
             workItemId = item.Id;
             await workItems.TransitionStatusAsync(workItemId, WorkItemStatus.Ready);
 
@@ -251,7 +192,11 @@ public static class BenchmarkHarness
             var path = line.Substring(3).Trim();
             changedFiles.Add(path);
 
-            if (path.Equals("src/Calculator.cs", StringComparison.OrdinalIgnoreCase) ||
+            if (task.FileClassifier is not null)
+            {
+                classifications[path] = task.FileClassifier(path);
+            }
+            else if (path.Equals("src/Calculator.cs", StringComparison.OrdinalIgnoreCase) ||
                 path.Equals("tests/CalculatorTests.cs", StringComparison.OrdinalIgnoreCase) ||
                 path.Equals("NOTES.md", StringComparison.OrdinalIgnoreCase))
             {
@@ -283,7 +228,9 @@ public static class BenchmarkHarness
 
         var record = new BenchmarkRunRecord
         {
-            BenchmarkId = BenchmarkId,
+            BenchmarkId = task.TaskId,
+            TaskCategory = task.Category,
+            TaskTitle = task.Title,
             Runtime = adapter,
             RunId = agentRunId,
             WorkItemId = workItemId,
@@ -487,6 +434,8 @@ public static class BenchmarkHarness
             RedirectStandardError = true,
             UseShellExecute = false
         };
+        startInfo.Environment["GIT_AUTHOR_DATE"] = "2026-09-24T00:00:00Z";
+        startInfo.Environment["GIT_COMMITTER_DATE"] = "2026-09-24T00:00:00Z";
         foreach (var arg in arguments) startInfo.ArgumentList.Add(arg);
         using var process = Process.Start(startInfo)!;
         process.WaitForExit(30000);
@@ -506,6 +455,8 @@ public static class BenchmarkHarness
             RedirectStandardError = true,
             UseShellExecute = false
         };
+        startInfo.Environment["GIT_AUTHOR_DATE"] = "2026-09-24T00:00:00Z";
+        startInfo.Environment["GIT_COMMITTER_DATE"] = "2026-09-24T00:00:00Z";
         foreach (var arg in arguments) startInfo.ArgumentList.Add(arg);
         using var process = Process.Start(startInfo)!;
         process.WaitForExit(30000);

@@ -10,6 +10,7 @@ using AI.Factory.Application.Projects;
 using AI.Factory.Application.Security;
 using AI.Factory.Application.Tools;
 using AI.Factory.Infrastructure.Agents;
+using AI.Factory.Infrastructure.Agents.OpenHands;
 using AI.Factory.Infrastructure.Configuration;
 using AI.Factory.Infrastructure.Context;
 using AI.Factory.Infrastructure.Persistence;
@@ -201,6 +202,12 @@ executionOptions.ApplyBuiltInDefault(HermesExecutionAdapter.AdapterKey);
 executionOptions.Validate();
 builder.Services.AddSingleton(executionOptions);
 builder.Services.AddScoped<AI.Factory.Application.Abstractions.Execution.IExecutionAdapter, HermesExecutionAdapter>();
+
+var openHandsOptions = new OpenHandsOptions();
+builder.Configuration.GetSection(OpenHandsOptions.SectionName).Bind(openHandsOptions);
+builder.Services.AddSingleton(openHandsOptions);
+builder.Services.AddScoped<AI.Factory.Application.Abstractions.Execution.IExecutionAdapter, OpenHandsExecutionAdapter>();
+
 builder.Services.AddScoped<AI.Factory.Application.Abstractions.Execution.IExecutionAdapterRegistry, AI.Factory.Application.Execution.ExecutionAdapterRegistry>();
 builder.Services.AddScoped<AI.Factory.Application.Execution.ExecutionProfileResolver>();
 builder.Services.AddScoped<IAgentRuntime, AI.Factory.Application.Execution.AdapterDispatchingAgentRuntime>();

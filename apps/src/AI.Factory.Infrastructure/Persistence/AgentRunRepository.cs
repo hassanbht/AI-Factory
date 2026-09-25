@@ -71,16 +71,46 @@ public sealed class AgentRunRepository : IAgentRunRepository
         AgentRun agentRun,
         CancellationToken cancellationToken = default)
     {
-        var exists = await _db.AgentRuns
-            .AnyAsync(x => x.Id == agentRun.Id, cancellationToken);
+        var existing = await _db.AgentRuns
+            .FirstOrDefaultAsync(x => x.Id == agentRun.Id, cancellationToken);
 
-        if (!exists)
+        if (existing is null)
         {
             throw new NotFoundException($"AgentRun '{agentRun.Id}' was not found.");
         }
 
-        _db.AgentRuns.Update(agentRun);
-        await _db.SaveChangesAsync(cancellationToken);
+        var entry = _db.Entry(existing);
+        if (!ReferenceEquals(existing, agentRun))
+        {
+            var dbVersion = existing.Version;
+            entry.CurrentValues.SetValues(agentRun);
+            existing.Version = dbVersion;
+            agentRun.Version = dbVersion;
+        }
+
+        try
+        {
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+        catch (ConcurrencyConflictException)
+        {
+            // Heartbeat loop or concurrent recovery updated the entity's Version in the database while execution was running.
+            // Reload the database values to refresh the original concurrency token and re-apply our terminal changes.
+            var dbValues = await entry.GetDatabaseValuesAsync(cancellationToken);
+            if (dbValues is null)
+            {
+                throw new NotFoundException($"AgentRun '{agentRun.Id}' was not found.");
+            }
+
+            entry.OriginalValues.SetValues(dbValues);
+            existing.Version = dbValues[nameof(AgentRun.Version)] is long ver ? ver : existing.Version;
+            if (!ReferenceEquals(existing, agentRun))
+            {
+                entry.CurrentValues.SetValues(agentRun);
+            }
+
+            await _db.SaveChangesAsync(cancellationToken);
+        }
     }
 
     public async Task<AgentRun?> TryClaimNextPendingAsync(

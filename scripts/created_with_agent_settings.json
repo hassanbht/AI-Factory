@@ -1,0 +1,257 @@
+{
+    "id":  "1aafc279-e32e-4267-9b4e-b7271076936d",
+    "workspace":  {
+                      "working_dir":  "/workspace",
+                      "kind":  "LocalWorkspace"
+                  },
+    "persistence_dir":  "workspace/conversations/1aafc279e32e42679b4eb7271076936d",
+    "max_iterations":  500,
+    "stuck_detection":  true,
+    "execution_status":  "idle",
+    "confirmation_policy":  {
+                                "kind":  "NeverConfirm"
+                            },
+    "security_analyzer":  null,
+    "activated_knowledge_skills":  [
+
+                                   ],
+    "invoked_skills":  [
+
+                       ],
+    "blocked_actions":  {
+
+                        },
+    "blocked_messages":  {
+
+                         },
+    "last_user_message_id":  null,
+    "leaf_event_id":  null,
+    "stats":  {
+                  "usage_to_metrics":  {
+
+                                       }
+              },
+    "secret_registry":  {
+                            "secret_sources":  {
+
+                                               }
+                        },
+    "agent_state":  {
+
+                    },
+    "hook_config":  null,
+    "title":  null,
+    "metrics":  null,
+    "created_at":  "2026-09-25T11:06:42.734625Z",
+    "updated_at":  "2026-09-25T11:06:42.734628Z",
+    "forked_from_conversation_id":  null,
+    "forked_from_event_id":  null,
+    "parent_conversation_id":  null,
+    "sub_conversation_ids":  [
+
+                             ],
+    "tags":  {
+
+             },
+    "current_model_id":  null,
+    "available_models":  [
+
+                         ],
+    "supports_runtime_model_switch":  false,
+    "launched_agent_profile":  null,
+    "agent":  {
+                  "llm":  {
+                              "model":  "openrouter/deepseek/deepseek-v4-flash-0731:free",
+                              "api_key":  null,
+                              "provider_connection_id":  null,
+                              "auth_type":  "api_key",
+                              "subscription_vendor":  null,
+                              "base_url":  "https://openrouter.ai/api/v1",
+                              "api_version":  null,
+                              "aws_access_key_id":  null,
+                              "aws_secret_access_key":  null,
+                              "aws_session_token":  null,
+                              "aws_region_name":  null,
+                              "aws_profile_name":  null,
+                              "aws_role_name":  null,
+                              "aws_session_name":  null,
+                              "aws_bedrock_runtime_endpoint":  null,
+                              "openrouter_site_url":  "https://docs.all-hands.dev/",
+                              "openrouter_app_name":  "OpenHands",
+                              "num_retries":  5,
+                              "retry_multiplier":  8.0,
+                              "retry_min_wait":  8,
+                              "retry_max_wait":  64,
+                              "timeout":  300,
+                              "max_message_chars":  30000,
+                              "temperature":  null,
+                              "top_p":  null,
+                              "top_k":  null,
+                              "max_input_tokens":  null,
+                              "max_output_tokens":  null,
+                              "model_canonical_name":  null,
+                              "api_mode":  "auto",
+                              "capability_overrides":  {
+
+                                                       },
+                              "extra_headers":  null,
+                              "input_cost_per_token":  null,
+                              "output_cost_per_token":  null,
+                              "ollama_base_url":  null,
+                              "stream":  false,
+                              "drop_params":  true,
+                              "disable_vision":  null,
+                              "disable_stop_word":  false,
+                              "caching_prompt":  true,
+                              "log_completions":  false,
+                              "log_completions_folder":  "logs/completions",
+                              "custom_tokenizer":  null,
+                              "native_tool_calling":  true,
+                              "force_string_serializer":  null,
+                              "inline_image_urls":  null,
+                              "reasoning_effort":  "high",
+                              "reasoning_summary":  null,
+                              "enable_encrypted_reasoning":  true,
+                              "prompt_cache_retention":  "24h",
+                              "extended_thinking_budget":  200000,
+                              "seed":  null,
+                              "usage_id":  "default",
+                              "litellm_extra_body":  {
+
+                                                     },
+                              "is_subscription":  false
+                          },
+                  "tools":  [
+                                {
+                                    "name":  "terminal",
+                                    "params":  {
+
+                                               }
+                                },
+                                {
+                                    "name":  "file_editor",
+                                    "params":  {
+
+                                               }
+                                },
+                                {
+                                    "name":  "task_tracker",
+                                    "params":  {
+
+                                               }
+                                }
+                            ],
+                  "mcp_config":  {
+
+                                 },
+                  "filter_tools_regex":  null,
+                  "include_default_tools":  [
+                                                "FinishTool",
+                                                "ThinkTool",
+                                                "SwitchLLMTool"
+                                            ],
+                  "agent_context":  {
+                                        "skills":  [
+
+                                                   ],
+                                        "system_message_suffix":  null,
+                                        "user_message_suffix":  null,
+                                        "load_user_skills":  false,
+                                        "load_public_skills":  false,
+                                        "marketplace_path":  "marketplaces/default.json",
+                                        "registered_marketplaces":  [
+
+                                                                    ],
+                                        "load_project_skills":  false,
+                                        "load_memory":  false,
+                                        "disabled_skills":  [
+
+                                                            ],
+                                        "secrets":  null,
+                                        "current_datetime":  "2026-09-25T11:06:42.732217Z"
+                                    },
+                  "system_prompt":  null,
+                  "system_prompt_filename":  "system_prompt.j2",
+                  "security_policy_filename":  "security_policy.j2",
+                  "system_prompt_kwargs":  {
+                                               "llm_security_analyzer":  true
+                                           },
+                  "condenser":  {
+                                    "llm":  {
+                                                "model":  "openrouter/deepseek/deepseek-v4-flash-0731:free",
+                                                "api_key":  null,
+                                                "provider_connection_id":  null,
+                                                "auth_type":  "api_key",
+                                                "subscription_vendor":  null,
+                                                "base_url":  "https://openrouter.ai/api/v1",
+                                                "api_version":  null,
+                                                "aws_access_key_id":  null,
+                                                "aws_secret_access_key":  null,
+                                                "aws_session_token":  null,
+                                                "aws_region_name":  null,
+                                                "aws_profile_name":  null,
+                                                "aws_role_name":  null,
+                                                "aws_session_name":  null,
+                                                "aws_bedrock_runtime_endpoint":  null,
+                                                "openrouter_site_url":  "https://docs.all-hands.dev/",
+                                                "openrouter_app_name":  "OpenHands",
+                                                "num_retries":  5,
+                                                "retry_multiplier":  8.0,
+                                                "retry_min_wait":  8,
+                                                "retry_max_wait":  64,
+                                                "timeout":  300,
+                                                "max_message_chars":  30000,
+                                                "temperature":  null,
+                                                "top_p":  null,
+                                                "top_k":  null,
+                                                "max_input_tokens":  null,
+                                                "max_output_tokens":  null,
+                                                "model_canonical_name":  null,
+                                                "api_mode":  "auto",
+                                                "capability_overrides":  {
+
+                                                                         },
+                                                "extra_headers":  null,
+                                                "input_cost_per_token":  null,
+                                                "output_cost_per_token":  null,
+                                                "ollama_base_url":  null,
+                                                "stream":  false,
+                                                "drop_params":  true,
+                                                "disable_vision":  null,
+                                                "disable_stop_word":  false,
+                                                "caching_prompt":  true,
+                                                "log_completions":  false,
+                                                "log_completions_folder":  "logs/completions",
+                                                "custom_tokenizer":  null,
+                                                "native_tool_calling":  true,
+                                                "force_string_serializer":  null,
+                                                "inline_image_urls":  null,
+                                                "reasoning_effort":  "high",
+                                                "reasoning_summary":  null,
+                                                "enable_encrypted_reasoning":  true,
+                                                "prompt_cache_retention":  "24h",
+                                                "extended_thinking_budget":  200000,
+                                                "seed":  null,
+                                                "usage_id":  "condenser",
+                                                "litellm_extra_body":  {
+
+                                                                       },
+                                                "is_subscription":  false
+                                            },
+                                    "max_size":  240,
+                                    "max_tokens":  1310720,
+                                    "keep_first":  2,
+                                    "minimum_progress":  0.1,
+                                    "hard_context_reset_max_retries":  5,
+                                    "hard_context_reset_context_scaling":  0.8,
+                                    "kind":  "LLMSummarizingCondenser"
+                                },
+                  "critic":  null,
+                  "tool_concurrency_limit":  1,
+                  "kind":  "Agent"
+              },
+    "client_tools":  [
+
+                     ],
+    "runtime_info":  null
+}

@@ -118,14 +118,19 @@ public sealed class ExecutionAdapterArchitectureTests
     }
 
     [Fact]
-    public void HermesExecutionAdapter_IsTheOnlyAdapter_NoFuturePlaceholders()
+    public void ExecutionAdapters_AreHermesAndOpenHands_NoFuturePlaceholders()
     {
         var adapters = new[] { ApplicationAssembly, InfrastructureAssembly }
             .SelectMany(a => a.GetTypes())
             .Where(t => !t.IsAbstract && !t.IsInterface && typeof(IExecutionAdapter).IsAssignableFrom(t))
+            .OrderBy(t => t.Name, StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Equal(new[] { typeof(HermesExecutionAdapter) }, adapters);
+        var expected = new[] { typeof(HermesExecutionAdapter), typeof(AI.Factory.Infrastructure.Agents.OpenHands.OpenHandsExecutionAdapter) }
+            .OrderBy(t => t.Name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(expected, adapters);
     }
 
     [Fact]

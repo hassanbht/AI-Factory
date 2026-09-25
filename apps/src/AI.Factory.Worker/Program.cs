@@ -8,6 +8,7 @@ using AI.Factory.Application.Orchestration;
 using AI.Factory.Application.Security;
 using AI.Factory.Application.Tools;
 using AI.Factory.Infrastructure.Agents;
+using AI.Factory.Infrastructure.Agents.OpenHands;
 using AI.Factory.Infrastructure.Configuration;
 using AI.Factory.Infrastructure.Context;
 using AI.Factory.Infrastructure.Persistence;
@@ -213,6 +214,12 @@ public partial class Program
         executionOptions.Validate();
         builder.Services.AddSingleton(executionOptions);
         builder.Services.AddScoped<IExecutionAdapter, HermesExecutionAdapter>();
+
+        var openHandsOptions = new OpenHandsOptions();
+        builder.Configuration.GetSection(OpenHandsOptions.SectionName).Bind(openHandsOptions);
+        builder.Services.AddSingleton(openHandsOptions);
+        builder.Services.AddScoped<IExecutionAdapter, OpenHandsExecutionAdapter>();
+
         builder.Services.AddScoped<IExecutionAdapterRegistry, ExecutionAdapterRegistry>();
         builder.Services.AddScoped<ExecutionProfileResolver>();
         builder.Services.AddScoped<IAgentRuntime, AdapterDispatchingAgentRuntime>();

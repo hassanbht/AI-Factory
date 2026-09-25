@@ -145,17 +145,20 @@ public sealed class WorkerCompositionRootTests : IDisposable
     }
 
     [Fact]
-    public void ExecutionAdapterRegistry_ContainsExactlyOneAdapter_HermesExecutionAdapter()
+    public void ExecutionAdapterRegistry_ContainsHermesAndOpenHandsAdapters()
     {
         using var scope = _host.Services.CreateScope();
 
         var registry = scope.ServiceProvider
             .GetRequiredService<AI.Factory.Application.Abstractions.Execution.IExecutionAdapterRegistry>();
 
-        Assert.Equal(new[] { "Hermes" }, registry.Keys);
-        Assert.True(registry.TryGet("Hermes", out var adapter));
-        Assert.IsType<AI.Factory.Infrastructure.Agents.HermesExecutionAdapter>(adapter);
-        Assert.Single(scope.ServiceProvider.GetServices<AI.Factory.Application.Abstractions.Execution.IExecutionAdapter>());
+        Assert.Equal(new[] { "Hermes", "OpenHands" }, registry.Keys);
+        Assert.True(registry.TryGet("Hermes", out var hermesAdapter));
+        Assert.IsType<AI.Factory.Infrastructure.Agents.HermesExecutionAdapter>(hermesAdapter);
+        Assert.True(registry.TryGet("OpenHands", out var openHandsAdapter));
+        Assert.IsType<AI.Factory.Infrastructure.Agents.OpenHands.OpenHandsExecutionAdapter>(openHandsAdapter);
+        var adapters = scope.ServiceProvider.GetServices<AI.Factory.Application.Abstractions.Execution.IExecutionAdapter>().ToArray();
+        Assert.Equal(2, adapters.Length);
         Assert.IsType<AI.Factory.Infrastructure.Agents.ResilienceAgentExecutorDecorator>(
             scope.ServiceProvider.GetRequiredService<IAgentExecutor>());
     }

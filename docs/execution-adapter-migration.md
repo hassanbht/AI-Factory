@@ -14,9 +14,9 @@ AI Factory stays the control plane. Adapters execute one AgentRun and report an 
 | A | Architecture assessment and migration plan | Done (Gate 1 approved) |
 | B | Execution-adapter abstraction with no behaviour change | Done, see below |
 | C | Real `HermesExecutionAdapter`; artifact recording and disabled-definition policy moved to the Factory | Done, see below |
-| **D** | **Full and live Hermes regression** | **Done, see below** |
-| D.1 | Runtime lifecycle hardening (named containers, cleanup, no hidden timeout retries, single timeout, pinned image) | Not started |
-| E | `OpenHandsExecutionAdapter` (pinned Agent Server, per-run container) | Not started |
+| D | Full and live Hermes regression | Done, see below |
+| D.1 | Runtime lifecycle hardening (named containers, cleanup, no hidden timeout retries, single timeout, pinned image) | Done, see below |
+| **E** | **`OpenHandsExecutionAdapter` (pinned Agent Server, per-run container)** | **Done, see below** |
 | F / G | Dual-run harness and empirical Hermes vs OpenHands comparison | Not started |
 | H–K | Review path through the dispatcher, optional CLI adapters, gateway mapping, additive API telemetry, Hermes legacy reduction | Not started |
 
@@ -628,7 +628,154 @@ Guaranteed cleanup: docker rm -f ai-factory-agent-<agentRunId:N>
 
 ### Remaining Limitations & Deferred Scope
 
-- **Phase E**: OpenHands adapter (`OpenHandsExecutionAdapter`, container lifecycle for OpenHands, event-stream parsing).
 - **Phase H**: Migration of `AgentCodeReviewer` from direct `IAgentExecutor` to `IExecutionAdapter`.
 - **Phase I**: Provider gateway abstraction and routing architecture (resolving OmniRoute upstream 403).
+
+## Phase E: OpenHands Integration
+
+### Overview & Architecture Target
+
+Phase E integrates OpenHands as a pluggable execution adapter behind `IExecutionAdapter` without changing the AI Factory control plane model:
+
+```text
+Worker / API
+   ↓
+AgentOrchestrator
+   ↓
+IAgentRuntime (AdapterDispatchingAgentRuntime)
+   ↓
+IExecutionAdapter
+   ├── HermesExecutionAdapter (Key: "Hermes")
+   └── OpenHandsExecutionAdapter (Key: "OpenHands")
+          ↓
+     OpenHands Agent Server (127.0.0.1:ephemeralPort)
+          ↓
+     OpenHands Runtime (CodeActAgent + LocalWorkspace)
+          ↓
+     ExecutionOutcome
+          ↓
+     AI Factory Acceptance & Review Pipeline
+```
+
+---
+
+### E0 Compatibility Spike
+
+Before implementing the adapter, a comprehensive standalone spike verified the external runtime against the official OpenHands repository:
+
+1. **Pinned Image & Exact Digest**:
+   - Official image: `ghcr.io/openhands/agent-server:1.49.4-python`
+   - Image Digest: `sha256:9b215fb9ad536bd6bc07964b046a45f378cd05c0d0a856bd1be3adaf6c46c69c`
+   - Floating `:latest` tag was strictly avoided.
+2. **Authentication**:
+   - Verified session API key authentication via header `X-Session-API-Key: <key>`.
+   - **Negative Authentication Test**: Unauthenticated request returned `401 Unauthorized` (`{"detail":"Unauthorized"}`).
+   - **Positive Authentication Test**: Authenticated request with ephemeral session key returned `200 OK`.
+3. **OpenAPI Specification**:
+   - Fetched live OpenAPI contract from `/openapi.json` (619 KB), inspected schemas, and preserved sanitized contract at `scripts/openhands-openapi.json`.
+4. **Workspace Topology Decision**:
+   - **Selected: Option A** (dedicated OpenHands Agent Server container per AgentRun with `LocalWorkspace` mounting `/workspace` into host workspace).
+   - **Crucial Security Invariant**: Requires **NO** `/var/run/docker.sock` mount. Does not expose Docker daemon to agent execution.
+   - Bound to ephemeral port on `127.0.0.1` (`127.0.0.1:{port}:8000`), never exposed externally (`0.0.0.0`).
+5. **Standalone Smoke Execution**:
+   - Disposable workspace in `%TEMP%`.
+   - Task: Create `OPENHANDS_POC.txt` with content `Hello from OpenHands AI Factory Spike`.
+   - Gateway: OpenRouter (`deepseek/deepseek-v4-flash-0731`).
+   - Duration: 6.4 seconds.
+   - File created with exact verified content; 0 containers remained after cleanup.
+6. **Cancellation & Interruption**:
+   - Verified `POST /api/conversations/{id}/interrupt` immediately transitions conversation status to `paused`.
+   - Subsequent `DELETE /api/conversations/{id}` and container teardown complete cleanly.
+7. **OmniRoute Compatibility Assessment**:
+   - OmniRoute gateway was tested on `:20128/v1`.
+   - Request failed with HTTP 400 (`unknown variant custom, expected web_search_*`) due to custom tool schema deserialization differences in LiteLLM/OpenHands.
+   - Classified as Category J (external gateway tool limitation). OpenRouter selected as verified primary model gateway for Phase E.
+
+---
+
+### E1 Adapter Implementation
+
+1. **Code Structure**:
+   - `apps/src/AI.Factory.Infrastructure/Agents/OpenHands/OpenHandsOptions.cs`: Options with pinned image digest, port ranges, session secret names, and import modules (`openhands.tools.terminal,openhands.tools.file_editor`).
+   - `apps/src/AI.Factory.Infrastructure/Agents/OpenHands/OpenHandsModels.cs`: Strongly typed DTOs for `LocalWorkspace`, `agent_settings`, events, conversation state, token usage statistics.
+   - `apps/src/AI.Factory.Infrastructure/Agents/OpenHands/IOpenHandsClient.cs`: REST boundary contract for conversation lifecycle.
+   - `apps/src/AI.Factory.Infrastructure/Agents/OpenHands/OpenHandsClient.cs`: HTTP client implementing conversation creation, message dispatch, event polling, cancellation, and token extraction.
+   - `apps/src/AI.Factory.Infrastructure/Agents/OpenHands/OpenHandsExecutionAdapter.cs`: Core adapter implementing `IExecutionAdapter` (`Key = "OpenHands"`, `FactoryRoutedModel = true`).
+2. **Contract & Layering Boundaries**:
+   - OpenHands types and HTTP DTOs remain strictly within Infrastructure.
+   - Application abstractions remain provider-neutral (`AgentExecutionSpec`, `ExecutionOutcome`).
+   - No DbContext, no entity mutations, no lifecycle transitions, no artifact recording inside the adapter.
+3. **Container Lifecycle & Cleanup Invariant**:
+   - Deterministic container naming: `ai-factory-agent-<agentRunId:N>`.
+   - Metadata labels: `factory=ai-factory`, `managed=true`, `agent-run-id=<GUID>`, `adapter=OpenHands`, `project-id=<GUID>`.
+   - `finally` block executes `_lifecycleManager.EnsureCleanupAsync(containerName)` to guarantee zero orphan containers on success, failure, timeout, cancellation, or crash.
+4. **Authoritative Timeout & Cancellation**:
+   - Consumes single authoritative deadline: `spec.Deadline`.
+   - If deadline is already expired upon entry, rejects immediately without container launch.
+   - Polling loop checks remaining deadline (`spec.Deadline - UtcNow`) and triggers `InterruptAsync` + `EnsureCleanupAsync` if expired.
+   - Caller cancellation cancels HTTP requests, interrupts conversation, cleans up container, and returns `ExecutionOutcome.CancelledResult(...)`.
+5. **Metadata & Structured Result**:
+   - Structured result contains `ExecutionAdapter=OpenHands` and `ExitReason=exit:0` (or `timeout`/`cancelled`/`error`).
+   - Prompt, completion, and total tokens extracted from OpenHands `token_usage` events and passed to `ExecutionUsage`.
+6. **Dependency Injection**:
+   - Registered `OpenHandsOptions`, `IOpenHandsClientFactory`, `OpenHandsExecutionAdapter`, and `IExecutionAdapter` in Worker and API composition roots.
+   - Fail-closed adapter resolution: Unknown or unconfigured profiles fail closed with `Validation` failure without fallback to Hermes.
+
+---
+
+### Test Strategy & Regression Evidence
+
+1. **Unit & Architecture Tests**:
+   - `OpenHandsExecutionAdapterTests` (6 tests): Validates request mapping, workspace mapping, model routing, cancellation, authoritative timeout rejection, capabilities (`Key = "OpenHands"`, `FactoryRoutedModel = true`).
+   - `OpenHandsClientTests` (5 tests): Validates authentication headers (`X-Session-API-Key`), conversation creation, event polling, interruption, token usage extraction.
+   - `ExecutionAdapterArchitectureTests`: Validates Application has 0 references to OpenHands or HTTP types.
+2. **Full Solution Regression**:
+   - `dotnet test apps/AI.Factory.slnx`:
+     - `AI.Factory.Application.Tests`: **1,082 passed, 0 failed**
+     - `AI.Factory.Api.Tests`: **315 passed, 0 failed**
+     - `AI.Factory.Worker.Tests`: **112 passed, 0 failed**
+     - **Total: 1,509 passed, 0 failed, 0 warnings.**
+   - All existing Hermes unit, integration, and lifecycle tests passed without modification.
+3. **Live AI Factory Integration Tests (`RealOpenHandsE2ETests`)**:
+   - `Smoke_RealOpenHandsAgentRun_ThroughFullFactoryPipeline_ReachesSucceeded` (**PASSED, 31s**):
+     - Real AgentRun claimed by `AgentRunWorker` -> dynamically dispatched to `OpenHandsExecutionAdapter` -> real OpenRouter model executed -> terminal status `Succeeded` -> metadata `ExecutionAdapter=OpenHands` & `ExitReason=exit:0` verified -> 0 orphan containers remaining.
+   - `StructuredResult_RealOpenHandsAgentRun_ThroughFullFactoryPipeline_ReachesValidStructuredResult` (**PASSED, 27s**):
+     - Validated structured result generation and persistence via OpenHands.
+   - `WorkItemExecution_RealOpenHands_ModifiesProjectWorkspace_AndPassesFactoryVerification` (**PASSED, 5m 48s**):
+     - Real WorkItem dispatched to OpenHands -> OpenHands modified workspace (`Marker.cs` -> `MARKER_AFTER`) -> Factory `IVerificationGate` passed compilation & tests -> Independent `AgentCodeReviewer` reviewed code -> Lesson & Evaluation recorded -> 0 orphan containers remaining.
+
+---
+
+### Pinned Images Summary
+
+| Runtime | Tag | Digest |
+|---|---|---|
+| Hermes | `nousresearch/hermes-agent:0.20.6` | `sha256:bcced061c9e114b711eabed6d4b8c4b2cff98ad33ec20317ef5692b5dd4ffecd` |
+| OpenHands | `ghcr.io/openhands/agent-server:1.49.4-python` | `sha256:9b215fb9ad536bd6bc07964b046a45f378cd05c0d0a856bd1be3adaf6c46c69c` |
+
+---
+
+### Topology Decision & Security Review
+
+- **Topology Choice**: Option A (per-run OpenHands Agent Server container) was selected over long-lived multi-tenant server (Option B/C) because:
+  1. Complete process and filesystem isolation per AgentRun.
+  2. **Zero Docker socket exposure**: The OpenHands container runs purely on its local mounted workspace (`LocalWorkspace`) and does not require `/var/run/docker.sock`.
+  3. Clean crash recovery: If Worker restarts, startup orphan sweep cleans up any stale Factory-labeled containers.
+  4. Network boundary: Binds strictly to `127.0.0.1` on an ephemeral port.
+  5. Authentication: Every container startup generates a unique ephemeral cryptographic session key passed via `X-Session-API-Key`.
+- **Security Audit**:
+  - API keys and session keys are never logged, never written to disk, and never exposed in public DTOs.
+  - Workspace path is strictly guarded by `WorkspacePathGuard` before mount.
+  - Factory DB and parent repositories are never mounted.
+
+---
+
+### Known Limitations & Deferred Scope
+
+- **OmniRoute Tool Compatibility**: OmniRoute fails to deserialize OpenHands custom tool schemas (Category J); OpenRouter is the primary gateway for OpenHands.
+- **Review Path**: `AgentCodeReviewer` continues to use its existing execution path (deferred to Phase H).
+- **Phase F**: Dual-runtime WorkItem execution and empirical Hermes vs. OpenHands comparison.
+- **Phase G**: Runtime ranking and production profile selection.
+- **Phase I**: Gateway abstraction and unified router.
+
 

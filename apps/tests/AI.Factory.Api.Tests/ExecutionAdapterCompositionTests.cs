@@ -37,16 +37,22 @@ public sealed class ExecutionAdapterCompositionTests : IClassFixture<ApiTestFact
     }
 
     [Fact]
-    public void Registry_ContainsExactlyOneAdapter_HermesExecutionAdapter()
+    public void Registry_ContainsHermesAndOpenHandsAdapters()
     {
         using var scope = _factory.Services.CreateScope();
 
         var registry = scope.ServiceProvider.GetRequiredService<IExecutionAdapterRegistry>();
 
-        Assert.Equal(new[] { "Hermes" }, registry.Keys);
-        Assert.True(registry.TryGet("Hermes", out var adapter));
-        Assert.IsType<HermesExecutionAdapter>(adapter);
-        Assert.IsType<HermesExecutionAdapter>(Assert.Single(scope.ServiceProvider.GetServices<IExecutionAdapter>()));
+        Assert.Equal(new[] { "Hermes", "OpenHands" }, registry.Keys);
+        Assert.True(registry.TryGet("Hermes", out var hermesAdapter));
+        Assert.IsType<HermesExecutionAdapter>(hermesAdapter);
+        Assert.True(registry.TryGet("OpenHands", out var openHandsAdapter));
+        Assert.IsType<AI.Factory.Infrastructure.Agents.OpenHands.OpenHandsExecutionAdapter>(openHandsAdapter);
+
+        var adapters = scope.ServiceProvider.GetServices<IExecutionAdapter>().ToArray();
+        Assert.Equal(2, adapters.Length);
+        Assert.Contains(adapters, a => a is HermesExecutionAdapter);
+        Assert.Contains(adapters, a => a is AI.Factory.Infrastructure.Agents.OpenHands.OpenHandsExecutionAdapter);
     }
 
     [Fact]

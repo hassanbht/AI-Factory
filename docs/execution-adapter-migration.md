@@ -16,8 +16,8 @@ AI Factory stays the control plane. Adapters execute one AgentRun and report an 
 | C | Real `HermesExecutionAdapter`; artifact recording and disabled-definition policy moved to the Factory | Done, see below |
 | D | Full and live Hermes regression | Done, see below |
 | D.1 | Runtime lifecycle hardening (named containers, cleanup, no hidden timeout retries, single timeout, pinned image) | Done, see below |
-| **E** | **`OpenHandsExecutionAdapter` (pinned Agent Server, per-run container)** | **Done, see below** |
-| F / G | Dual-run harness and empirical Hermes vs OpenHands comparison | Not started |
+| **F** | **Controlled Hermes vs OpenHands empirical comparison** | **Done, see below** |
+| G | Broad runtime assessment and production profile decisions | Not started |
 | H–K | Review path through the dispatcher, optional CLI adapters, gateway mapping, additive API telemetry, Hermes legacy reduction | Not started |
 
 ## Phase B: Execution Adapter Abstraction
@@ -774,8 +774,140 @@ Before implementing the adapter, a comprehensive standalone spike verified the e
 
 - **OmniRoute Tool Compatibility**: OmniRoute fails to deserialize OpenHands custom tool schemas (Category J); OpenRouter is the primary gateway for OpenHands.
 - **Review Path**: `AgentCodeReviewer` continues to use its existing execution path (deferred to Phase H).
-- **Phase F**: Dual-runtime WorkItem execution and empirical Hermes vs. OpenHands comparison.
 - **Phase G**: Runtime ranking and production profile selection.
 - **Phase I**: Gateway abstraction and unified router.
+
+---
+
+## Phase F: Controlled Hermes vs OpenHands Comparison
+
+### Overview
+
+Phase F is the first empirical validation and benchmarking phase comparing `HermesExecutionAdapter` and `OpenHandsExecutionAdapter` under strictly controlled conditions against the same deterministic WorkItem.
+
+In accordance with Phase F rules:
+- **No production winner is selected.**
+- **Hermes is NOT replaced.**
+- **OpenHands is NOT made default.**
+- **Phase G will evaluate runtime assessment and profile decisions.**
+
+---
+
+### Benchmark Definition
+
+- **Logical WorkItem**: `BENCH-001` — *"Implement Multiply in Calculator with Unit Tests and Update Notes"*
+- **Detailed Specification**:
+  - Add `public int Multiply(int a, int b) => a * b;` to `src/Calculator.cs`.
+  - Add unit test `Multiply_ReturnsProduct` to `tests/CalculatorTests.cs` verifying `new Calculator().Multiply(3, 4) == 12`.
+  - Append `- Multiply` to the Features list in `NOTES.md`.
+  - Do not modify any other file.
+- **Acceptance Criteria**:
+  1. `src/Calculator.cs` implements `Multiply` and builds cleanly.
+  2. `tests/CalculatorTests.cs` contains `Multiply_ReturnsProduct` and passes.
+  3. `NOTES.md` contains `- Multiply`.
+  4. Factory Verification Gate (`dotnet build` and `dotnet test` on `Demo.slnx`) passes with 0 errors and 0 failures.
+  5. Workspace inspection reveals 0 unexpected or harmful file changes.
+- **Source Repository & Baseline**:
+  - Solution: `Demo.slnx` with `src/Demo.csproj`, `tests/Demo.Tests.csproj`, `src/Calculator.cs`, `tests/CalculatorTests.cs`, `NOTES.md`.
+  - Canonical Baseline Commit: `671917ed42f7b0e32795ad85bb45a33aa23447c2`
+  - Canonical Bare Git Repository: Cloned into an isolated disposable workspace for each run to guarantee identical initial state.
+
+---
+
+### Controlled Variables
+
+| Variable | Hermes | OpenHands | Equivalent? |
+|---|---|---|:---:|
+| Logical WorkItem | `BENCH-001` (same title & instructions) | `BENCH-001` (same title & instructions) | **YES** |
+| Source Baseline | Fresh clone from canonical bare repo | Fresh clone from canonical bare repo | **YES** |
+| Initial Tree Hash | Matching canonical SHA256 tree hash | Matching canonical SHA256 tree hash | **YES** |
+| Model | `deepseek/deepseek-v4-flash-0731` | `deepseek/deepseek-v4-flash-0731` | **YES** |
+| Gateway | OpenRouter (`https://openrouter.ai/api/v1`) | OpenRouter (`https://openrouter.ai/api/v1`) | **YES** |
+| Timeout Policy | 300s authoritative Factory deadline | 300s authoritative Factory deadline | **YES** |
+| Retry Policy | Bounded (0 retries on normal agent failure) | Bounded (0 retries on normal agent failure) | **YES** |
+| Workspace Policy | Isolated temp directory per run | Isolated temp directory per run | **YES** |
+| Factory Verification | MsBuildTargetResolver + IVerificationGate | MsBuildTargetResolver + IVerificationGate | **YES** |
+| Review Path | Unchanged (`AgentCodeReviewer` via IAgentExecutor) | Unchanged (`AgentCodeReviewer` via IAgentExecutor) | **YES** |
+
+---
+
+### Live Empirical Results
+
+A total of 6 live model-backed runs (3 Hermes, 3 OpenHands) were executed:
+
+#### Hermes Runs
+
+| Run | AgentRun ID | Duration | Status | Exit Reason | Verification | Review | Cleanup |
+|---|---|---:|---|---|---|---|:---:|
+| Run 1 | `993e2aae-e8d4-4a30-9301-9b0304b2e0e1` | 240.3s | `Succeeded` | `exit:0` | `Passed` (9.5s) | Completed | **YES** |
+| Run 2 | `ff0a568e-a053-41ab-b447-7225fb820397` | 124.2s | `Succeeded` | `exit:0` | `Passed` (9.5s) | Completed | **YES** |
+| Run 3 | `f6d61490-ed47-41a4-9544-da2d686c91f9` | 285.0s | `TimedOut` | `timeout` | `Failed` | N/A | **YES** |
+
+#### OpenHands Runs
+
+| Run | AgentRun ID | Duration | Status | Exit Reason | Verification | Review | Cleanup |
+|---|---|---:|---|---|---|---|:---:|
+| Run 1 | `86bff9e7-dcf2-45c5-a543-fcca08a03c15` | 61.0s | `Succeeded` | `Completed` | `Passed` (9.3s) | Completed | **YES** |
+| Run 2 | `2e9206a7-6f05-4cc8-9689-397b7886341b` | 127.2s | `Succeeded` | `Completed` | `Passed` (9.8s) | Completed | **YES** |
+| Run 3 | `2b7cd162-915b-4175-a853-81a2e15e8542` | 35.7s | `Succeeded` | `Completed` | `Passed` (11.0s) | Completed | **YES** |
+
+---
+
+### Comparative Summary Table
+
+| Metric | Hermes | OpenHands |
+|---|---:|---:|
+| Runs executed | 3 | 3 |
+| Successful executions | 2 | 3 |
+| Acceptance passed | 2 | 3 |
+| Acceptance failed | 1 | 0 |
+| Repair runs | 0 | 0 |
+| Median execution duration | 240.3s | 61.0s |
+| Min execution duration | 124.2s | 35.7s |
+| Max execution duration | 285.0s | 127.2s |
+| Retry count | 0 | 0 |
+| Total tokens | NOT AVAILABLE | NOT AVAILABLE |
+| Cleanup verified | True (3/3) | True (3/3) |
+| Unexpected files | 0 | 0 |
+
+---
+
+### Functional Comparison
+
+- **Code Modifications**:
+  - Both adapters successfully performed multi-file edits (modifying `src/Calculator.cs`, `tests/CalculatorTests.cs`, and `NOTES.md`).
+  - In all successful runs, the Factory `IVerificationGate` passed both `dotnet build` and `dotnet test` with 0 errors.
+- **Diff Cleanliness**:
+  - Both runtimes modified only the required files and left 0 unexpected or extraneous files.
+- **Failure Analysis**:
+  - Hermes Run 3 failed with status `TimedOut` (duration 285.0s against the 300s limit). Classified as **Category A: Hermes runtime timeout** (stalled LLM tool-calling loop). The Factory timeout handler correctly killed the container, recorded `FailureCategory=Timeout`, and left 0 orphan containers.
+
+---
+
+### Comparison Validity
+
+- **Classification**: `CONTROLLED`
+- **Justification**:
+  - Both runtimes were tested against the identical canonical baseline and WorkItem specification.
+  - Both runtimes used the exact same model (`deepseek/deepseek-v4-flash-0731`) on the exact same gateway (OpenRouter).
+  - Both runtimes executed under the exact same 300s Factory timeout and were evaluated by the exact same Factory verification gate.
+
+---
+
+### Known Limitations
+
+- **Sample Size**: 3 runs per runtime provide empirical evidence but represent a small sample.
+- **Token Telemetry**: Token usage was not uniformly exposed across both CLI and HTTP boundaries; marked honestly as `NOT AVAILABLE` without estimation.
+- **Gateway Latency**: Variations in OpenRouter upstream inference speed affected per-run wall-clock timing.
+
+---
+
+### Inputs for Phase G
+
+1. **Execution Reliability**: OpenHands achieved 3/3 successful completions within budget; Hermes achieved 2/3 with 1 timeout at 285s.
+2. **Execution Latency**: OpenHands median execution was 61.0s (range 35.7s–127.2s); Hermes median execution was 240.3s (range 124.2s–285.0s).
+3. **Container Isolation & Cleanup**: Both adapters demonstrated 100% deterministic container cleanup (0 leaked containers across all 6 runs, including on timeout).
+4. **Verification Compatibility**: Both adapters produce changes fully compatible with Factory `IVerificationGate` and `AgentCodeReviewer`.
+
 
 

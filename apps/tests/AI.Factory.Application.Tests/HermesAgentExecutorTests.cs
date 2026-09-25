@@ -29,7 +29,10 @@ public sealed class HermesAgentExecutorTests
             ProcessRunRequest request,
             CancellationToken cancellationToken = default)
         {
-            LastRequest = request;
+            if (request.Arguments.Contains("run") || LastRequest is null)
+            {
+                LastRequest = request;
+            }
 
             cancellationToken.ThrowIfCancellationRequested();
 

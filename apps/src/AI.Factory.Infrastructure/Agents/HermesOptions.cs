@@ -2,7 +2,7 @@ namespace AI.Factory.Infrastructure.Agents;
 
 public sealed class HermesOptions
 {
-    public string DockerImage { get; set; } = "nousresearch/hermes-agent:latest";
+    public string DockerImage { get; set; } = "nousresearch/hermes-agent:0.20.6";
 
     /// <summary>
     /// What is mounted at /opt/data (Hermes's own persistent state). A value

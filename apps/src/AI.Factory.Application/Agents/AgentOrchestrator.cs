@@ -31,6 +31,8 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
     private readonly ModelRoutingOptions? _routingOptions;
     private readonly IArtifactRecorder? _artifactRecorder;
     private readonly IArtifactRepository? _artifactRepository;
+    private readonly ExecutionLimitsOptions? _executionLimits;
+    private readonly AgentWorkerOptions? _workerOptions;
     private readonly ILogger<AgentOrchestrator> _logger;
 
     public AgentOrchestrator(
@@ -46,7 +48,9 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
         IModelRouter? modelRouter = null,
         ModelRoutingOptions? routingOptions = null,
         IArtifactRecorder? artifactRecorder = null,
-        IArtifactRepository? artifactRepository = null)
+        IArtifactRepository? artifactRepository = null,
+        ExecutionLimitsOptions? executionLimits = null,
+        AgentWorkerOptions? workerOptions = null)
     {
         if ((artifactRecorder is null) != (artifactRepository is null))
         {
@@ -67,6 +71,8 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
         _routingOptions = routingOptions;
         _artifactRecorder = artifactRecorder;
         _artifactRepository = artifactRepository;
+        _executionLimits = executionLimits;
+        _workerOptions = workerOptions;
         _logger = logger;
     }
 
@@ -209,6 +215,29 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
         else
         {
             primaryModel = run.Model;
+        }
+
+        if (!run.ExecutionTimeout.HasValue)
+        {
+            TimeSpan effectiveTimeout;
+            if (_workerOptions is not null && _workerOptions.ExecutionTimeout > TimeSpan.Zero)
+            {
+                var safetyMargin = TimeSpan.FromSeconds(Math.Min(15, Math.Max(1, _workerOptions.ExecutionTimeout.TotalSeconds * 0.05)));
+                effectiveTimeout = _workerOptions.ExecutionTimeout > safetyMargin
+                    ? _workerOptions.ExecutionTimeout - safetyMargin
+                    : _workerOptions.ExecutionTimeout;
+            }
+            else if (_executionLimits is not null && _executionLimits.AgentExecutionTimeoutMinutes > 0)
+            {
+                effectiveTimeout = TimeSpan.FromMinutes(_executionLimits.AgentExecutionTimeoutMinutes);
+            }
+            else
+            {
+                effectiveTimeout = TimeSpan.FromMinutes(5);
+            }
+
+            run.ExecutionTimeout = effectiveTimeout;
+            run.ExecutionDeadline = DateTimeOffset.UtcNow + effectiveTimeout;
         }
 
         var memoryEntries = await SearchMemorySafelyAsync(run, cancellationToken);
@@ -413,6 +442,8 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
             Model = run.Model,
             Input = instructionText,
             WorkspacePath = workspacePath,
+            ExecutionTimeout = run.ExecutionTimeout,
+            ExecutionDeadline = run.ExecutionDeadline,
             CreatedAtUtc = run.CreatedAtUtc,
             UpdatedAtUtc = run.UpdatedAtUtc,
             Version = run.Version

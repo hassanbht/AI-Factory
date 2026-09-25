@@ -101,6 +101,16 @@ public sealed class WorkflowRecoveryHostedService : BackgroundService
             _logger.LogWarning(
                 "AgentRunOrphanRecovery Mode=Startup RecoveredCount={Count}", recoveredRuns);
         }
+
+        var containerManager = scope.ServiceProvider.GetService<AI.Factory.Application.Abstractions.Execution.IContainerLifecycleManager>();
+        if (containerManager is not null)
+        {
+            var sweptContainers = await containerManager.SweepOrphanContainersAsync(cancellationToken);
+            if (sweptContainers > 0)
+            {
+                _logger.LogWarning("Workflow recovery: swept {Count} orphaned container(s) at startup.", sweptContainers);
+            }
+        }
     }
 
     private async Task RunStaleSweepAsync(CancellationToken cancellationToken)
@@ -132,6 +142,16 @@ public sealed class WorkflowRecoveryHostedService : BackgroundService
         if (recoveredRunCount > 0)
         {
             _logger.LogWarning("Workflow recovery: recovered {Count} stale OrchestrationRun(s) with an expired Worker lease.", recoveredRunCount);
+        }
+
+        var periodicContainerManager = scope.ServiceProvider.GetService<AI.Factory.Application.Abstractions.Execution.IContainerLifecycleManager>();
+        if (periodicContainerManager is not null)
+        {
+            var sweptContainers = await periodicContainerManager.SweepOrphanContainersAsync(cancellationToken);
+            if (sweptContainers > 0)
+            {
+                _logger.LogWarning("Workflow recovery: swept {Count} orphaned container(s).", sweptContainers);
+            }
         }
     }
 }

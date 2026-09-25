@@ -483,3 +483,152 @@ The full suite runs with the live gate unset. Its live tests return early there 
 | OpenHands | NOT EXECUTED |
 
 No database schema or migration change; the process-level run applied the existing migrations to a throwaway file. No API, DTO or endpoint change. No Flutter change.
+
+---
+
+## Phase D.1 — Runtime Lifecycle Hardening
+
+### Problems observed in Phase D
+
+1. **Orphan containers after host/process termination**: Killed host processes left Hermes containers running for 25–30 s independently of the Factory process.
+2. **Created containers left permanently**: Containers that failed to start (e.g. invalid network) or received early cancellation remained in Docker's `Created` state indefinitely because `--rm` only removes containers that successfully started and exited.
+3. **Unnamed containers**: Docker assigned random names (e.g. `vigorous_bell`, `optimistic_cerf`), complicating correlation, tracking, diagnostics, and targeted orphan cleanup.
+4. **Hidden timeout retries**: A 2 s process timeout was categorized as transient and retried three times before transitioning to `TimedOut`.
+5. **Deterministic Docker error retries**: Missing Docker network (exit code 125) was retried three times as transient launch failures.
+6. **Multiple timeout owners**: Hermes process timeout, Polly retry attempts, and Worker execution budget competed independently, causing misleading reported duration (`DurationMs=0`).
+7. **Floating Hermes image**: Using `nousresearch/hermes-agent:latest` introduced startup output changes across pulls.
+
+### Solution
+
+1. **Deterministic Container Naming & Identity**:
+   - Containers are deterministically named: `ai-factory-agent-<agentRunId:N>`.
+   - Every container is tagged with Docker labels:
+     - `factory=ai-factory`
+     - `managed=true`
+     - `agent-run-id=<GUID>`
+     - `adapter=Hermes`
+     - `project-id=<GUID>` (when available)
+   - Labels strictly exclude any secrets, keys, or passwords.
+2. **Reliable Container Lifecycle & Cleanup**:
+   - Guaranteed cleanup in `HermesAgentExecutor`: `finally` block calls `CleanupContainerAsync` (`docker rm -f <containerName>`) whenever execution times out, is cancelled, encounters startup failures (e.g. exit code 125), or fails with launch exceptions.
+   - Normal completion with `--rm` automatically removes containers upon container exit.
+3. **Startup Orphan Sweep**:
+   - `IContainerLifecycleManager` introduced in Application (`apps/src/AI.Factory.Application/Abstractions/Execution/IContainerLifecycleManager.cs`).
+   - Implemented in Infrastructure as `DockerContainerLifecycleManager` (`apps/src/AI.Factory.Infrastructure/Agents/DockerContainerLifecycleManager.cs`).
+   - Integrated into `WorkflowRecoveryHostedService`: on Worker startup and periodic stale sweep, inspects Factory-owned managed containers (`factory=ai-factory` and `managed=true`).
+   - Safely removes containers whose AgentRun is missing from the database, already in a terminal state, or stale past `StaleExecutionTimeout`.
+   - **Strict Ownership Guarantee**: Unmanaged/foreign containers or active containers belonging to other healthy executions are NEVER touched.
+4. **Single Authoritative Execution Timeout**:
+   - Factory boundary defines one authoritative deadline: `AgentExecutionSpec.Deadline = startedAt + effectiveTimeout` derived from `AgentWorkerOptions.ExecutionTimeout` and `ExecutionLimitsOptions.AgentExecutionTimeout`.
+   - `AgentOrchestrator` computes the authoritative deadline and passes it down via `AgentExecutionSpec`.
+   - `HermesExecutionAdapter` checks the deadline before launching and rejects already-expired specs immediately (`DurationMs = 0`, `TimedOut = true`) without invoking Docker.
+   - `HermesAgentExecutor` derives remaining process timeout: `remaining = deadline - UtcNow` bounded by `HermesOptions.TimeoutSeconds`. Lower layers never compete with the authoritative Worker budget.
+5. **Retry Classification Hardening**:
+   - `AgentExecutionFailureClassifier` (`apps/src/AI.Factory.Infrastructure/Agents/AgentExecutionFailureClassifier.cs`) classifies outcomes deterministically:
+     - Timeout (`TimedOut == true` or execution timeout text) → NON-RETRYABLE.
+     - Cancellation (`Cancelled == true` or cancellation text) → NON-RETRYABLE.
+     - Agent process exit code 1..124 (normal application non-zero exit) → NON-RETRYABLE.
+     - Deterministic Docker configuration / CLI error (missing network, invalid image, volume mount error, usage syntax) → NON-RETRYABLE.
+     - Genuine transient daemon launch failures (daemon unreachable, socket error, connection reset) → RETRYABLE.
+   - `ResilienceAgentExecutorDecorator` uses `AgentExecutionFailureClassifier.IsTransientLaunchFailure` to prevent infinite or invalid retries.
+6. **Pinned Hermes Image**:
+   - Replaced floating `:latest` with pinned version: `nousresearch/hermes-agent:0.20.6`.
+   - Pinned digest: `sha256:bcced061c9e114b711eabed6d4b8c4b2cff98ad33ec20317ef5692b5dd4ffecd`.
+   - Upstream commit revision: `c30ac90a92097058ddd6f9db3fa2e3182a7bfdcc`.
+
+### Configuration Changes
+
+- `apps/src/AI.Factory.Infrastructure/Agents/HermesOptions.cs`:
+  - `DockerImage` default updated from `nousresearch/hermes-agent:latest` to `nousresearch/hermes-agent:0.20.6`.
+- `apps/src/AI.Factory.Worker/appsettings.json` and `apps/src/AI.Factory.Api/appsettings.json`:
+  - `Execution:Adapters:Hermes:DockerImage` set to `"nousresearch/hermes-agent:0.20.6"`.
+- Dependency Injection:
+  - `IContainerLifecycleManager` registered as `DockerContainerLifecycleManager` in Worker and API composition roots.
+  - Injected into `WorkflowRecoveryHostedService` to run orphan sweep on Worker startup and stale intervals.
+
+### Docker Topology
+
+```
+Worker Host (or container)
+   ↓
+AgentRunWorker
+   ↓
+AgentOrchestrator (defines authoritative Timeout & Deadline)
+   ↓
+AdapterDispatchingAgentRuntime
+   ↓
+HermesExecutionAdapter
+   ↓
+HermesAgentExecutor
+   ↓
+docker run --rm --name ai-factory-agent-<agentRunId:N> \
+  --label factory=ai-factory \
+  --label managed=true \
+  --label agent-run-id=<agentRunId> \
+  --label adapter=Hermes \
+  --label project-id=<projectId> \
+  nousresearch/hermes-agent:0.20.6 ...
+   ↓
+(Completion / Timeout / Cancellation / Startup Failure)
+   ↓
+Guaranteed cleanup: docker rm -f ai-factory-agent-<agentRunId:N>
+   ↓
+0 Factory-owned containers remain
+```
+
+### Tests
+
+- **New Unit Tests**:
+  - `apps/tests/AI.Factory.Application.Tests/Execution/ContainerLifecycleUnitTests.cs`: 14 tests covering:
+    - Container naming convention (`ai-factory-agent-<runId:N>`).
+    - Metadata labels presence and secret exclusion.
+    - Retry classification (timeout -> no retry, cancellation -> no retry, missing network -> no retry, invalid image -> no retry, agent exit -> no retry, transient daemon error -> retry).
+    - Authoritative timeout derivation and expired deadline rejection without Docker launch.
+    - Guaranteed container cleanup on timeout, cancellation, startup failure.
+    - Orphan sweep logic (removing stale, preserving unmanaged/foreign).
+- **New Integration Tests (Real Docker)**:
+  - `apps/tests/AI.Factory.Worker.Tests/DockerLifecycleIntegrationTests.cs`: 4 real Docker daemon tests covering:
+    - Startup failure cleanup (invalid network exit 125 leaves 0 containers).
+    - Timeout cleanup (1s timeout leaves 0 containers).
+    - Cancellation cleanup (caller cancellation leaves 0 containers).
+    - Real Docker orphan sweep (creates Factory container + unmanaged container, sweeps stale Factory container, verifies foreign container is preserved).
+- **Full Solution Regression**:
+  - `dotnet test apps/AI.Factory.slnx`
+  - Total: **1,495 passed, 0 failed, 0 warnings** across all 3 test assemblies:
+    - `AI.Factory.Application.Tests`: 1,071 passed
+    - `AI.Factory.Api.Tests`: 315 passed
+    - `AI.Factory.Worker.Tests`: 109 passed
+
+### Live Evidence
+
+1. **Hermes Smoke Test (`HermesSmokeTest.cs`)**:
+   - Gateway: OpenRouter (`deepseek/deepseek-v4-flash-0731`)
+   - Image: `nousresearch/hermes-agent:0.20.6`
+   - Duration: 36 s
+   - Result: Succeeded; `hello.txt` created with exact content `Hello AI Factory`.
+   - Containers before: 0
+   - Containers after: 0
+2. **Live Golden Lifecycle Run (`LivePlannerE2ETests.AutonomousStart_RealPlanner_ForcedRepair_DependentDispatch_ProjectVerification_HumanApproval`)**:
+   - Gateway: OpenRouter (`deepseek/deepseek-v4-flash-0731` for planning/review, `qwen/qwen3-coder` for implementation/repair)
+   - Image: `nousresearch/hermes-agent:0.20.6`
+   - Active polling: Captured container `ai-factory-agent-dcbc0d8b13264aceab2b7f5c75dc7bbe` during execution with labels `factory=ai-factory`, `managed=true`, `adapter=Hermes`, `agent-run-id=dcbc0d8b-1326-4ace-ab2b-7f5c75dc7bbe`, `project-id=f863bfbf-8581-40b8-adc3-615fe25bdbf0`.
+   - Containers before: 0
+   - Containers after: 0
+3. **Docker Lifecycle Integration Tests**:
+   - Real Docker startup failure (exit 125): 0 containers remain.
+   - Real Docker timeout: 0 containers remain.
+   - Real Docker cancellation: 0 containers remain.
+   - Real Docker orphan sweep: 1 stale Factory container removed, foreign unmanaged container preserved.
+
+### Pinned Image
+
+- **Tag**: `nousresearch/hermes-agent:0.20.6`
+- **Digest**: `sha256:bcced061c9e114b711eabed6d4b8c4b2cff98ad33ec20317ef5692b5dd4ffecd`
+- **Revision**: `c30ac90a92097058ddd6f9db3fa2e3182a7bfdcc`
+
+### Remaining Limitations & Deferred Scope
+
+- **Phase E**: OpenHands adapter (`OpenHandsExecutionAdapter`, container lifecycle for OpenHands, event-stream parsing).
+- **Phase H**: Migration of `AgentCodeReviewer` from direct `IAgentExecutor` to `IExecutionAdapter`.
+- **Phase I**: Provider gateway abstraction and routing architecture (resolving OmniRoute upstream 403).
+

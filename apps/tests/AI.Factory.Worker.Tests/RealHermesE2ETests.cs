@@ -1076,7 +1076,7 @@ public sealed class RealHermesE2ETests
 
         var hermesOptions = new HermesOptions
         {
-            DockerImage = Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_IMAGE") ?? "nousresearch/hermes-agent:latest",
+            DockerImage = Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_IMAGE") ?? "nousresearch/hermes-agent:0.20.6",
             DataVolume = dataVolume,
             WorkspaceRoot = workspaceRoot,
             TimeoutSeconds = 120,

@@ -204,7 +204,7 @@ public sealed class LiveWorkerHost : IDisposable
         var hermesOptions = (HermesOptions)builder.Services
             .Single(d => d.ServiceType == typeof(HermesOptions)).ImplementationInstance!;
         hermesOptions.DockerImage = Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_IMAGE")
-            ?? "nousresearch/hermes-agent:latest";
+            ?? "nousresearch/hermes-agent:0.20.6";
         hermesOptions.DataVolume = hermesData;
         hermesOptions.WorkspaceRoot = hermesScratch;
         hermesOptions.NetworkMode = "bridge";

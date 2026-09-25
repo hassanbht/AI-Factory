@@ -91,6 +91,22 @@ public sealed class AgentRun : IVersionedEntity
     [NotMapped]
     public string? WorkspacePath { get; set; }
 
+    /// <summary>
+    /// Phase D.1 — Authoritative execution timeout at the Factory boundary.
+    /// Derived from Worker execution budget minus safety margin or ExecutionLimitsOptions.
+    /// Transient/execution-time-only; excluded from persistence.
+    /// </summary>
+    [NotMapped]
+    public TimeSpan? ExecutionTimeout { get; set; }
+
+    /// <summary>
+    /// Phase D.1 — Absolute execution deadline derived from startedAt + effectiveTimeout.
+    /// All lower-level operations derive remaining time from this deadline.
+    /// Transient/execution-time-only; excluded from persistence.
+    /// </summary>
+    [NotMapped]
+    public DateTimeOffset? ExecutionDeadline { get; set; }
+
     /// <summary>Applies a lifecycle transition, throwing <see cref="InvalidAgentRunTransitionException"/> if not allowed from the current status. The only sanctioned way to mutate Status.</summary>
     public void TransitionTo(AgentRunStatus next)
     {

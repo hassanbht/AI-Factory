@@ -95,15 +95,35 @@ public sealed class HermesAgentExecutor : IAgentExecutor
             Directory.CreateDirectory(workspacePath);
         }
 
+        var agentRunId = request.AgentRunId ?? Guid.NewGuid();
+        var containerName = DockerContainerNaming.GetContainerName(agentRunId);
+
         var arguments = new List<string>
         {
             "run",
             "--rm",
-            "--network",
-            _options.NetworkMode,
-            "-v",
-            $"{_options.DataVolume}:/opt/data"
+            "--name",
+            containerName,
+            "--label",
+            $"{DockerContainerNaming.FactoryLabelKey}={DockerContainerNaming.FactoryLabelValue}",
+            "--label",
+            $"{DockerContainerNaming.AgentRunIdLabelKey}={agentRunId}",
+            "--label",
+            $"{DockerContainerNaming.AdapterLabelKey}={request.Adapter ?? "Hermes"}",
+            "--label",
+            $"{DockerContainerNaming.ManagedLabelKey}={DockerContainerNaming.ManagedLabelValue}"
         };
+
+        if (request.ProjectId.HasValue)
+        {
+            arguments.Add("--label");
+            arguments.Add($"{DockerContainerNaming.ProjectIdLabelKey}={request.ProjectId.Value}");
+        }
+
+        arguments.Add("--network");
+        arguments.Add(_options.NetworkMode);
+        arguments.Add("-v");
+        arguments.Add($"{_options.DataVolume}:/opt/data");
 
         // Phase 18.29.1 — how /workspace is mounted depends on WHOSE daemon runs
         // the container, not on what the agent does. See BuildWorkspaceMountArguments.
@@ -201,13 +221,38 @@ public sealed class HermesAgentExecutor : IAgentExecutor
             controlledEnvironment["PATH"] = inheritedPath;
         }
 
+        TimeSpan processTimeout;
+        if (request.Deadline.HasValue)
+        {
+            var remaining = request.Deadline.Value - DateTimeOffset.UtcNow;
+            processTimeout = remaining > TimeSpan.Zero ? remaining : TimeSpan.FromMilliseconds(1);
+            if (_options.TimeoutSeconds > 0 && TimeSpan.FromSeconds(_options.TimeoutSeconds) < processTimeout)
+            {
+                processTimeout = TimeSpan.FromSeconds(_options.TimeoutSeconds);
+            }
+        }
+        else if (request.Timeout.HasValue)
+        {
+            processTimeout = request.Timeout.Value;
+            if (_options.TimeoutSeconds > 0 && TimeSpan.FromSeconds(_options.TimeoutSeconds) < processTimeout)
+            {
+                processTimeout = TimeSpan.FromSeconds(_options.TimeoutSeconds);
+            }
+        }
+        else
+        {
+            processTimeout = TimeSpan.FromSeconds(_options.TimeoutSeconds);
+        }
+
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             var result = await _processRunner.RunAsync(
                 new ProcessRunRequest(
                     "docker",
                     arguments,
-                    TimeSpan.FromSeconds(_options.TimeoutSeconds),
+                    processTimeout,
                     WorkingDirectory: workspacePath,
                     EnvironmentVariables: controlledEnvironment),
                 cancellationToken);
@@ -217,16 +262,17 @@ public sealed class HermesAgentExecutor : IAgentExecutor
             if (result.TimedOut)
             {
                 _logger.LogWarning(
-                    "Hermes execution timed out for agent {Agent} after {TimeoutSeconds}s",
+                    "Hermes execution timed out for agent {Agent} after {TimeoutSeconds:F0}s",
                     request.Agent,
-                    _options.TimeoutSeconds);
+                    processTimeout.TotalSeconds);
 
                 return new AgentExecutionResult(
                     false,
                     Truncate(result.StandardOutput),
-                    $"Execution timed out after {_options.TimeoutSeconds} seconds.",
+                    $"Execution timed out after {processTimeout.TotalSeconds:F0} seconds.",
                     stopwatch.ElapsedMilliseconds,
-                    workspacePath);
+                    workspacePath,
+                    TimedOut: true);
             }
 
             var success = result.ExitCode == 0;
@@ -291,6 +337,29 @@ public sealed class HermesAgentExecutor : IAgentExecutor
 
             return new AgentExecutionResult(
                 false, null, $"Security violation: {ex.Message}", stopwatch.ElapsedMilliseconds, workspacePath);
+        }
+        finally
+        {
+            await CleanupContainerAsync(containerName);
+        }
+    }
+
+    private async Task CleanupContainerAsync(string containerName)
+    {
+        try
+        {
+            using var cleanupCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var cleanupRequest = new ProcessRunRequest(
+                "docker",
+                new[] { "rm", "-f", containerName },
+                TimeSpan.FromSeconds(10));
+
+            await _processRunner.RunAsync(cleanupRequest, cleanupCts.Token);
+            _logger.LogDebug("Hermes container cleanup completed for {ContainerName}", containerName);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Hermes container cleanup for {ContainerName} finished or container already removed.", containerName);
         }
     }
 

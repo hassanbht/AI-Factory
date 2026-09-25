@@ -25,7 +25,10 @@ public sealed class HermesWorkspaceMountTests
         public Task<ProcessRunResult> RunAsync(
             ProcessRunRequest request, CancellationToken cancellationToken = default)
         {
-            LastRequest = request;
+            if (request.Arguments.Contains("run") || LastRequest is null)
+            {
+                LastRequest = request;
+            }
             return Task.FromResult(new ProcessRunResult(0, "ok", string.Empty, TimedOut: false));
         }
     }

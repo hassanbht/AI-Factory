@@ -40,25 +40,11 @@ public sealed class ResilienceAgentExecutorDecorator : IAgentExecutor
                 {
                     var result = await _inner.ExecuteAsync(request, ct);
 
-                    // If the inner executor returned an un-thrown transient failure (such as docker/network transient timeout),
-                    // allow the resilience executor to retry it by classifying the error string.
+                    // Phase D.1: Only retry genuine transient launch failures (e.g. temporary daemon unavailable).
+                    // Timeouts, cancellations, agent non-zero exits, and deterministic Docker configuration failures never retry.
                     if (!result.Success && !string.IsNullOrWhiteSpace(result.Error))
                     {
-                        string? hintCategory = null;
-                        if (result.Error.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
-                            result.Error.Contains("timed out", StringComparison.OrdinalIgnoreCase))
-                        {
-                            hintCategory = "timeout";
-                        }
-                        else if (result.Error.Contains("temporary", StringComparison.OrdinalIgnoreCase) ||
-                                 result.Error.Contains("network", StringComparison.OrdinalIgnoreCase) ||
-                                 result.Error.Contains("connection", StringComparison.OrdinalIgnoreCase))
-                        {
-                            hintCategory = "infrastructure";
-                        }
-
-                        var classification = _failureClassifier.Classify(result.Error, hintCategory);
-                        if (classification.IsTransient)
+                        if (AgentExecutionFailureClassifier.IsTransientLaunchFailure(result))
                         {
                             throw new IOException($"Transient agent execution error: {result.Error}");
                         }

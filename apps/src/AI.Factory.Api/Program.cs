@@ -166,6 +166,7 @@ builder.Configuration.GetSection("CommandPolicy").Bind(commandPolicyOptions);
 builder.Services.AddSingleton(commandPolicyOptions);
 builder.Services.AddSingleton<IProcessRunner, SystemProcessRunner>();
 builder.Services.AddScoped<HermesAgentExecutor>();
+builder.Services.AddScoped<AI.Factory.Application.Abstractions.Execution.IContainerLifecycleManager, DockerContainerLifecycleManager>();
 
 var resilienceOptions = new ResilienceOptions();
 builder.Configuration.GetSection(ResilienceOptions.SectionName).Bind(resilienceOptions);

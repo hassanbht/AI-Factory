@@ -52,6 +52,22 @@ public sealed class HermesExecutionAdapter : IExecutionAdapter
             "AgentRuntimeStarted AgentRunId={AgentRunId} AgentDefinitionId={AgentDefinitionId} CorrelationId={CorrelationId}",
             spec.AgentRunId, spec.Agent.DefinitionId, spec.CorrelationId);
 
+        if (spec.Deadline.HasValue && spec.Deadline.Value <= DateTimeOffset.UtcNow)
+        {
+            _logger.LogWarning(
+                "AgentRuntimeTimedOut AgentRunId={AgentRunId} CorrelationId={CorrelationId} DurationMs=0 Reason=DeadlineAlreadyExceeded",
+                spec.AgentRunId, spec.CorrelationId);
+
+            return Outcome(
+                spec,
+                ExecutionOutcomeStatus.TimedOut,
+                output: null,
+                error: "Execution deadline was exceeded before launch.",
+                _failureClassifier.Classify("Execution deadline was exceeded.", "timeout").Category,
+                0,
+                ExitReasons.Timeout);
+        }
+
         // WorkingDirectory is the workspace AgentOrchestrator resolved for this run,
         // never chosen here. Empty only for a Planner-only AgentRun with no
         // WorkItemId, which HermesAgentExecutor falls back to its own fresh
@@ -60,7 +76,12 @@ public sealed class HermesExecutionAdapter : IExecutionAdapter
             Agent: spec.Agent.Name,
             Model: spec.Model.ModelId,
             Prompt: BuildPrompt(spec),
-            WorkingDirectory: spec.Workspace.Path ?? string.Empty);
+            WorkingDirectory: spec.Workspace.Path ?? string.Empty,
+            AgentRunId: spec.AgentRunId,
+            ProjectId: spec.ProjectId,
+            Adapter: Key,
+            Timeout: spec.Timeout,
+            Deadline: spec.Deadline);
 
         var stopwatch = Stopwatch.StartNew();
 
@@ -89,12 +110,13 @@ public sealed class HermesExecutionAdapter : IExecutionAdapter
         }
 
         stopwatch.Stop();
+        var durationMs = result.DurationMs > 0 ? result.DurationMs : stopwatch.ElapsedMilliseconds;
 
         if (result.Success)
         {
             _logger.LogInformation(
                 "AgentRuntimeCompleted AgentRunId={AgentRunId} CorrelationId={CorrelationId} DurationMs={DurationMs}",
-                spec.AgentRunId, spec.CorrelationId, result.DurationMs);
+                spec.AgentRunId, spec.CorrelationId, durationMs);
 
             // HermesAgentExecutor reports success only for exit code 0.
             return Outcome(
@@ -103,7 +125,7 @@ public sealed class HermesExecutionAdapter : IExecutionAdapter
                 result.Output,
                 error: null,
                 category: null,
-                result.DurationMs,
+                durationMs,
                 ExitReasons.Exit(result.ExitCode ?? 0));
         }
 
@@ -117,13 +139,13 @@ public sealed class HermesExecutionAdapter : IExecutionAdapter
         {
             _logger.LogWarning(
                 "AgentRuntimeTimedOut AgentRunId={AgentRunId} CorrelationId={CorrelationId} DurationMs={DurationMs}",
-                spec.AgentRunId, spec.CorrelationId, result.DurationMs);
+                spec.AgentRunId, spec.CorrelationId, durationMs);
         }
         else
         {
             _logger.LogWarning(
                 "AgentRuntimeFailed AgentRunId={AgentRunId} CorrelationId={CorrelationId} DurationMs={DurationMs}",
-                spec.AgentRunId, spec.CorrelationId, result.DurationMs);
+                spec.AgentRunId, spec.CorrelationId, durationMs);
         }
 
         return Outcome(
@@ -132,7 +154,7 @@ public sealed class HermesExecutionAdapter : IExecutionAdapter
             result.Output,
             errorMessage,
             failureClassification.Category,
-            result.DurationMs,
+            durationMs,
             result.ExitCode is { } exitCode
                 ? ExitReasons.Exit(exitCode)
                 : isTimeout ? ExitReasons.Timeout : ExitReasons.Error);

@@ -43,7 +43,7 @@ public sealed class HermesSmokeTest
 
         var options = new HermesOptions
         {
-            DockerImage = Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_IMAGE") ?? "nousresearch/hermes-agent:latest",
+            DockerImage = Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_IMAGE") ?? "nousresearch/hermes-agent:0.20.6",
             DataVolume = dataVolume,
             WorkspaceRoot = Path.Combine(Path.GetTempPath(), "ai-factory-hermes-smoke-workspace"),
             TimeoutSeconds = 120,

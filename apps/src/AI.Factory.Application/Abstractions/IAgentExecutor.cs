@@ -11,7 +11,12 @@ public sealed record AgentExecutionRequest(
     string Agent,
     string? Model,
     string Prompt,
-    string WorkingDirectory);
+    string WorkingDirectory,
+    Guid? AgentRunId = null,
+    Guid? ProjectId = null,
+    string? Adapter = null,
+    TimeSpan? Timeout = null,
+    DateTimeOffset? Deadline = null);
 
 /// <param name="ExitCode">The agent process exit code, when a process ran to completion; null otherwise.</param>
 public sealed record AgentExecutionResult(
@@ -20,4 +25,6 @@ public sealed record AgentExecutionResult(
     string? Error,
     long DurationMs,
     string? WorkspacePath = null,
-    int? ExitCode = null);
+    int? ExitCode = null,
+    bool TimedOut = false,
+    bool Cancelled = false);

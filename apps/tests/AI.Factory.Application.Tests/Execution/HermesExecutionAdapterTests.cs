@@ -48,10 +48,17 @@ public sealed class HermesExecutionAdapterTests
         public FakeProcessRunner(Func<ProcessRunRequest, ProcessRunResult> respond) => _respond = respond;
 
         public ProcessRunRequest? LastRequest { get; private set; }
+        public ProcessRunRequest? RunRequest { get; private set; }
+        public List<ProcessRunRequest> AllRequests { get; } = new();
 
         public Task<ProcessRunResult> RunAsync(ProcessRunRequest request, CancellationToken cancellationToken = default)
         {
             LastRequest = request;
+            AllRequests.Add(request);
+            if (request.Arguments.Contains("run"))
+            {
+                RunRequest = request;
+            }
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(_respond(request));
         }
@@ -312,7 +319,7 @@ public sealed class HermesExecutionAdapterTests
             options ?? HermesOptions(), runner, NullLogger<HermesAgentExecutor>.Instance, secretProvider: secretProvider);
 
         var outcome = await Adapter(executor).ExecuteAsync(spec);
-        return (outcome, runner.LastRequest!);
+        return (outcome, runner.RunRequest ?? runner.LastRequest!);
     }
 
     [Fact]
@@ -322,9 +329,14 @@ public sealed class HermesExecutionAdapterTests
 
         try
         {
-            var options = HermesOptions(o => o.Provider = "openrouter");
+            var options = HermesOptions(o =>
+            {
+                o.DockerImage = "test/hermes:pinned";
+                o.Provider = "openrouter";
+            });
+            var spec = Spec(model: "routed-model", workspace: workspace);
             var (_, process) = await ExecuteThroughHermesAsync(
-                Spec(model: "routed-model", workspace: workspace), new ProcessRunResult(0, "ok", "", TimedOut: false), options);
+                spec, new ProcessRunResult(0, "ok", "", TimedOut: false), options);
 
             Assert.Equal("docker", process.FileName);
             Assert.Equal(workspace, process.WorkingDirectory);
@@ -332,7 +344,14 @@ public sealed class HermesExecutionAdapterTests
             Assert.Equal(
                 new[]
                 {
-                    "run", "--rm", "--network", "bridge", "-v", "hermes-data:/opt/data",
+                    "run", "--rm",
+                    "--name", $"ai-factory-agent-{spec.AgentRunId:N}",
+                    "--label", "factory=ai-factory",
+                    "--label", $"agent-run-id={spec.AgentRunId}",
+                    "--label", "adapter=Hermes",
+                    "--label", "managed=true",
+                    "--network", "bridge",
+                    "-v", "hermes-data:/opt/data",
                     "-v", $"{workspace}:/workspace",
                     "-e", "HERMES_WRITE_SAFE_ROOT=/workspace",
                     "test/hermes:pinned",

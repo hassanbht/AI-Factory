@@ -115,7 +115,9 @@ public sealed class AdapterDispatchingAgentRuntime : IAgentRuntime
             agentDefinition.SystemPrompt),
         Instructions: agentRun.Input,
         Workspace: new ExecutionWorkspace(agentRun.WorkspacePath),
-        Model: new ModelRoute(agentRun.Model, agentRun.Provider));
+        Model: new ModelRoute(agentRun.Model, agentRun.Provider),
+        Timeout: agentRun.ExecutionTimeout,
+        Deadline: agentRun.ExecutionDeadline);
 
     /// <summary>
     /// Lossless for every outcome an IAgentRuntime could previously return:

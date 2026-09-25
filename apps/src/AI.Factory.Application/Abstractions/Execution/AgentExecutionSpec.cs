@@ -23,7 +23,9 @@ public sealed record AgentExecutionSpec(
     ExecutionAgent Agent,
     string? Instructions,
     ExecutionWorkspace Workspace,
-    ModelRoute Model);
+    ModelRoute Model,
+    TimeSpan? Timeout = null,
+    DateTimeOffset? Deadline = null);
 
 /// <summary>
 /// The agent being executed, as configured on its AgentDefinition. Whether the

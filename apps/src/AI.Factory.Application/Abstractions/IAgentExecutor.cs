@@ -16,7 +16,8 @@ public sealed record AgentExecutionRequest(
     Guid? ProjectId = null,
     string? Adapter = null,
     TimeSpan? Timeout = null,
-    DateTimeOffset? Deadline = null);
+    DateTimeOffset? Deadline = null,
+    string? Gateway = null);
 
 /// <param name="ExitCode">The agent process exit code, when a process ran to completion; null otherwise.</param>
 public sealed record AgentExecutionResult(

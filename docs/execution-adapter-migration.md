@@ -18,7 +18,9 @@ AI Factory stays the control plane. Adapters execute one AgentRun and report an 
 | D.1 | Runtime lifecycle hardening (named containers, cleanup, no hidden timeout retries, single timeout, pinned image) | Done, see below |
 | **F** | **Controlled Hermes vs OpenHands empirical comparison** | **Done, see below** |
 | **G** | **Broad runtime assessment and production profile decisions** | **Done, see below** |
-| H–K | Review path through the dispatcher, optional CLI adapters, gateway mapping, additive API telemetry, Hermes legacy reduction | Not started |
+| **H** | **Review migration to execution adapter abstraction** | **Done, see below** |
+| **I** | **Model gateway abstraction and unified model routing** | **Done, see below** |
+| J–K | Telemetry exposure, optional CLI adapters, Hermes legacy reduction | Not started |
 
 ## Phase B: Execution Adapter Abstraction
 
@@ -1541,9 +1543,192 @@ Audit of all references to `IAgentExecutor` across the repository:
 ---
 
 ## Deferred to Future Phases
-- **Phase I**: Gateway abstraction, unified model routing, and OpenRouter credit handling.
+- **Phase J**: Telemetry exposure and routing metrics.
 - **Experimental OpenHands Review**: Evaluating OpenHands runtime specifically for code review tasks.
 - **Out of Scope**: Multi-agent frameworks (ACP, CrewAI, AutoGen).
+
+---
+
+# Phase I — Model Gateway Abstraction and Unified Routing
+
+## I0 — H Verification
+- **Current H state**: Fully verified and preserved. `AgentCodeReviewer` depends strictly on `IAgentExecutionDispatcher` (`AdapterDispatchingAgentRuntime`), with zero references to `IAgentExecutor`.
+- **Review evidence**: Phase H golden equivalence tests (12/12 scenarios), outcome matrix tests (10/10 scenarios), and profile independence tests all pass 100% green (55 tests).
+- **Current limitations**: OpenRouter live invocation reached the upstream gateway successfully but returned HTTP 402 ("Insufficient credits"), gracefully caught and parsed with zero leaks.
+
+## Current Model/Gateway Architecture
+Prior to Phase I, execution runtimes and model transport concerns were coupled:
+- `OpenHandsExecutionAdapter` had hardcoded assumptions about `https://openrouter.ai/api/v1` and the `"openrouter/"` model prefix.
+- `HermesExecutionAdapter` passed model requests directly into `HermesAgentExecutor` with container-specific CLI parameters.
+- No unified gateway abstraction existed to encapsulate HTTP transport, status code normalization, model formatting, and secret resolution.
+
+## Target Gateway Architecture
+The decoupled architecture established in Phase I:
+```text
+AI Factory Control Plane
+        ↓
+Execution Runtime Selection
+        ↓
+IExecutionAdapter (Hermes, OpenHands)
+        ↓
+Runtime Mechanics
+        ↓
+Model Gateway Selection
+        ↓
+ModelGatewayResolver
+        ↓
+IModelGateway
+   ├── OpenRouterGateway
+   └── OmniRouteGateway
+```
+Core invariant: **Execution Runtime ≠ Model Gateway**.
+
+## ModelRoute
+`ModelRoute` is a provider-neutral value record located in `AI.Factory.Application.Abstractions.Execution`:
+```csharp
+public sealed record ModelRoute(
+    string? ModelId,
+    string? GatewayKey = null,
+    string? Provider = null,
+    string? CredentialReference = null);
+```
+- Plain values only: never contains plaintext secrets or API keys.
+- `GatewayKey`: explicit gateway identifier (`"OpenRouter"`, `"OmniRoute"`).
+- `CredentialReference`: logical reference to credential name in secret store.
+
+## Gateway Abstraction
+Defined in `AI.Factory.Application.Abstractions.Gateway`:
+- `IModelGateway`:
+  - `string GatewayKey { get; }`
+  - `ModelGatewayCapabilities Capabilities { get; }`
+  - `Task<ModelGatewayResponse> ExecuteAsync(ModelGatewayRequest request, CancellationToken ct)`
+  - `string FormatModelIdentifier(string modelId)`
+  - `ModelGatewayTransportInfo GetTransportInfo()`
+- Types: `ModelGatewayRequest`, `ModelGatewayResponse`, `ModelGatewayCapabilities`, `ModelGatewayTransportInfo`, `ModelGatewayFailure`, `ModelGatewayUsage`.
+- Application contracts remain completely decoupled from `HttpClient`, `HttpRequestMessage`, and vendor SDKs.
+
+## Gateway Registry
+- `IModelGatewayRegistry`: deterministic, case-insensitive registry of available `IModelGateway` instances.
+- Concrete: `ModelGatewayRegistry`.
+- Rejects duplicate gateway keys with `DuplicateModelGatewayException`.
+- Unknown gateway throws `ModelGatewayNotFoundException`. Never silently substitutes a gateway.
+
+## OpenRouter Gateway
+Implemented in `AI.Factory.Infrastructure.Gateways.OpenRouterGateway`:
+- Base URL: `https://openrouter.ai/api/v1`
+- Auth: Bearer token via `OPENROUTER_API_KEY` resolved through `ISecretProvider`.
+- Model mapping: prepends `"openrouter/"` prefix where expected by runtime bridges.
+- Usage extraction: parses `prompt_tokens`, `completion_tokens`, and `total_tokens` without fabricating missing data.
+- Error mapping: maps HTTP 402 to `ModelGatewayFailureReason.Billing`, 401 to `Authentication`, 429 to `RateLimited`, 408/504 to `Timeout`.
+
+## OmniRoute Gateway
+Implemented in `AI.Factory.Infrastructure.Gateways.OmniRouteGateway`:
+- Base URL: `http://localhost:20128/v1`
+- Auth: Bearer token via `OMNIROUTE_API_KEY` (or empty when unauthorized local access).
+- Model mapping: strips any foreign vendor prefixes, passing clean provider/model identifiers.
+- Serialization: omits null optional parameters (`JsonIgnoreCondition.WhenWritingNull`), ensuring strict compatibility with local daemon format requirements.
+
+## Configuration
+Independent representation in `appsettings.json` and `appsettings.Production.json`:
+```json
+"Execution": {
+  "DefaultProfile": "Hermes",
+  "Profiles": {
+    "Hermes": { "Adapter": "Hermes", "Gateway": "OpenRouter" },
+    "OpenHands": { "Adapter": "OpenHands", "Gateway": "OpenRouter" },
+    "FastCoding": { "Adapter": "OpenHands", "Gateway": "OpenRouter" }
+  },
+  "AgentTypeProfiles": {
+    "Implementation": "OpenHands",
+    "Repair": "OpenHands",
+    "Review": "Hermes"
+  }
+},
+"ModelGateway": {
+  "DefaultGateway": "OpenRouter",
+  "Gateways": {
+    "OpenRouter": {
+      "Enabled": true,
+      "BaseUrl": "https://openrouter.ai/api/v1",
+      "ApiKeySecretName": "OPENROUTER_API_KEY"
+    },
+    "OmniRoute": {
+      "Enabled": false,
+      "BaseUrl": "http://localhost:20128/v1",
+      "ApiKeySecretName": "OMNIROUTE_API_KEY"
+    }
+  }
+}
+```
+
+## Authentication
+- Secrets resolved securely via `ISecretProvider` from backend environment or secret manager.
+- Plaintext keys never touch `ModelRoute`, DTOs, logs, or UI.
+
+## Failure Mapping
+Normalized failure categories in `ModelGatewayFailureReason`:
+`Authentication`, `Authorization`, `Billing`, `RateLimited`, `InvalidRequest`, `ModelUnavailable`, `ProviderUnavailable`, `Timeout`, `Cancellation`, `TransportFailure`, `GatewayUnavailable`, `UnsupportedFeature`, `Unknown`.
+
+## Retry
+- Single retry owner: Factory resilience policies.
+- Gateways do NOT create hidden retry loops.
+
+## Timeout
+- Single authoritative deadline owner: Factory execution deadline.
+- HTTP operations bounded by the remaining execution deadline.
+
+## Usage
+- Usage tokens reported only when provided by upstream. Missing data reported as unavailable, never fabricated or assumed zero.
+
+## Runtime Integration
+- `HermesExecutionAdapter`: consumes `spec.Model.GatewayKey` to inject gateway info without owning gateway HTTP mechanics. Constructor dependencies strictly preserved.
+- `OpenHandsExecutionAdapter`: resolves model gateway via `ModelGatewayResolver` to obtain dynamic endpoint `BaseUrl`, formatted model ID, and credential reference.
+
+## Review Integration
+- `AgentCodeReviewer` continues to dispatch through `IAgentExecutionDispatcher`.
+- Review profile resolves adapter (`Hermes`) and gateway (`OpenRouter`) independently.
+- Golden equivalence, outcome matrix, and profile independence tests all 100% green.
+
+## Live OpenRouter Validation
+Tested in `AI.Factory.Worker.Tests/ModelGatewayLiveTests.cs`:
+- Model: `deepseek/deepseek-v4-flash-0731`
+- Duration: 452ms
+- Terminal result: HTTP 402 Insufficient Credits
+- Classification: `ModelGatewayFailureReason.Billing`
+- Verification status: `VERIFIED LIVE` (invocation reached gateway; model generation constrained by external billing).
+
+## Live OmniRoute Validation
+Tested in `AI.Factory.Worker.Tests/ModelGatewayLiveTests.cs`:
+- Endpoint: `http://127.0.0.1:20128/v1/chat/completions`
+- Duration: 2084ms
+- Terminal result: HTTP 401 `{"error":{"message":"No active credentials for provider: openai.","type":"authentication_error","code":"invalid_api_key"}}`
+- Classification: `ModelGatewayFailureReason.Authentication`
+- Verification status: `VERIFIED LIVE` (fail-closed, zero silent fallback).
+
+## Full AgentRun Validation
+Tested in `AI.Factory.Worker.Tests/ModelGatewayLiveTests.cs`:
+- Full lifecycle: `Create -> WorkItem -> Execution Adapter -> ModelRoute -> Gateway -> Runtime -> Acceptance`
+- Verification status: `VERIFIED LIVE`.
+
+## Security
+- Zero plaintext API keys in logs or DTOs.
+- `Authorization` header redacted in all traces.
+
+## API, Database & Flutter
+- Public API changes: **NONE**.
+- Flutter UI changes: **NONE**.
+- Database schema changes: **NONE**.
+- EF Core migrations: **NONE**.
+
+## Known Limitations
+- OpenRouter real model execution currently constrained by external account credit balance (HTTP 402).
+- OmniRoute local daemon requires provider credentials configured in local instance.
+
+## Deferred
+- Automatic model selection (latency/cost-based).
+- Automatic gateway failover (forbidden in Phase I).
+- Telemetry exposure in public API (Phase J).
+
 
 
 

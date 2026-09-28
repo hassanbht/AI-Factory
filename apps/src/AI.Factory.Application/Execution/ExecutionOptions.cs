@@ -96,6 +96,9 @@ public sealed class ExecutionProfileOptions
 {
     /// <summary>Registry key of the adapter that executes this profile.</summary>
     public string Adapter { get; set; } = string.Empty;
+
+    /// <summary>Optional registry key of the model gateway associated with this profile.</summary>
+    public string? Gateway { get; set; }
 }
 
 public sealed class ExecutionAdapterOptions

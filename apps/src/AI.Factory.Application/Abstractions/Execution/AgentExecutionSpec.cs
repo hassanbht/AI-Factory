@@ -46,9 +46,17 @@ public sealed record ExecutionAgent(
 public sealed record ExecutionWorkspace(string? Path);
 
 /// <summary>
-/// The Factory's model decision for this run. Both parts are independently
-/// optional, mirroring AgentRun.Model/AgentRun.Provider: a null ModelId means
-/// "the runtime's own configured default applies".
+/// The Factory's model decision for this run.
+/// Captures provider-neutral model and gateway routing decisions.
+/// NEVER contains plaintext credentials.
 /// </summary>
-/// <param name="GatewayKey">The routing provider/gateway id (e.g. an AiProviders key) as persisted on AgentRun.Provider.</param>
-public sealed record ModelRoute(string? ModelId, string? GatewayKey);
+/// <param name="ModelId">Model identifier (e.g. deepseek/deepseek-v4-flash-0731).</param>
+/// <param name="GatewayKey">The routing gateway id (configured gateway identifier).</param>
+/// <param name="Provider">Optional model provider override if distinct from gateway.</param>
+/// <param name="CredentialReference">Optional secure reference to credential secret name.</param>
+public sealed record ModelRoute(
+    string? ModelId,
+    string? GatewayKey = null,
+    string? Provider = null,
+    string? CredentialReference = null);
+

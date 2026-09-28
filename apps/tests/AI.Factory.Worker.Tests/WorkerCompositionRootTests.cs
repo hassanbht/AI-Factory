@@ -122,6 +122,11 @@ public sealed class WorkerCompositionRootTests : IDisposable
     [InlineData(typeof(IDatabaseDiagnosticsService))]
     [InlineData(typeof(IDeploymentDiagnosticsService))]
     [InlineData(typeof(IWorkerHealthCoordinator))]
+    [InlineData(typeof(AI.Factory.Application.Abstractions.Gateway.IModelGatewayRegistry))]
+    [InlineData(typeof(AI.Factory.Application.Gateway.ModelGatewayResolver))]
+    [InlineData(typeof(AI.Factory.Infrastructure.Gateways.OpenRouterGateway))]
+    [InlineData(typeof(AI.Factory.Infrastructure.Gateways.OmniRouteGateway))]
+    [InlineData(typeof(AI.Factory.Application.Gateway.ModelGatewayOptions))]
     public void RealWorkerServiceGraph_Resolves(Type serviceType)
     {
         using var scope = _host.Services.CreateScope();
@@ -129,6 +134,33 @@ public sealed class WorkerCompositionRootTests : IDisposable
         var resolved = scope.ServiceProvider.GetRequiredService(serviceType);
 
         Assert.NotNull(resolved);
+    }
+
+    [Fact]
+    public void ModelGatewayRegistry_ContainsOpenRouterAndOmniRouteGateways()
+    {
+        using var scope = _host.Services.CreateScope();
+
+        var registry = scope.ServiceProvider
+            .GetRequiredService<AI.Factory.Application.Abstractions.Gateway.IModelGatewayRegistry>();
+
+        Assert.Equal(new[] { "OmniRoute", "OpenRouter" }, registry.Keys.OrderBy(k => k, StringComparer.Ordinal));
+        Assert.True(registry.TryGet("OpenRouter", out var openRouterGateway));
+        Assert.IsType<AI.Factory.Infrastructure.Gateways.OpenRouterGateway>(openRouterGateway);
+        Assert.True(registry.TryGet("OmniRoute", out var omniRouteGateway));
+        Assert.IsType<AI.Factory.Infrastructure.Gateways.OmniRouteGateway>(omniRouteGateway);
+
+        var resolver = scope.ServiceProvider
+            .GetRequiredService<AI.Factory.Application.Gateway.ModelGatewayResolver>();
+
+        var openRouterResolution = resolver.Resolve("OpenRouter");
+        Assert.True(openRouterResolution.IsResolved);
+        Assert.Same(openRouterGateway, openRouterResolution.Gateway);
+
+        // In production configuration, OmniRoute is registered but disabled in configuration
+        var omniRouteResolution = resolver.Resolve("OmniRoute");
+        Assert.False(omniRouteResolution.IsResolved);
+        Assert.Contains("disabled", omniRouteResolution.FailureReason, StringComparison.OrdinalIgnoreCase);
     }
 
     // Execution-adapter Phases B/C — IAgentRuntime is the adapter dispatcher (exactly

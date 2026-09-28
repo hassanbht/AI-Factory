@@ -42,8 +42,11 @@ public sealed class ExecutionConfigurationBindingTests
 
         Assert.Equal("Hermes", options.DefaultProfile);
         Assert.Equal("Hermes", options.Profiles["Hermes"].Adapter);
+        Assert.Equal("OpenRouter", options.Profiles["Hermes"].Gateway);
         Assert.Equal("OpenHands", options.Profiles["OpenHands"].Adapter);
+        Assert.Equal("OpenRouter", options.Profiles["OpenHands"].Gateway);
         Assert.Equal("OpenHands", options.Profiles["FastCoding"].Adapter);
+        Assert.Equal("OpenRouter", options.Profiles["FastCoding"].Gateway);
         Assert.Equal("OpenHands", options.AgentTypeProfiles["Implementation"]);
         Assert.Equal("OpenHands", options.AgentTypeProfiles["Repair"]);
         Assert.Equal("Hermes", options.AgentTypeProfiles["Review"]);
@@ -78,6 +81,7 @@ public sealed class ExecutionConfigurationBindingTests
         foreach (var key in workerOptions.Profiles.Keys)
         {
             Assert.Equal(workerOptions.Profiles[key].Adapter, apiOptions.Profiles[key].Adapter);
+            Assert.Equal(workerOptions.Profiles[key].Gateway, apiOptions.Profiles[key].Gateway);
         }
         Assert.Equal(workerOptions.AgentTypeProfiles.Keys.OrderBy(k => k), apiOptions.AgentTypeProfiles.Keys.OrderBy(k => k));
         foreach (var key in workerOptions.AgentTypeProfiles.Keys)

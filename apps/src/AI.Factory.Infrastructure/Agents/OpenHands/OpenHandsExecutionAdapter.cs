@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Abstractions.Execution;
+using AI.Factory.Application.Gateway;
 using AI.Factory.Domain.Enums;
 using Microsoft.Extensions.Logging;
 
@@ -24,6 +25,7 @@ public sealed class OpenHandsExecutionAdapter : IExecutionAdapter
     private readonly IFailureClassifier _failureClassifier;
     private readonly ISecretProvider? _secretProvider;
     private readonly IOpenHandsClientFactory _clientFactory;
+    private readonly ModelGatewayResolver? _gatewayResolver;
     private readonly ILogger<OpenHandsExecutionAdapter> _logger;
 
     public OpenHandsExecutionAdapter(
@@ -33,7 +35,8 @@ public sealed class OpenHandsExecutionAdapter : IExecutionAdapter
         IFailureClassifier failureClassifier,
         ILogger<OpenHandsExecutionAdapter> logger,
         IOpenHandsClientFactory? clientFactory = null,
-        ISecretProvider? secretProvider = null)
+        ISecretProvider? secretProvider = null,
+        ModelGatewayResolver? gatewayResolver = null)
     {
         _options = options;
         _processRunner = processRunner;
@@ -42,6 +45,7 @@ public sealed class OpenHandsExecutionAdapter : IExecutionAdapter
         _logger = logger;
         _clientFactory = clientFactory ?? new DefaultOpenHandsClientFactory();
         _secretProvider = secretProvider;
+        _gatewayResolver = gatewayResolver;
     }
 
     public string Key => AdapterKey;
@@ -113,7 +117,7 @@ public sealed class OpenHandsExecutionAdapter : IExecutionAdapter
             }
 
             // Resolve model & API key
-            var (modelId, apiKey) = await ResolveModelAndApiKeyAsync(spec, cancellationToken);
+            var (modelId, apiKey, providerBaseUrl) = await ResolveModelAndApiKeyAsync(spec, cancellationToken);
 
             // Create conversation
             var createRequest = new OpenHandsCreateConversationRequest
@@ -131,7 +135,7 @@ public sealed class OpenHandsExecutionAdapter : IExecutionAdapter
                     {
                         Model = modelId,
                         ApiKey = apiKey,
-                        BaseUrl = _options.ProviderBaseUrl
+                        BaseUrl = providerBaseUrl
                     }
                 }
             };
@@ -397,38 +401,61 @@ public sealed class OpenHandsExecutionAdapter : IExecutionAdapter
         await _processRunner.RunAsync(req, cancellationToken);
     }
 
-    private async Task<(string ModelId, string ApiKey)> ResolveModelAndApiKeyAsync(
+    private async Task<(string ModelId, string ApiKey, string BaseUrl)> ResolveModelAndApiKeyAsync(
         AgentExecutionSpec spec,
         CancellationToken cancellationToken)
     {
-        var modelId = !string.IsNullOrWhiteSpace(spec.Model.ModelId)
-            ? spec.Model.ModelId
-            : _options.DefaultModel;
+        string modelId;
+        string baseUrl = _options.ProviderBaseUrl;
+        string? secretName = _options.ProviderApiKeySecretName;
+        string? envVar = _options.ProviderApiKeyEnvironmentVariable;
 
-        if (!modelId.StartsWith("openrouter/", StringComparison.OrdinalIgnoreCase))
+        if (_gatewayResolver is not null)
         {
-            modelId = $"openrouter/{modelId}";
+            var resolution = _gatewayResolver.Resolve(spec.Model);
+            if (!resolution.IsResolved)
+            {
+                throw new InvalidOperationException(resolution.FailureReason ?? "Model gateway could not be resolved.");
+            }
+
+            var gateway = resolution.Gateway!;
+            var transport = gateway.GetTransportInfo();
+            baseUrl = transport.BaseUrl;
+            secretName = transport.ApiKeySecretName ?? _options.ProviderApiKeySecretName;
+            envVar = transport.EnvironmentVariableName ?? _options.ProviderApiKeyEnvironmentVariable;
+            modelId = gateway.FormatModelIdentifier(spec.Model.ModelId ?? _options.DefaultModel);
+        }
+        else
+        {
+            modelId = !string.IsNullOrWhiteSpace(spec.Model.ModelId)
+                ? spec.Model.ModelId
+                : _options.DefaultModel;
+
+            if (!modelId.StartsWith("openrouter/", StringComparison.OrdinalIgnoreCase))
+            {
+                modelId = $"openrouter/{modelId}";
+            }
         }
 
         string? apiKey = null;
 
-        if (_secretProvider is not null && !string.IsNullOrWhiteSpace(_options.ProviderApiKeySecretName))
+        if (_secretProvider is not null && !string.IsNullOrWhiteSpace(secretName))
         {
-            apiKey = await _secretProvider.GetSecretAsync(_options.ProviderApiKeySecretName, cancellationToken);
+            apiKey = await _secretProvider.GetSecretAsync(secretName, cancellationToken);
         }
 
-        if (string.IsNullOrWhiteSpace(apiKey) && !string.IsNullOrWhiteSpace(_options.ProviderApiKeyEnvironmentVariable))
+        if (string.IsNullOrWhiteSpace(apiKey) && !string.IsNullOrWhiteSpace(envVar))
         {
-            apiKey = Environment.GetEnvironmentVariable(_options.ProviderApiKeyEnvironmentVariable);
+            apiKey = Environment.GetEnvironmentVariable(envVar);
         }
 
         if (string.IsNullOrWhiteSpace(apiKey))
         {
             throw new InvalidOperationException(
-                $"No API key could be resolved for OpenHands provider ({_options.ProviderApiKeySecretName}).");
+                $"No API key could be resolved for OpenHands provider ({secretName}).");
         }
 
-        return (modelId, apiKey);
+        return (modelId, apiKey, baseUrl);
     }
 
     private string ResolveWorkspacePath(AgentExecutionSpec spec)

@@ -1,13 +1,16 @@
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Agents;
 using AI.Factory.Application.Abstractions.Execution;
+using AI.Factory.Application.Abstractions.Gateway;
 using AI.Factory.Application.Configuration;
 using AI.Factory.Application.Execution;
+using AI.Factory.Application.Gateway;
 using AI.Factory.Application.Learning;
 using AI.Factory.Application.Orchestration;
 using AI.Factory.Application.Security;
 using AI.Factory.Application.Tools;
 using AI.Factory.Infrastructure.Agents;
+using AI.Factory.Infrastructure.Gateways;
 using AI.Factory.Infrastructure.Agents.OpenHands;
 using AI.Factory.Infrastructure.Configuration;
 using AI.Factory.Infrastructure.Context;
@@ -207,6 +210,10 @@ public partial class Program
         // (AgentDefinition policy, then AgentType -> Execution profile -> adapter).
         // The only adapter is HermesExecutionAdapter, which runs Hermes through the
         // same resilience-decorated IAgentExecutor above (used by ModelTaskPlanner
+        // Execution-adapter Phases B/C — IAgentRuntime is the Factory dispatcher
+        // (AgentDefinition policy, then AgentType -> Execution profile -> adapter).
+        // The only adapter is HermesExecutionAdapter, which runs Hermes through the
+        // same resilience-decorated IAgentExecutor above (used by ModelTaskPlanner
         // and HermesExecutionAdapter; Review migrated to execution adapter in Phase H).
         // No "Execution" section = the built-in single Hermes profile.
         var executionOptions = new ExecutionOptions();
@@ -214,6 +221,61 @@ public partial class Program
         executionOptions.ApplyBuiltInDefault(HermesExecutionAdapter.AdapterKey);
         executionOptions.Validate();
         builder.Services.AddSingleton(executionOptions);
+
+        var modelGatewayOptions = new ModelGatewayOptions();
+        builder.Configuration.GetSection(ModelGatewayOptions.SectionName).Bind(modelGatewayOptions);
+        if (modelGatewayOptions.Gateways.Count == 0 && aiProviderOptions.Providers.Count > 0)
+        {
+            foreach (var (providerId, providerSettings) in aiProviderOptions.Providers)
+            {
+                modelGatewayOptions.Gateways[providerId] = new GatewayEntryOptions
+                {
+                    Enabled = providerSettings.Enabled,
+                    BaseUrl = providerSettings.BaseUrl ?? string.Empty,
+                    ApiKeySecretName = providerSettings.ApiKeySecretName,
+                    TimeoutSeconds = providerSettings.TimeoutSeconds
+                };
+            }
+        }
+        modelGatewayOptions.Validate();
+        builder.Services.AddSingleton(modelGatewayOptions);
+
+        builder.Services.AddScoped<OpenRouterGateway>(sp =>
+        {
+            var options = sp.GetRequiredService<ModelGatewayOptions>();
+            options.Gateways.TryGetValue(OpenRouterGateway.Key, out var entry);
+            var httpClient = sp.GetRequiredService<IHttpClientFactory>().CreateClient(OpenRouterGateway.Key);
+            return new OpenRouterGateway(
+                httpClient,
+                sp.GetRequiredService<ISecretProvider>(),
+                sp.GetRequiredService<ILogger<OpenRouterGateway>>(),
+                entry?.BaseUrl,
+                entry?.ApiKeySecretName);
+        });
+
+        builder.Services.AddScoped<OmniRouteGateway>(sp =>
+        {
+            var options = sp.GetRequiredService<ModelGatewayOptions>();
+            options.Gateways.TryGetValue(OmniRouteGateway.Key, out var entry);
+            var httpClient = sp.GetRequiredService<IHttpClientFactory>().CreateClient(OmniRouteGateway.Key);
+            return new OmniRouteGateway(
+                httpClient,
+                sp.GetRequiredService<ISecretProvider>(),
+                sp.GetRequiredService<ILogger<OmniRouteGateway>>(),
+                entry?.BaseUrl,
+                entry?.ApiKeySecretName);
+        });
+
+        builder.Services.AddScoped<IModelGatewayRegistry>(sp =>
+        {
+            var registry = new ModelGatewayRegistry();
+            registry.Register(sp.GetRequiredService<OpenRouterGateway>());
+            registry.Register(sp.GetRequiredService<OmniRouteGateway>());
+            return registry;
+        });
+
+        builder.Services.AddScoped<ModelGatewayResolver>();
+
         builder.Services.AddScoped<IExecutionAdapter, HermesExecutionAdapter>();
 
         var openHandsOptions = new OpenHandsOptions();
@@ -279,6 +341,9 @@ builder.Services.AddModelRoutingPreflight(
                 client.Timeout = TimeSpan.FromSeconds(providerSettings.TimeoutSeconds);
             });
         }
+
+        builder.Services.AddHttpClient(OpenRouterGateway.Key);
+        builder.Services.AddHttpClient(OmniRouteGateway.Key);
 
         builder.Services.AddScoped<IAiModelProviderRegistry>(sp =>
         {

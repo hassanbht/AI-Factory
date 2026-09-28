@@ -54,7 +54,9 @@ public sealed class ExecutionProfileResolver
                 $"Execution adapter '{adapterKey}' (profile '{profileName}') is not registered.");
         }
 
-        return new ExecutionProfileResolution(true, profileName, adapterKey, adapter, null);
+        var gatewayKey = profile.Gateway;
+
+        return new ExecutionProfileResolution(true, profileName, adapterKey, adapter, null, gatewayKey);
     }
 }
 
@@ -63,8 +65,9 @@ public sealed record ExecutionProfileResolution(
     string? ProfileName,
     string? AdapterKey,
     IExecutionAdapter? Adapter,
-    string? FailureReason)
+    string? FailureReason,
+    string? GatewayKey = null)
 {
     public static ExecutionProfileResolution Failed(string? profileName, string? adapterKey, string reason) =>
-        new(false, profileName, adapterKey, null, reason);
+        new(false, profileName, adapterKey, null, reason, null);
 }

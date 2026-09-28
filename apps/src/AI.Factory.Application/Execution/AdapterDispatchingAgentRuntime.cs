@@ -98,7 +98,12 @@ public sealed class AdapterDispatchingAgentRuntime : IAgentRuntime, IAgentExecut
                 + "CorrelationId={CorrelationId}",
             spec.AgentRunId, agentType, resolution.ProfileName, adapter.Key, spec.CorrelationId);
 
-        return await adapter.ExecuteAsync(spec, cancellationToken);
+        var effectiveGatewayKey = spec.Model.GatewayKey ?? resolution.GatewayKey;
+        var effectiveSpec = spec.Model.GatewayKey != effectiveGatewayKey
+            ? spec with { Model = spec.Model with { GatewayKey = effectiveGatewayKey } }
+            : spec;
+
+        return await adapter.ExecuteAsync(effectiveSpec, cancellationToken);
     }
 
     public async Task<AgentRunExecutionResult> ExecuteAsync(
@@ -138,7 +143,7 @@ public sealed class AdapterDispatchingAgentRuntime : IAgentRuntime, IAgentExecut
         }
 
         var adapter = resolution.Adapter!;
-        var spec = BuildSpec(agentRun, agentDefinition);
+        var spec = BuildSpec(agentRun, agentDefinition, resolution.GatewayKey);
 
         if (spec.Model.ModelId is not null && !adapter.Capabilities.HasFlag(ExecutionCapabilities.FactoryRoutedModel))
         {
@@ -163,7 +168,7 @@ public sealed class AdapterDispatchingAgentRuntime : IAgentRuntime, IAgentExecut
         return ToRuntimeResult(adapter.Key, outcome);
     }
 
-    private static AgentExecutionSpec BuildSpec(AgentRun agentRun, AgentDefinition agentDefinition) => new(
+    private static AgentExecutionSpec BuildSpec(AgentRun agentRun, AgentDefinition agentDefinition, string? profileGatewayKey) => new(
         AgentRunId: agentRun.Id,
         CorrelationId: agentRun.CorrelationId,
         ProjectId: agentRun.ProjectId,
@@ -177,7 +182,7 @@ public sealed class AdapterDispatchingAgentRuntime : IAgentRuntime, IAgentExecut
             agentDefinition.SystemPrompt),
         Instructions: agentRun.Input,
         Workspace: new ExecutionWorkspace(agentRun.WorkspacePath),
-        Model: new ModelRoute(agentRun.Model, agentRun.Provider),
+        Model: new ModelRoute(agentRun.Model, profileGatewayKey ?? agentRun.Provider),
         Timeout: agentRun.ExecutionTimeout,
         Deadline: agentRun.ExecutionDeadline);
 

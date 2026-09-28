@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Abstractions.Execution;
+using AI.Factory.Application.Gateway;
+using AI.Factory.Domain.Enums;
 using Microsoft.Extensions.Logging;
 
 namespace AI.Factory.Infrastructure.Agents;
@@ -81,7 +83,8 @@ public sealed class HermesExecutionAdapter : IExecutionAdapter
             ProjectId: spec.ProjectId,
             Adapter: Key,
             Timeout: spec.Timeout,
-            Deadline: spec.Deadline);
+            Deadline: spec.Deadline,
+            Gateway: spec.Model.GatewayKey);
 
         var stopwatch = Stopwatch.StartNew();
 

@@ -56,12 +56,64 @@ public sealed class ExecutionAdapterCompositionTests : IClassFixture<ApiTestFact
     }
 
     [Fact]
-    public void NoExecutionSection_ResolvesEveryAgentTypeToTheBuiltInHermesProfile()
+    public void ProductionConfiguration_ExplicitExecutionSection_ResolvesApprovedProfiles()
     {
         using var scope = _factory.Services.CreateScope();
 
         var options = scope.ServiceProvider.GetRequiredService<ExecutionOptions>();
         var resolver = scope.ServiceProvider.GetRequiredService<ExecutionProfileResolver>();
+
+        Assert.Equal("Hermes", options.DefaultProfile);
+        Assert.True(options.Profiles.ContainsKey("Hermes"));
+        Assert.Equal("Hermes", options.Profiles["Hermes"].Adapter);
+        Assert.True(options.Profiles.ContainsKey("OpenHands"));
+        Assert.Equal("OpenHands", options.Profiles["OpenHands"].Adapter);
+        Assert.True(options.Profiles.ContainsKey("FastCoding"));
+        Assert.Equal("OpenHands", options.Profiles["FastCoding"].Adapter);
+
+        // Implementation -> OpenHands
+        Assert.Equal("OpenHands", resolver.Resolve("Implementation").AdapterKey);
+        // Repair -> OpenHands
+        Assert.Equal("OpenHands", resolver.Resolve("Repair").AdapterKey);
+        // Review -> Hermes (explicitly mapped in AgentTypeProfiles)
+        Assert.Equal("Hermes", options.AgentTypeProfiles["Review"]);
+        Assert.Equal("Hermes", resolver.Resolve("Review").AdapterKey);
+        // Planner -> Hermes (unmapped falls back to DefaultProfile)
+        Assert.Equal("Hermes", resolver.Resolve("Planner").AdapterKey);
+        // Documentation -> Hermes (unmapped falls back to DefaultProfile)
+        Assert.Equal("Hermes", resolver.Resolve("Documentation").AdapterKey);
+    }
+
+    [Fact]
+    public void IAgentExecutionDispatcher_IsRegistered_AndResolvesToAdapterDispatchingAgentRuntime()
+    {
+        using var scope = _factory.Services.CreateScope();
+
+        var dispatcher = scope.ServiceProvider.GetRequiredService<AI.Factory.Application.Abstractions.Execution.IAgentExecutionDispatcher>();
+
+        Assert.IsType<AI.Factory.Application.Execution.AdapterDispatchingAgentRuntime>(dispatcher);
+    }
+
+    [Fact]
+    public void ICodeReviewer_ResolvesToAgentCodeReviewer()
+    {
+        using var scope = _factory.Services.CreateScope();
+
+        var reviewer = scope.ServiceProvider.GetRequiredService<AI.Factory.Application.Abstractions.ICodeReviewer>();
+
+        Assert.IsType<AI.Factory.Application.Orchestration.AgentCodeReviewer>(reviewer);
+    }
+
+    [Fact]
+    public void ConfigurationWithClearedExecutionSection_UsesTheBuiltInHermesProfile()
+    {
+        var options = new ExecutionOptions();
+        options.ApplyBuiltInDefault("Hermes");
+        options.Validate();
+
+        using var scope = _factory.Services.CreateScope();
+        var registry = scope.ServiceProvider.GetRequiredService<IExecutionAdapterRegistry>();
+        var resolver = new ExecutionProfileResolver(options, registry);
 
         Assert.Equal("Hermes", options.DefaultProfile);
         foreach (var agentType in new[] { "Implementation", "Repair", "Planner", "Review", "Documentation" })
@@ -73,7 +125,7 @@ public sealed class ExecutionAdapterCompositionTests : IClassFixture<ApiTestFact
     }
 
     [Fact]
-    public void IAgentExecutor_StaysRegistered_ForTheAdapterAndForReview()
+    public void IAgentExecutor_StaysRegistered_ForTheAdapterAndPlanner()
     {
         using var scope = _factory.Services.CreateScope();
 

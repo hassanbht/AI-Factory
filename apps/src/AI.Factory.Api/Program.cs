@@ -194,8 +194,9 @@ builder.Services.AddScoped<IAgentExecutor>(sp =>
 // Execution-adapter Phases B/C — IAgentRuntime is the Factory dispatcher
 // (AgentDefinition policy, then AgentType -> Execution profile -> adapter).
 // The only adapter is HermesExecutionAdapter, which runs Hermes through the
-// same resilience-decorated IAgentExecutor above (still also used directly by
-// review). No "Execution" section = the built-in single Hermes profile.
+// same resilience-decorated IAgentExecutor above (used by ModelTaskPlanner
+// and HermesExecutionAdapter; Review migrated to execution adapter in Phase H).
+// No "Execution" section = the built-in single Hermes profile.
 var executionOptions = new AI.Factory.Application.Execution.ExecutionOptions();
 builder.Configuration.GetSection(AI.Factory.Application.Execution.ExecutionOptions.SectionName).Bind(executionOptions);
 executionOptions.ApplyBuiltInDefault(HermesExecutionAdapter.AdapterKey);
@@ -210,7 +211,9 @@ builder.Services.AddScoped<AI.Factory.Application.Abstractions.Execution.IExecut
 
 builder.Services.AddScoped<AI.Factory.Application.Abstractions.Execution.IExecutionAdapterRegistry, AI.Factory.Application.Execution.ExecutionAdapterRegistry>();
 builder.Services.AddScoped<AI.Factory.Application.Execution.ExecutionProfileResolver>();
-builder.Services.AddScoped<IAgentRuntime, AI.Factory.Application.Execution.AdapterDispatchingAgentRuntime>();
+builder.Services.AddScoped<AI.Factory.Application.Execution.AdapterDispatchingAgentRuntime>();
+builder.Services.AddScoped<IAgentRuntime>(sp => sp.GetRequiredService<AI.Factory.Application.Execution.AdapterDispatchingAgentRuntime>());
+builder.Services.AddScoped<AI.Factory.Application.Abstractions.Execution.IAgentExecutionDispatcher>(sp => sp.GetRequiredService<AI.Factory.Application.Execution.AdapterDispatchingAgentRuntime>());
 
 var modelRoutingOptions = new ModelRoutingOptions();
 builder.Configuration.GetSection("ModelRouting").Bind(modelRoutingOptions);

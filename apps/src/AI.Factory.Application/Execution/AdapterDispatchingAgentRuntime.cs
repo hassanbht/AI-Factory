@@ -23,7 +23,7 @@ namespace AI.Factory.Application.Execution;
 /// as a classified Validation result, so the orchestrator persists a terminal
 /// Failed AgentRun instead of leaving it Running.
 /// </summary>
-public sealed class AdapterDispatchingAgentRuntime : IAgentRuntime
+public sealed class AdapterDispatchingAgentRuntime : IAgentRuntime, IAgentExecutionDispatcher
 {
     private readonly ExecutionProfileResolver _resolver;
     private readonly IFailureClassifier _failureClassifier;
@@ -37,6 +37,68 @@ public sealed class AdapterDispatchingAgentRuntime : IAgentRuntime
         _resolver = resolver;
         _failureClassifier = failureClassifier;
         _logger = logger;
+    }
+
+    public async Task<ExecutionOutcome> DispatchAsync(
+        AgentExecutionSpec spec,
+        CancellationToken cancellationToken = default)
+    {
+        var agentType = spec.Agent.AgentType;
+        var resolution = _resolver.Resolve(agentType);
+
+        if (!resolution.IsResolved)
+        {
+            var failureReason = resolution.FailureReason ?? "Execution adapter could not be resolved.";
+            _logger.LogWarning(
+                "ExecutionAdapterResolutionFailed AgentRunId={AgentRunId} AgentType={AgentType} Profile={Profile} "
+                    + "Adapter={Adapter} CorrelationId={CorrelationId} Reason={Reason}",
+                spec.AgentRunId, agentType, resolution.ProfileName, resolution.AdapterKey,
+                spec.CorrelationId, failureReason);
+
+            return new ExecutionOutcome(
+                ExecutionOutcomeStatus.Failed,
+                Output: null,
+                ErrorMessage: failureReason,
+                FailureCategory: FailureCategory.Validation,
+                DurationMs: 0,
+                Usage: null,
+                ArtifactReferences: Array.Empty<string>(),
+                ToolCallNames: Array.Empty<string>(),
+                Model: spec.Model,
+                ExitReason: "resolution_failed");
+        }
+
+        var adapter = resolution.Adapter!;
+
+        if (spec.Model.ModelId is not null && !adapter.Capabilities.HasFlag(ExecutionCapabilities.FactoryRoutedModel))
+        {
+            var reason =
+                $"Execution adapter '{adapter.Key}' (profile '{resolution.ProfileName}') cannot honour the routed model "
+                + $"'{spec.Model.ModelId}'.";
+
+            _logger.LogWarning(
+                "ExecutionAdapterContractUnsatisfied AgentRunId={AgentRunId} Adapter={Adapter} CorrelationId={CorrelationId} Reason={Reason}",
+                spec.AgentRunId, adapter.Key, spec.CorrelationId, reason);
+
+            return new ExecutionOutcome(
+                ExecutionOutcomeStatus.Failed,
+                Output: null,
+                ErrorMessage: reason,
+                FailureCategory: FailureCategory.Validation,
+                DurationMs: 0,
+                Usage: null,
+                ArtifactReferences: Array.Empty<string>(),
+                ToolCallNames: Array.Empty<string>(),
+                Model: spec.Model,
+                ExitReason: "capability_unsatisfied");
+        }
+
+        _logger.LogInformation(
+            "ExecutionAdapterSelected AgentRunId={AgentRunId} AgentType={AgentType} Profile={Profile} Adapter={Adapter} "
+                + "CorrelationId={CorrelationId}",
+            spec.AgentRunId, agentType, resolution.ProfileName, adapter.Key, spec.CorrelationId);
+
+        return await adapter.ExecuteAsync(spec, cancellationToken);
     }
 
     public async Task<AgentRunExecutionResult> ExecuteAsync(

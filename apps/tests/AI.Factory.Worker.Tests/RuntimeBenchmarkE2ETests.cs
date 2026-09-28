@@ -25,9 +25,30 @@ public sealed class RuntimeBenchmarkE2ETests
         _output = output;
     }
 
-    private static bool LiveEnabled =>
-        (bool.TryParse(Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_SMOKE_TEST"), out var h) && h) ||
-        (bool.TryParse(Environment.GetEnvironmentVariable("AI_FACTORY_OPENHANDS_SMOKE_TEST"), out var o) && o);
+    private static bool LiveEnabled
+    {
+        get
+        {
+            BenchmarkHarness.TryLoadEnvLive();
+            return (bool.TryParse(Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_BENCHMARK"), out var b) && b)
+                || (bool.TryParse(Environment.GetEnvironmentVariable("AI_FACTORY_RUN_BENCHMARK"), out var rb) && rb);
+        }
+    }
+
+    private static bool LiveBenchmarkEnabled => LiveEnabled;
+
+    [Fact]
+    public async Task CheckOpenRouterConnectivity()
+    {
+        BenchmarkHarness.TryLoadEnvLive();
+        var key = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
+        if (string.IsNullOrWhiteSpace(key)) return;
+
+        using var client = new HttpClient();
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", key);
+        var resp = await client.GetAsync("https://openrouter.ai/api/v1/auth/key");
+        Assert.True(resp.IsSuccessStatusCode, $"OpenRouter auth failed: {resp.StatusCode}");
+    }
 
     [Theory]
     [InlineData("TaskA")]
@@ -421,4 +442,78 @@ public sealed class RuntimeBenchmarkE2ETests
             try { Directory.Delete(baselineRoot, recursive: true); } catch { }
         }
     }
+
+    private async Task Live_ControlledBenchmark_RepresentativeWorkloadCategories(string taskKey)
+    {
+        if (!LiveBenchmarkEnabled)
+        {
+            _output.WriteLine($"Live benchmark for {taskKey} skipped (AI_FACTORY_RUN_BENCHMARK not set).");
+            return;
+        }
+
+        var task = taskKey switch
+        {
+            "TaskA" => BenchmarkTaskDefinition.TaskA_SingleFile(),
+            "TaskB" => BenchmarkTaskDefinition.TaskB_MultiFile(),
+            "TaskC" => BenchmarkTaskDefinition.TaskC_BugFix(),
+            "TaskD" => BenchmarkTaskDefinition.TaskD_TestRepair(),
+            _ => throw new ArgumentOutOfRangeException(nameof(taskKey))
+        };
+
+        var baselineRoot = Path.Combine(Path.GetTempPath(), $"aif-bench-cat-{taskKey}-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(baselineRoot);
+
+        try
+        {
+            var (bareRepoPath, commitSha, baselineHash) = BenchmarkHarness.CreateCanonicalBaselineBareRepo(baselineRoot, task);
+            _output.WriteLine($"[BENCHMARK BASELINE {task.TaskId}] Commit: {commitSha}, BaselineHash: {baselineHash}");
+
+            var hermesRuns = new List<BenchmarkRunRecord>();
+            var openHandsRuns = new List<BenchmarkRunRecord>();
+
+            const int runsPerRuntime = 1;
+            var model = BenchmarkHarness.ControlledModel;
+
+            // 1. Execute Hermes Runs
+            for (int i = 1; i <= runsPerRuntime; i++)
+            {
+                _output.WriteLine($"--- Starting Hermes Run {i}/{runsPerRuntime} for {task.TaskId} ---");
+                var record = await BenchmarkHarness.ExecuteIterationAsync(
+                    "Hermes", i, bareRepoPath, commitSha, baselineHash, model, output: _output, task: task);
+                hermesRuns.Add(record);
+                _output.WriteLine($"Hermes Run {i} ({task.TaskId}): Status={record.TerminalStatus}, Acceptance={record.AcceptanceStatus}, Duration={record.ExecutionDurationSeconds:F1}s, Cleanup={record.CleanupVerified}");
+            }
+
+            // 2. Execute OpenHands Runs
+            for (int i = 1; i <= runsPerRuntime; i++)
+            {
+                _output.WriteLine($"--- Starting OpenHands Run {i}/{runsPerRuntime} for {task.TaskId} ---");
+                var record = await BenchmarkHarness.ExecuteIterationAsync(
+                    "OpenHands", i, bareRepoPath, commitSha, baselineHash, model, output: _output, task: task);
+                openHandsRuns.Add(record);
+                _output.WriteLine($"OpenHands Run {i} ({task.TaskId}): Status={record.TerminalStatus}, Acceptance={record.AcceptanceStatus}, Duration={record.ExecutionDurationSeconds:F1}s, Cleanup={record.CleanupVerified}");
+            }
+
+            Assert.NotEmpty(hermesRuns);
+            Assert.NotEmpty(openHandsRuns);
+            Assert.All(hermesRuns, r => Assert.True(r.CleanupVerified, "Hermes cleanup failed"));
+            Assert.All(openHandsRuns, r => Assert.True(r.CleanupVerified, "OpenHands cleanup failed"));
+        }
+        finally
+        {
+            try { Directory.Delete(baselineRoot, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public Task Live_Benchmark_TaskB_MultiFile() =>
+        Live_ControlledBenchmark_RepresentativeWorkloadCategories("TaskB");
+
+    [Fact]
+    public Task Live_Benchmark_TaskC_BugFix() =>
+        Live_ControlledBenchmark_RepresentativeWorkloadCategories("TaskC");
+
+    [Fact]
+    public Task Live_Benchmark_TaskD_TestRepair() =>
+        Live_ControlledBenchmark_RepresentativeWorkloadCategories("TaskD");
 }

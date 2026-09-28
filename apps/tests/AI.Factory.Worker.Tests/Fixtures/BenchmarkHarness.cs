@@ -45,6 +45,42 @@ public static class BenchmarkHarness
         "In NOTES.md, append `- Multiply` to the Features list.\n" +
         "Do not modify any other file.";
 
+
+    public static void TryLoadEnvLive()
+    {
+        try
+        {
+            var dir = AppContext.BaseDirectory;
+            while (dir is not null)
+            {
+                var candidate = Path.Combine(dir, ".env.live");
+                if (File.Exists(candidate))
+                {
+                    foreach (var line in File.ReadAllLines(candidate))
+                    {
+                        var trimmed = line.Trim();
+                        if (string.IsNullOrWhiteSpace(trimmed) || trimmed.StartsWith("#")) continue;
+                        var idx = trimmed.IndexOf('=');
+                        if (idx > 0)
+                        {
+                            var key = trimmed[..idx].Trim();
+                            var val = trimmed[(idx + 1)..].Trim();
+                            if (key.Contains("SMOKE_TEST", StringComparison.OrdinalIgnoreCase)) continue;
+                            if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable(key)))
+                            {
+                                Environment.SetEnvironmentVariable(key, val);
+                            }
+                        }
+                    }
+                    break;
+                }
+                var parent = Directory.GetParent(dir);
+                dir = parent?.FullName;
+            }
+        }
+        catch { }
+    }
+
     public static (string BareRepoPath, string CommitSha, string BaselineHash) CreateCanonicalBaselineBareRepo(
         string tempDir,
         BenchmarkTaskDefinition? task = null)

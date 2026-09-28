@@ -1,5 +1,7 @@
 using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Abstractions.Execution;
 using AI.Factory.Application.Orchestration;
+using AI.Factory.Domain.Enums;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -7,25 +9,41 @@ namespace AI.Factory.Application.Tests;
 
 public sealed class AgentCodeReviewerTests
 {
-    private sealed class FakeAgentExecutor : IAgentExecutor
+    private sealed class FakeAgentExecutionDispatcher : IAgentExecutionDispatcher
     {
-        private readonly Func<AgentExecutionRequest, AgentExecutionResult> _respond;
+        private readonly Func<AgentExecutionSpec, ExecutionOutcome> _respond;
 
-        public FakeAgentExecutor(Func<AgentExecutionRequest, AgentExecutionResult> respond)
+        public FakeAgentExecutionDispatcher(Func<AgentExecutionSpec, ExecutionOutcome> respond)
         {
             _respond = respond;
         }
 
-        public AgentExecutionRequest? LastRequest { get; private set; }
+        public AgentExecutionSpec? LastSpec { get; private set; }
 
-        public Task<AgentExecutionResult> ExecuteAsync(
-            AgentExecutionRequest request,
+        public Task<ExecutionOutcome> DispatchAsync(
+            AgentExecutionSpec spec,
             CancellationToken cancellationToken = default)
         {
-            LastRequest = request;
-            return Task.FromResult(_respond(request));
+            LastSpec = spec;
+            return Task.FromResult(_respond(spec));
         }
     }
+
+    private static ExecutionOutcome Outcome(
+        ExecutionOutcomeStatus status,
+        string? output,
+        string? errorMessage = null,
+        FailureCategory? category = null) => new(
+            status,
+            output,
+            errorMessage,
+            category,
+            DurationMs: 5,
+            Usage: null,
+            ArtifactReferences: Array.Empty<string>(),
+            ToolCallNames: Array.Empty<string>(),
+            Model: new ModelRoute("independent-review-model", null),
+            ExitReason: status == ExecutionOutcomeStatus.Succeeded ? "exit:0" : "failed");
 
     private static ModelRouter MakeModelRouter()
     {
@@ -64,40 +82,35 @@ public sealed class AgentCodeReviewerTests
     [Fact]
     public async Task ReviewAsync_NeverPassesAnIdentifierAsTheWorkingDirectory()
     {
-        // Phase 18.20 — regression lock for a defect only a live run could
-        // surface: AgentExecutionRequest.WorkingDirectory is a real filesystem
-        // path (the agent container's bind mount) since Phase 18.14, but this
-        // reviewer passed ProjectId.ToString(). Against real Hermes every
-        // review then failed with "Resolved workspace '<guid>' no longer
-        // exists", which became a Critical finding, blocked completion, and
-        // exhausted the WorkItem's repair budget — so no WorkItem could ever
-        // reach Completed. Empty selects the executor's fresh isolated scratch
-        // workspace, which is all a review prompt needs.
-        var executor = new FakeAgentExecutor(_ => new AgentExecutionResult(true, "[]", null, 5));
-        var reviewer = new AgentCodeReviewer(executor, MakeModelRouter(), NullLogger<AgentCodeReviewer>.Instance);
+        // Phase 18.20 / Phase H — regression lock: AgentExecutionSpec.Workspace.Path
+        // is the directory bind-mounted into the agent container. Empty selects
+        // the executor's fresh isolated scratch workspace, which is all a review
+        // prompt needs.
+        var dispatcher = new FakeAgentExecutionDispatcher(_ => Outcome(ExecutionOutcomeStatus.Succeeded, "[]"));
+        var reviewer = new AgentCodeReviewer(dispatcher, MakeModelRouter(), NullLogger<AgentCodeReviewer>.Instance);
         var context = MakeContext();
 
         await reviewer.ReviewAsync(context);
 
-        Assert.NotNull(executor.LastRequest);
+        Assert.NotNull(dispatcher.LastSpec);
         Assert.True(
-            string.IsNullOrEmpty(executor.LastRequest!.WorkingDirectory),
-            $"Reviewer passed '{executor.LastRequest.WorkingDirectory}' as WorkingDirectory — it must be a real path or empty, never an identifier.");
-        Assert.False(Guid.TryParse(executor.LastRequest.WorkingDirectory, out _));
+            string.IsNullOrEmpty(dispatcher.LastSpec!.Workspace.Path),
+            $"Reviewer passed '{dispatcher.LastSpec.Workspace.Path}' as Workspace.Path — it must be empty or a real path, never an identifier.");
+        Assert.False(Guid.TryParse(dispatcher.LastSpec.Workspace.Path, out _));
     }
 
     [Fact]
     public async Task ReviewAsync_UsesIndependentAgentNameAndModel()
     {
-        var executor = new FakeAgentExecutor(_ =>
-            new AgentExecutionResult(true, "[]", null, 5));
-
-        var reviewer = new AgentCodeReviewer(executor, MakeModelRouter(), NullLogger<AgentCodeReviewer>.Instance);
+        var dispatcher = new FakeAgentExecutionDispatcher(_ => Outcome(ExecutionOutcomeStatus.Succeeded, "[]"));
+        var reviewer = new AgentCodeReviewer(dispatcher, MakeModelRouter(), NullLogger<AgentCodeReviewer>.Instance);
 
         await reviewer.ReviewAsync(MakeContext());
 
-        Assert.Equal("reviewer", executor.LastRequest!.Agent);
-        Assert.Equal("independent-review-model", executor.LastRequest.Model);
+        Assert.NotNull(dispatcher.LastSpec);
+        Assert.Equal("reviewer", dispatcher.LastSpec!.Agent.Name);
+        Assert.Equal("Review", dispatcher.LastSpec.Agent.AgentType);
+        Assert.Equal("independent-review-model", dispatcher.LastSpec.Model.ModelId);
     }
 
     [Fact]
@@ -109,8 +122,8 @@ public sealed class AgentCodeReviewerTests
             ]
             """;
 
-        var executor = new FakeAgentExecutor(_ => new AgentExecutionResult(true, json, null, 5));
-        var reviewer = new AgentCodeReviewer(executor, MakeModelRouter(), NullLogger<AgentCodeReviewer>.Instance);
+        var dispatcher = new FakeAgentExecutionDispatcher(_ => Outcome(ExecutionOutcomeStatus.Succeeded, json));
+        var reviewer = new AgentCodeReviewer(dispatcher, MakeModelRouter(), NullLogger<AgentCodeReviewer>.Instance);
 
         var result = await reviewer.ReviewAsync(MakeContext());
 
@@ -127,8 +140,8 @@ public sealed class AgentCodeReviewerTests
     {
         var json = """[{"severity":"Low","category":"Maintainability","description":"minor style issue","recommendation":"consider renaming"}]""";
 
-        var executor = new FakeAgentExecutor(_ => new AgentExecutionResult(true, json, null, 5));
-        var reviewer = new AgentCodeReviewer(executor, MakeModelRouter(), NullLogger<AgentCodeReviewer>.Instance);
+        var dispatcher = new FakeAgentExecutionDispatcher(_ => Outcome(ExecutionOutcomeStatus.Succeeded, json));
+        var reviewer = new AgentCodeReviewer(dispatcher, MakeModelRouter(), NullLogger<AgentCodeReviewer>.Instance);
 
         var result = await reviewer.ReviewAsync(MakeContext());
 
@@ -139,8 +152,8 @@ public sealed class AgentCodeReviewerTests
     [Fact]
     public async Task ReviewAsync_ReturnsEmptyFindings_ForEmptyJsonArray()
     {
-        var executor = new FakeAgentExecutor(_ => new AgentExecutionResult(true, "[]", null, 5));
-        var reviewer = new AgentCodeReviewer(executor, MakeModelRouter(), NullLogger<AgentCodeReviewer>.Instance);
+        var dispatcher = new FakeAgentExecutionDispatcher(_ => Outcome(ExecutionOutcomeStatus.Succeeded, "[]"));
+        var reviewer = new AgentCodeReviewer(dispatcher, MakeModelRouter(), NullLogger<AgentCodeReviewer>.Instance);
 
         var result = await reviewer.ReviewAsync(MakeContext());
 
@@ -151,10 +164,8 @@ public sealed class AgentCodeReviewerTests
     [Fact]
     public async Task ReviewAsync_DegradesToInfoFinding_WhenOutputIsNotValidJson()
     {
-        var executor = new FakeAgentExecutor(_ =>
-            new AgentExecutionResult(true, "this is not json at all", null, 5));
-
-        var reviewer = new AgentCodeReviewer(executor, MakeModelRouter(), NullLogger<AgentCodeReviewer>.Instance);
+        var dispatcher = new FakeAgentExecutionDispatcher(_ => Outcome(ExecutionOutcomeStatus.Succeeded, "this is not json at all"));
+        var reviewer = new AgentCodeReviewer(dispatcher, MakeModelRouter(), NullLogger<AgentCodeReviewer>.Instance);
 
         var result = await reviewer.ReviewAsync(MakeContext());
 
@@ -167,10 +178,13 @@ public sealed class AgentCodeReviewerTests
     [Fact]
     public async Task ReviewAsync_ReturnsBlockingCriticalFinding_WhenReviewerAgentFails()
     {
-        var executor = new FakeAgentExecutor(_ =>
-            new AgentExecutionResult(false, null, "docker not available", 5));
+        var dispatcher = new FakeAgentExecutionDispatcher(_ => Outcome(
+            ExecutionOutcomeStatus.Failed,
+            null,
+            "docker not available",
+            FailureCategory.Infrastructure));
 
-        var reviewer = new AgentCodeReviewer(executor, MakeModelRouter(), NullLogger<AgentCodeReviewer>.Instance);
+        var reviewer = new AgentCodeReviewer(dispatcher, MakeModelRouter(), NullLogger<AgentCodeReviewer>.Instance);
 
         var result = await reviewer.ReviewAsync(MakeContext());
 

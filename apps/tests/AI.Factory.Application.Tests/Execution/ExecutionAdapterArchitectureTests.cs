@@ -214,6 +214,50 @@ public sealed class ExecutionAdapterArchitectureTests
             a => a.Name!.StartsWith("AI.Factory.Infrastructure", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void AgentCodeReviewer_HasNoDirectDependencyOnIAgentExecutor()
+    {
+        var reviewerType = typeof(AI.Factory.Application.Orchestration.AgentCodeReviewer);
+        const BindingFlags all = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
+
+        // Constructor parameters
+        var constructorParams = reviewerType.GetConstructors()
+            .SelectMany(c => c.GetParameters())
+            .Select(p => p.ParameterType)
+            .ToArray();
+
+        Assert.DoesNotContain(typeof(AI.Factory.Application.Abstractions.IAgentExecutor), constructorParams);
+        Assert.Contains(typeof(IAgentExecutionDispatcher), constructorParams);
+
+        // Fields
+        var fields = reviewerType.GetFields(all).Select(f => f.FieldType).ToArray();
+        Assert.DoesNotContain(typeof(AI.Factory.Application.Abstractions.IAgentExecutor), fields);
+        Assert.Contains(typeof(IAgentExecutionDispatcher), fields);
+
+        // Methods
+        var methodTypes = reviewerType.GetMethods(all)
+            .SelectMany(m => m.GetParameters().Select(p => p.ParameterType).Append(m.ReturnType))
+            .ToArray();
+        Assert.DoesNotContain(typeof(AI.Factory.Application.Abstractions.IAgentExecutor), methodTypes);
+    }
+
+    [Fact]
+    public void AgentCodeReviewer_Source_ContainsNoRuntimeOrInfrastructureTypes()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            FindSourceRoot(), "AI.Factory.Application", "Orchestration", "AgentCodeReviewer.cs"));
+
+        var forbidden = new[]
+        {
+            "IAgentExecutor", "Hermes", "OpenHands", "Docker", "DbContext", "Process"
+        };
+
+        foreach (var term in forbidden)
+        {
+            Assert.DoesNotContain(term, source, StringComparison.Ordinal);
+        }
+    }
+
     private static IEnumerable<Type> Flatten(Type type)
     {
         if (type.HasElementType)

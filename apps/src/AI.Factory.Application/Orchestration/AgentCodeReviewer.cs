@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Abstractions.Execution;
 using Microsoft.Extensions.Logging;
 
 namespace AI.Factory.Application.Orchestration;
@@ -15,16 +16,16 @@ public sealed class AgentCodeReviewer : ICodeReviewer
         PropertyNameCaseInsensitive = true
     };
 
-    private readonly IAgentExecutor _agentExecutor;
+    private readonly IAgentExecutionDispatcher _dispatcher;
     private readonly IModelRouter _modelRouter;
     private readonly ILogger<AgentCodeReviewer> _logger;
 
     public AgentCodeReviewer(
-        IAgentExecutor agentExecutor,
+        IAgentExecutionDispatcher dispatcher,
         IModelRouter modelRouter,
         ILogger<AgentCodeReviewer> logger)
     {
-        _agentExecutor = agentExecutor;
+        _dispatcher = dispatcher;
         _modelRouter = modelRouter;
         _logger = logger;
     }
@@ -42,40 +43,42 @@ public sealed class AgentCodeReviewer : ICodeReviewer
 
         var prompt = BuildPrompt(context);
 
-        // WorkingDirectory must be a real filesystem path: since Phase 18.14 it
-        // IS the directory bind-mounted into the agent container, and a
-        // non-existent one fails the execution outright. This used to pass
-        // ProjectId.ToString(), so every real review failed with "Resolved
-        // workspace '<guid>' no longer exists" — which surfaces as a Critical
-        // finding, blocks completion, and burns the WorkItem's entire repair
-        // budget (observed end-to-end in the Phase 18.20 live run). Empty is the
-        // executor's documented "no resolved workspace" path: it provisions a
-        // fresh isolated scratch directory instead. That is also the correct
-        // least-privilege choice here — the review prompt already carries the
-        // requirements, changed files and build/test output, so the reviewer has
-        // no reason to be handed the Project's real workspace.
-        var result = await _agentExecutor.ExecuteAsync(
-            new AgentExecutionRequest(ReviewAgentName, modelSelection.ModelId, prompt, string.Empty),
-            cancellationToken);
+        // Scratch workspace: the review prompt already carries the requirements,
+        // changed files and build/test output, so the reviewer has no reason to be
+        // handed the Project's real workspace. An empty workspace path provisions a
+        // fresh isolated scratch directory.
+        var spec = new AgentExecutionSpec(
+            AgentRunId: Guid.NewGuid(),
+            CorrelationId: Guid.NewGuid(),
+            ProjectId: context.ProjectId,
+            WorkItemId: context.WorkItemId,
+            Attempt: 1,
+            Iteration: 1,
+            Agent: new ExecutionAgent(Guid.Empty, ReviewAgentName, "Review", string.Empty),
+            Instructions: prompt,
+            Workspace: new ExecutionWorkspace(string.Empty),
+            Model: new ModelRoute(modelSelection.ModelId, null));
 
-        if (!result.Success)
+        var outcome = await _dispatcher.DispatchAsync(spec, cancellationToken);
+
+        if (outcome.Status != ExecutionOutcomeStatus.Succeeded)
         {
             _logger.LogWarning(
                 "Independent review could not be performed for WorkItem {WorkItemId}: {Error}",
-                context.WorkItemId, result.Error);
+                context.WorkItemId, outcome.ErrorMessage);
 
             var blockingFinding = new ReviewFinding(
                 ReviewFindingSeverity.Critical,
                 ReviewCategory.Correctness,
                 null,
                 null,
-                $"Independent review could not be performed: {result.Error}",
+                $"Independent review could not be performed: {outcome.ErrorMessage}",
                 "Investigate the reviewer agent failure and re-run the review before completing this task.");
 
             return new ReviewResult(context.WorkItemId, true, new[] { blockingFinding });
         }
 
-        var findings = ParseFindings(result.Output);
+        var findings = ParseFindings(outcome.Output);
         var blocks = findings.Any(f => f.Severity is ReviewFindingSeverity.Critical or ReviewFindingSeverity.High);
 
         _logger.LogInformation(

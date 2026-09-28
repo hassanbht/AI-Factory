@@ -180,12 +180,62 @@ public sealed class WorkerCompositionRootTests : IDisposable
     }
 
     [Fact]
-    public void ProductionConfiguration_WithNoExecutionSection_UsesTheBuiltInHermesProfile()
+    public void ProductionConfiguration_ExplicitExecutionSection_ResolvesApprovedProfiles()
     {
         using var scope = _host.Services.CreateScope();
 
         var options = scope.ServiceProvider.GetRequiredService<AI.Factory.Application.Execution.ExecutionOptions>();
         var resolver = scope.ServiceProvider.GetRequiredService<AI.Factory.Application.Execution.ExecutionProfileResolver>();
+
+        Assert.Equal("Hermes", options.DefaultProfile);
+        Assert.True(options.Profiles.ContainsKey("Hermes"));
+        Assert.Equal("Hermes", options.Profiles["Hermes"].Adapter);
+        Assert.True(options.Profiles.ContainsKey("OpenHands"));
+        Assert.Equal("OpenHands", options.Profiles["OpenHands"].Adapter);
+        Assert.True(options.Profiles.ContainsKey("FastCoding"));
+        Assert.Equal("OpenHands", options.Profiles["FastCoding"].Adapter);
+
+        // Implementation -> OpenHands
+        Assert.Equal("OpenHands", resolver.Resolve("Implementation").AdapterKey);
+        // Repair -> OpenHands
+        Assert.Equal("OpenHands", resolver.Resolve("Repair").AdapterKey);
+        // Review -> Hermes (explicitly mapped in AgentTypeProfiles)
+        Assert.Equal("Hermes", options.AgentTypeProfiles["Review"]);
+        Assert.Equal("Hermes", resolver.Resolve("Review").AdapterKey);
+        // Planner -> Hermes (unmapped falls back to DefaultProfile)
+        Assert.Equal("Hermes", resolver.Resolve("Planner").AdapterKey);
+    }
+
+    [Fact]
+    public void IAgentExecutionDispatcher_IsRegistered_AndResolvesToAdapterDispatchingAgentRuntime()
+    {
+        using var scope = _host.Services.CreateScope();
+
+        var dispatcher = scope.ServiceProvider.GetRequiredService<AI.Factory.Application.Abstractions.Execution.IAgentExecutionDispatcher>();
+
+        Assert.IsType<AI.Factory.Application.Execution.AdapterDispatchingAgentRuntime>(dispatcher);
+    }
+
+    [Fact]
+    public void ICodeReviewer_ResolvesToAgentCodeReviewer()
+    {
+        using var scope = _host.Services.CreateScope();
+
+        var reviewer = scope.ServiceProvider.GetRequiredService<AI.Factory.Application.Abstractions.ICodeReviewer>();
+
+        Assert.IsType<AI.Factory.Application.Orchestration.AgentCodeReviewer>(reviewer);
+    }
+
+    [Fact]
+    public void ConfigurationWithClearedExecutionSection_UsesTheBuiltInHermesProfile()
+    {
+        var options = new AI.Factory.Application.Execution.ExecutionOptions();
+        options.ApplyBuiltInDefault("Hermes");
+        options.Validate();
+
+        using var scope = _host.Services.CreateScope();
+        var registry = scope.ServiceProvider.GetRequiredService<AI.Factory.Application.Abstractions.Execution.IExecutionAdapterRegistry>();
+        var resolver = new AI.Factory.Application.Execution.ExecutionProfileResolver(options, registry);
 
         Assert.Equal("Hermes", options.DefaultProfile);
         Assert.Equal("Hermes", Assert.Single(options.Profiles).Value.Adapter);

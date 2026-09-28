@@ -14,7 +14,7 @@ namespace AI.Factory.Worker.Tests;
 /// </summary>
 public sealed class ExecutionConfigurationBindingTests
 {
-    private static ExecutionOptions ConfigureWith(Dictionary<string, string?> overrides)
+    private static ExecutionOptions ConfigureWith(Dictionary<string, string?> overrides, bool isolated = true)
     {
         var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
         {
@@ -22,12 +22,68 @@ public sealed class ExecutionConfigurationBindingTests
             EnvironmentName = "Production"
         });
 
+        if (isolated)
+        {
+            ((IConfigurationBuilder)builder.Configuration).Sources.Clear();
+        }
+
         builder.Configuration.AddInMemoryCollection(overrides);
 
         Program.ConfigureServices(builder);
 
         var descriptor = Assert.Single(builder.Services, d => d.ServiceType == typeof(ExecutionOptions));
         return Assert.IsType<ExecutionOptions>(descriptor.ImplementationInstance);
+    }
+
+    [Fact]
+    public void ProductionConfigurationFiles_BindAndValidateApprovedProfiles()
+    {
+        var options = ConfigureWith(new Dictionary<string, string?>(), isolated: false);
+
+        Assert.Equal("Hermes", options.DefaultProfile);
+        Assert.Equal("Hermes", options.Profiles["Hermes"].Adapter);
+        Assert.Equal("OpenHands", options.Profiles["OpenHands"].Adapter);
+        Assert.Equal("OpenHands", options.Profiles["FastCoding"].Adapter);
+        Assert.Equal("OpenHands", options.AgentTypeProfiles["Implementation"]);
+        Assert.Equal("OpenHands", options.AgentTypeProfiles["Repair"]);
+        Assert.Equal("Hermes", options.AgentTypeProfiles["Review"]);
+    }
+
+    [Fact]
+    public void WorkerAndApi_ProductionConfigurations_AreIdenticalAndConflictFree()
+    {
+        var workerDir = FindWorkerProjectDirectory();
+        var apiDir = Path.Combine(Directory.GetParent(workerDir)!.FullName, "AI.Factory.Api");
+
+        var workerConfig = new ConfigurationBuilder()
+            .SetBasePath(workerDir)
+            .AddJsonFile("appsettings.json", optional: false)
+            .Build();
+
+        var apiConfig = new ConfigurationBuilder()
+            .SetBasePath(apiDir)
+            .AddJsonFile("appsettings.json", optional: false)
+            .Build();
+
+        var workerOptions = new ExecutionOptions();
+        workerConfig.GetSection(ExecutionOptions.SectionName).Bind(workerOptions);
+        workerOptions.Validate();
+
+        var apiOptions = new ExecutionOptions();
+        apiConfig.GetSection(ExecutionOptions.SectionName).Bind(apiOptions);
+        apiOptions.Validate();
+
+        Assert.Equal(workerOptions.DefaultProfile, apiOptions.DefaultProfile);
+        Assert.Equal(workerOptions.Profiles.Keys.OrderBy(k => k), apiOptions.Profiles.Keys.OrderBy(k => k));
+        foreach (var key in workerOptions.Profiles.Keys)
+        {
+            Assert.Equal(workerOptions.Profiles[key].Adapter, apiOptions.Profiles[key].Adapter);
+        }
+        Assert.Equal(workerOptions.AgentTypeProfiles.Keys.OrderBy(k => k), apiOptions.AgentTypeProfiles.Keys.OrderBy(k => k));
+        foreach (var key in workerOptions.AgentTypeProfiles.Keys)
+        {
+            Assert.Equal(workerOptions.AgentTypeProfiles[key], apiOptions.AgentTypeProfiles[key]);
+        }
     }
 
     [Fact]

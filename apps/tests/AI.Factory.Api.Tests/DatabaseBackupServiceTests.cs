@@ -3,9 +3,12 @@ using AI.Factory.Application.Configuration;
 using AI.Factory.Domain.Entities;
 using AI.Factory.Domain.Enums;
 using AI.Factory.Infrastructure.Persistence;
+using AI.Factory.TestSupport;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace AI.Factory.Api.Tests;
 
@@ -15,13 +18,15 @@ namespace AI.Factory.Api.Tests;
 /// </summary>
 public sealed class DatabaseBackupServiceTests : IDisposable
 {
+    private readonly ITestOutputHelper _output;
     private readonly string _rootDir;
     private readonly string _dbPath;
     private readonly string _backupDir;
     private readonly OperationalMetrics _metrics = new();
 
-    public DatabaseBackupServiceTests()
+    public DatabaseBackupServiceTests(ITestOutputHelper output)
     {
+        _output = output;
         _rootDir = Path.Combine(Path.GetTempPath(), "ai-factory-backup-tests-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_rootDir);
         _dbPath = Path.Combine(_rootDir, "active.db");
@@ -30,17 +35,9 @@ public sealed class DatabaseBackupServiceTests : IDisposable
 
     public void Dispose()
     {
-        try
-        {
-            if (Directory.Exists(_rootDir))
-            {
-                Directory.Delete(_rootDir, recursive: true);
-            }
-        }
-        catch (IOException)
-        {
-            // Best-effort cleanup; a lingering handle on Windows must not fail the test run.
-        }
+        // Pooled SQLite connections keep active.db / the backup files open until released.
+        SqliteConnection.ClearAllPools();
+        TestTempDirectory.Delete(_rootDir, _output);
     }
 
     private DatabaseBackupService CreateService(int retentionCount = 7, bool validateAfterBackup = true, bool enabled = true)

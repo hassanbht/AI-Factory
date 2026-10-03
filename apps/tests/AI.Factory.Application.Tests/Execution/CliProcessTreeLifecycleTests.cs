@@ -5,8 +5,10 @@ using AI.Factory.Application.Tests.Gateway;
 using AI.Factory.Domain.Enums;
 using AI.Factory.Infrastructure.Agents;
 using AI.Factory.Infrastructure.Agents.Cli;
+using AI.Factory.TestSupport;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace AI.Factory.Application.Tests.Execution;
 
@@ -27,13 +29,15 @@ public sealed class CliProcessTreeLifecycleTests : IDisposable
     private const string RoutedModel = "factory/model-a";
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), "aif-phasen-" + Guid.NewGuid().ToString("N"));
+    private readonly ITestOutputHelper _output;
     private readonly string _workspace;
     private readonly string _stateRoot;
     private readonly string _probeDir;
     private readonly List<int> _spawned = new();
 
-    public CliProcessTreeLifecycleTests()
+    public CliProcessTreeLifecycleTests(ITestOutputHelper output)
     {
+        _output = output;
         _workspace = Directory.CreateDirectory(Path.Combine(_root, "workspace")).FullName;
         _probeDir = Directory.CreateDirectory(Path.Combine(_root, "probe")).FullName;
         _stateRoot = Path.Combine(_root, "state");
@@ -46,17 +50,7 @@ public sealed class CliProcessTreeLifecycleTests : IDisposable
             Kill(pid);
         }
 
-        try
-        {
-            if (Directory.Exists(_root))
-            {
-                Directory.Delete(_root, recursive: true);
-            }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // Best-effort test cleanup only; the assertions already ran.
-        }
+        TestTempDirectory.Delete(_root, _output);
     }
 
     public enum Runtime

@@ -8,11 +8,13 @@ using AI.Factory.Infrastructure.Agents;
 using AI.Factory.Infrastructure.Agents.OpenHands;
 using AI.Factory.Infrastructure.Gateways;
 using AI.Factory.Infrastructure.Persistence;
+using AI.Factory.TestSupport;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace AI.Factory.Worker.Tests;
 
@@ -28,6 +30,13 @@ namespace AI.Factory.Worker.Tests;
 public sealed class OpenHandsStateIsolationLiveTests
 {
     private const string FakeKey = "sk-or-v1-PHASELSTATEISOLATION00000000000000000000";
+
+    private readonly ITestOutputHelper _output;
+
+    public OpenHandsStateIsolationLiveTests(ITestOutputHelper output)
+    {
+        _output = output;
+    }
 
     private static bool Enabled =>
         bool.TryParse(Environment.GetEnvironmentVariable("AI_FACTORY_OPENHANDS_SMOKE_TEST"), out var enabled) && enabled;
@@ -72,16 +81,7 @@ public sealed class OpenHandsStateIsolationLiveTests
         }
         finally
         {
-            try
-            {
-                Directory.Delete(root, recursive: true);
-            }
-            catch (IOException)
-            {
-            }
-            catch (UnauthorizedAccessException)
-            {
-            }
+            TestTempDirectory.Delete(root, _output);
         }
     }
 

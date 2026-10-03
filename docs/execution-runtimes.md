@@ -123,9 +123,27 @@ redacted from anything a CLI prints.
 - **Cancellation** — terminal statuses are never overwritten: `AgentRunRepository.UpdateAsync` no longer merges a
   concurrency conflict when the other writer changed `Status`, so a late completion cannot turn `Cancelled` (or an
   orphan-recovered `Failed`) into `Succeeded`. Repeated cancel requests change nothing (the API keeps answering 409).
+- **Agent-reported failure** (Phase P) — a run that exits successfully but whose own valid structured result says
+  `Failed`, `TimedOut` or `Cancelled` fails the WorkItem with the agent's reason (`ExecutionReportedFailure`); it never
+  enters verification, acceptance or review. The AgentRun keeps its runtime-level status (by design the self-report never
+  drives `AgentRunStatus`); the report stays in its structured result. A missing or malformed report is unchanged: the
+  Factory's own verification decides.
 - **Cleanup** — Hermes: container + anonymous home removed. CLI runtimes: `{StateRoot}/{runId}` deleted on every
   path; after a crash `LocalProcessLifecycleManager` kills the recorded process tree (pid + start time, so a
   recycled pid is never killed) and deletes the directory.
+- **Docker cancellation / timeout reconciliation** (Phase O) — cancelling kills the `docker run` client; if that happens
+  before the Docker daemon has created the container, the daemon can still create it afterwards (observed:
+  `docker rm -f` of a missing container exits 0 with no output, so a single removal cannot tell "never existed" from
+  "not created yet"; measured on this host with launches cancelled together: the container was found 1.8–8.5 s after
+  cleanup began with four launches, 2.8–11.8 s with eight, and with eight a fixed 5 s window missed 2–3 of the 8; a single
+  cancelled Hermes launch was cleaned up in 10 of 10 runs, latency not measured). After an **interrupted** launch the Hermes executor and the OpenHands
+  adapter therefore keep removing *this run's* container (`DockerContainerCleanup`, by its deterministic name
+  `ai-factory-agent-<run id>` — nothing else is ever listed, filtered or removed) for a bounded window: 10 s,
+  polling 250 ms backing off to 1 s, ending early the moment a removal succeeds, with an explicit outcome
+  (`Removed` / `NotFound` / `Failed`) logged as `ContainerCleanup`. The ordinary path (the container exists, or the
+  launch finished normally) is one removal with no waiting. A container the daemon creates after the window belongs to a
+  terminal AgentRun and is removed by the periodic orphan sweep, so a cancelled launch converges to zero within the window
+  plus `Recovery:PeriodicSweepInterval` (1 min by default, configurable).
 
 ## Workspace integrity (Factory verification)
 
@@ -149,31 +167,51 @@ result metadata: `RuntimeSessionId`, `CostUsd` + `CostSource`, `UpstreamRequestI
 `RuntimeExitCode`, `RuntimeStartedAtUtc`, `RuntimeCompletedAtUtc`, `RuntimeReportedModel`, plus the existing
 `ExecutionAdapter`, `Gateway`, `ExitReason`. **Absent key = not exposed**; nothing is zero-filled or inferred.
 
-## Live tests (opt-in, never automatic)
+## Test categories and live opt-in (never automatic)
 
-| Test | Enable | Cost |
-|---|---|---|
-| `HermesCredentialPrecedenceLiveTests` | `AI_FACTORY_LIVE_HERMES_CREDENTIALS=1` (Docker + Hermes image) | none — local mock provider |
-| `CliRuntimeLiveSmokeTests` | `AI_FACTORY_LIVE_SMOKE=ClaudeCode` or `Codex` + the credential | runtime/provider usage |
-| `ClaudeCodeLiveContractTests` (Phase N) | `AI_FACTORY_LIVE_CLAUDE_CONTRACT=1` + `ClaudeCode__ExecutablePath=<claude.exe>` | none — the real CLI against a local scripted endpoint; **not** model generation |
-| `OpenHandsStateIsolationLiveTests` | `AI_FACTORY_OPENHANDS_SMOKE_TEST=true` (Docker + pinned image) | none — fake key, no provider; run it **alone** (see limitations) |
-| existing Hermes/OpenHands live suites | see their headers | OpenRouter usage |
+The default `dotnet test apps/AI.Factory.slnx` makes no provider call, reads no `.env.live` and needs no credential.
+Anything that needs more is **skipped by xunit with a reason** (`SKIPPED — LIVE OPT-IN NOT ENABLED (set …)`, or
+`ENVIRONMENT BLOCKED — …` when you opted in but a credential, URL, executable path or Docker is missing). A skipped test
+proves nothing about a runtime. The rules live in `apps/tests/Shared/TestGating.cs` (compiled into each test project);
+`LiveTestGateTests` fails the test run for any new live-shaped test that uses a plain `[Fact]`.
 
-The default `dotnet test` returns early from every opt-in live test, so they count as *passed* without having run.
+| Cat. | Tests | Default run | Enable | Cost |
+|---|---|---|---|---|
+| A, B | unit and local integration (SQLite, git, fake CLIs with real processes, real `dotnet build`) | yes | — | none |
+| C | `DockerLifecycleIntegrationTests`, `docker compose config` checks | yes, if Docker is reachable | — | none (no model, no credential) |
+| D | `ClaudeCodeLiveContractTests` — the real CLI against a local scripted endpoint; **not** model generation | no | `AI_FACTORY_LIVE_CLAUDE_CONTRACT=1` + `ClaudeCode__ExecutablePath=<claude.exe>` | none |
+| D | `HermesCredentialPrecedenceLiveTests` | no | `AI_FACTORY_LIVE_HERMES_CREDENTIALS=1` (Docker + Hermes image) | none — local recording provider |
+| D | `OpenHandsStateIsolationLiveTests` | no | `AI_FACTORY_OPENHANDS_SMOKE_TEST=true` (Docker + pinned image) | none — fake key, closed loopback |
+| E | `CliRuntimeLiveSmokeTests` | no | `AI_FACTORY_LIVE_SMOKE=ClaudeCode` or `Codex` + the credential | runtime/provider usage |
+| E | `RealHermes*`, `RealOpenHands*`, `Live*E2E`, `HermesSmokeTest`, `ReviewExecutionLiveTests.LiveReview…` | no | `AI_FACTORY_HERMES_SMOKE_TEST=true` (OpenHands: or `AI_FACTORY_OPENHANDS_SMOKE_TEST`) + the key | OpenRouter usage |
+| E | `ModelBackedCertificationTests` (Phase P, one runtime per run) | no | `AI_FACTORY_LIVE_CERT_HERMES=1` or `AI_FACTORY_LIVE_CERT_OPENHANDS=1` + `AI_FACTORY_CERT_MODEL` + `OPENROUTER_API_KEY` (Docker) | OpenRouter usage |
+| E | `GatewayLiveAgentRunTests`, `RuntimeBenchmarkE2ETests.Live*` / connectivity | no | `AI_FACTORY_LIVE_GATEWAY_AGENTRUN=true` / `AI_FACTORY_LIVE_BENCHMARK=true` + `OPENROUTER_API_KEY` | OpenRouter usage |
 
-```bash
-AI_FACTORY_LIVE_SMOKE=ClaudeCode CLAUDE_CODE_OAUTH_TOKEN=<from claude setup-token> dotnet test apps/tests/AI.Factory.Worker.Tests --filter CliRuntimeLiveSmokeTests --logger "console;verbosity=detailed"
-```
+Commands and credential handling: [local-setup.md](local-setup.md#running-the-tests-phase-o). Run the Docker opt-in suites
+one at a time; the Docker and real-build tests hold a machine-wide lock so they never overlap each other, whichever test
+assembly they are in.
 
 ## Limitations
 
-- Claude Code / Codex generation is **not verified live** (Phase M and Phase N: no credential available; Codex CLI
+- **Independent review is not effective** (Phase P, observed live — see `docs/phase-p-report.md`): the reviewer is given
+  only the changed-file *paths* (no content, no diff) in an empty scratch workspace, and `AgentCodeReviewer` parses the
+  *whole* runtime output as JSON. Hermes prints its container start-up log first, so a real findings array (the Phase P
+  reviewer returned one in a fenced block) is discarded and stored as a single non-blocking Info finding. A completed
+  WorkItem therefore proves verification + acceptance criteria, not a code review.
+- The workspace-integrity policy is a deny-list: an unrequested file with an arbitrary name (Phase P: an untracked file
+  named U+F00D left by an OpenHands agent) passes verification, and acceptance criteria only check required content.
+- Automatic model ids (`auto/…`) are not rejected by the Factory itself (the shipped catalog still lists
+  `auto/coding:free`); the Phase P certification harness rejects them. Hermes/OpenHands fall back to their configured
+  `DefaultModel` when a run carries no model; only the CLI adapters reject an unmapped model.
+- Hermes' own usage figures are persisted verbatim; its `total_tokens` need not equal input + output (Phase P:
+  99,662 + 4,776 vs. 389,622).
+- Claude Code / Codex generation is **not verified live** (Phases M, N, O and P: no credential available; Codex CLI
   not installed on this machine). Isolation, credential routing, the 401 abort, timeout and cancellation were verified
-  against the real Claude Code 2.1.284 binary with synthetic credentials and a scripted local endpoint (Phase N).
-- Docker runtimes: cancelling within a few hundred milliseconds of launch kills the `docker run` client before the daemon
-  may have created the container, so the cleanup `docker rm -f` can find nothing and the container appears afterwards (it
-  ends with its own run / `--rm`). `DockerLifecycleIntegrationTests.Cancellation_CleansUpContainer…` flakes on this (old and new
-  process runner alike). Not fixed in Phase N; see phase-n-report.md F6.
+  against the real Claude Code binary (2.1.284 in Phase N; 2.1.284 and 2.1.286 in Phase O) with synthetic credentials and a
+  scripted local endpoint — never a model.
+- Docker cancellation (fixed in Phase O, see "Lifecycle guarantees"): the immediate reconciliation window is 10 s, not
+  unbounded. A daemon slower than that leaves a Created container for the periodic orphan sweep to remove (bounded by
+  `Recovery:PeriodicSweepInterval`, 1 min by default); `DockerContainerCleanup` reports `NotFound` in that case, never `Removed`.
 - `OpenHandsStateIsolationLiveTests` is timing-sensitive on a loaded Docker host: the Agent Server must become healthy
   within `OpenHands:StartupTimeoutSeconds` (45 s); with two Hermes containers starting in parallel it failed 2 of 4
   times (TimedOut), alone / on an idle host it passed. Run the Docker live suites one at a time.

@@ -20,17 +20,45 @@ public sealed class OpenHandsExecutionAdapterTests
         /// <summary>Exit code of `docker run` (the container launch); everything else exits 0.</summary>
         public int LaunchExitCode { get; init; }
 
-        public Task<ProcessRunResult> RunAsync(ProcessRunRequest request, CancellationToken cancellationToken = default)
+        /// <summary>Phase O — the launch client never returns until the run is cancelled (it is then killed, as SystemProcessRunner does).</summary>
+        public bool LaunchBlocksUntilCancelled { get; init; }
+
+        /// <summary>Phase O — the launch client hits its own process timeout (reported as TimedOut, exit -1).</summary>
+        public bool LaunchTimesOut { get; init; }
+
+        public async Task<ProcessRunResult> RunAsync(ProcessRunRequest request, CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
-            var exitCode = request.Arguments.FirstOrDefault() == "run" ? LaunchExitCode : 0;
-            return Task.FromResult(new ProcessRunResult(exitCode, string.Empty, exitCode == 0 ? string.Empty : "port is already allocated", false));
+            var isLaunch = request.Arguments.FirstOrDefault() == "run";
+
+            if (isLaunch && LaunchBlocksUntilCancelled)
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+
+            if (isLaunch && LaunchTimesOut)
+            {
+                return new ProcessRunResult(-1, string.Empty, string.Empty, TimedOut: true);
+            }
+
+            var exitCode = isLaunch ? LaunchExitCode : 0;
+            return new ProcessRunResult(exitCode, string.Empty, exitCode == 0 ? string.Empty : "port is already allocated", false);
         }
     }
 
     private sealed class FakeLifecycleManager : IContainerLifecycleManager
     {
         public List<Guid> CleanedRuns { get; } = new();
+
+        /// <summary>Phase O — runs whose cleanup was the bounded reconciliation (an interrupted launch), not the single-shot removal.</summary>
+        public List<Guid> ReconciledRuns { get; } = new();
+
+        public Task<ContainerCleanupOutcome> ReconcileCleanupAsync(Guid agentRunId, CancellationToken cancellationToken = default)
+        {
+            ReconciledRuns.Add(agentRunId);
+            CleanedRuns.Add(agentRunId);
+            return Task.FromResult(ContainerCleanupOutcome.Removed);
+        }
 
         public Task EnsureCleanupAsync(Guid agentRunId, CancellationToken cancellationToken = default)
         {
@@ -476,6 +504,50 @@ public sealed class OpenHandsExecutionAdapterTests
         };
         Assert.Equal(expected, outcome.Status);
         Assert.Equal(new[] { spec.AgentRunId }, lifecycle.CleanedRuns);
+    }
+
+    /// <summary>
+    /// Phase O — the cancel-before-container-creation race at the OpenHands boundary: a launch that was cancelled, or that timed
+    /// out inside `docker run -d`, may still be completing in the Docker daemon, so cleanup must be the bounded RECONCILIATION.
+    /// A launch Docker answered definitively (it ran, or it refused) has nothing in flight and keeps the single-shot removal.
+    /// </summary>
+    [Theory]
+    [InlineData("cancelled-during-launch", true)]
+    [InlineData("launch-client-timed-out", true)]
+    [InlineData("launch-refused", false)]
+    [InlineData("launched-then-cancelled-while-running", false)]
+    public async Task ContainerMode_CleanupIsReconciled_OnlyWhenTheLaunchWasInterrupted(string path, bool expectReconcile)
+    {
+        var runner = new FakeProcessRunner
+        {
+            LaunchBlocksUntilCancelled = path == "cancelled-during-launch",
+            LaunchTimesOut = path == "launch-client-timed-out",
+            LaunchExitCode = path == "launch-refused" ? 125 : 0
+        };
+        var lifecycle = new FakeLifecycleManager();
+        var clientFactory = new FakeClientFactory();
+        for (var i = 0; i < 50; i++)
+        {
+            clientFactory.Client.ExecutionStatuses.Enqueue("running");
+        }
+
+        using var cts = new CancellationTokenSource();
+        if (path is "cancelled-during-launch" or "launched-then-cancelled-while-running")
+        {
+            cts.CancelAfter(path == "cancelled-during-launch" ? 50 : 150);
+        }
+
+        var spec = CreateSpec();
+        var outcome = await ContainerAdapter(runner, lifecycle, clientFactory).ExecuteAsync(spec, cts.Token);
+
+        Assert.NotEqual(ExecutionOutcomeStatus.Succeeded, outcome.Status);
+        if (path.StartsWith("cancelled", StringComparison.Ordinal) || path.EndsWith("cancelled-while-running", StringComparison.Ordinal))
+        {
+            Assert.Equal(ExecutionOutcomeStatus.Cancelled, outcome.Status);
+        }
+
+        Assert.Equal(new[] { spec.AgentRunId }, lifecycle.CleanedRuns);
+        Assert.Equal(expectReconcile ? new[] { spec.AgentRunId } : Array.Empty<Guid>(), lifecycle.ReconciledRuns);
     }
 
     private static OpenHandsExecutionAdapter ContainerAdapter(

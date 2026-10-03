@@ -426,6 +426,53 @@ public sealed class AgentRunWorkItemSyncTests : IDisposable
         Assert.Equal(WorkItemStatus.Repairing.ToString(), workItem.Status);
     }
 
+    [Theory]
+    [InlineData(StructuredResultStatus.Failed)]
+    [InlineData(StructuredResultStatus.TimedOut)]
+    [InlineData(StructuredResultStatus.Cancelled)]
+    public async Task SyncAsync_ExitZeroRun_WhoseOwnReportSaysFailed_FailsTheWorkItem_WithoutVerification(StructuredResultStatus reported)
+    {
+        // Phase P (observed live, OpenHands + qwen/qwen3-coder): the runtime exited 0, the agent's valid
+        // structured result said {"status":"Failed", "summary":"... could not verify tests pass ..."}, and the
+        // sync treated that like missing metadata — Testing -> verification -> review -> Completed. An explicit
+        // failure report is not unusable metadata; the WorkItem must stay failed, even when a verification gate
+        // would have passed.
+        var taskId = await SeedRunningTaskAsync();
+        var envelope = new StructuredAgentResult(
+            StructuredAgentResult.CurrentVersion, reported, "could not verify tests pass", "out", null,
+            Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>(), null);
+        var run = new AgentRun
+        {
+            WorkItemId = taskId,
+            Status = AgentRunStatus.Succeeded,
+            StructuredResult = JsonSerializer.Serialize(envelope, StructuredAgentResult.JsonOptions)
+        };
+
+        await using var db = new FactoryDbContext(_options);
+        var gate = new CountingVerificationGate();
+        await CreateSync(db, gate).SyncAsync(run);
+
+        var workItem = await new WorkItemRepository(db).GetByIdAsync(taskId);
+        Assert.Equal(WorkItemStatus.Failed.ToString(), workItem!.Status);
+        Assert.Contains($"'{reported}'", workItem.CurrentError);
+        Assert.Contains("could not verify tests pass", workItem.CurrentError);
+        Assert.Equal(0, gate.Calls);
+    }
+
+    private sealed class CountingVerificationGate : IVerificationGate
+    {
+        public int Calls { get; private set; }
+
+        public Task<VerificationResult> VerifyAsync(Project project, WorkItem workItem, CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            return Task.FromResult(new VerificationResult(VerificationStatus.Passed, "counted", 0, TimeSpan.Zero));
+        }
+
+        public Task<VerificationResult> VerifyProjectAsync(Project project, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("VerifyProjectAsync should not be called in this test file.");
+    }
+
     [Fact]
     public async Task SyncAsync_SucceededWithoutMetadata_RepeatedSync_IsIdempotent()
     {

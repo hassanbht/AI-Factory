@@ -15,6 +15,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using Xunit.Abstractions;
+using AI.Factory.TestSupport;
 
 namespace AI.Factory.Worker.Tests;
 
@@ -27,6 +28,7 @@ namespace AI.Factory.Worker.Tests;
 /// port and the key is a fake, so the conversation ends in the runtime's error state.
 /// Opt-in via AI_FACTORY_OPENHANDS_SMOKE_TEST=true (requires Docker and the pinned image).
 /// </summary>
+[Collection(TestCollections.DockerAndBuilds)]
 public sealed class OpenHandsStateIsolationLiveTests
 {
     private const string FakeKey = "sk-or-v1-PHASELSTATEISOLATION00000000000000000000";
@@ -42,13 +44,9 @@ public sealed class OpenHandsStateIsolationLiveTests
         bool.TryParse(Environment.GetEnvironmentVariable("AI_FACTORY_OPENHANDS_SMOKE_TEST"), out var enabled) && enabled;
 
     [Fact]
+    [LiveFact("AI_FACTORY_OPENHANDS_SMOKE_TEST", RequiresDocker = true)]
     public async Task RealAgentServer_ConcurrentRuns_LeaveNoRuntimeStateInTheirWorkspaces_NorAnyContainer()
     {
-        if (!Enabled)
-        {
-            return;
-        }
-
         var root = Directory.CreateTempSubdirectory("aif-oh-state-").FullName;
         try
         {

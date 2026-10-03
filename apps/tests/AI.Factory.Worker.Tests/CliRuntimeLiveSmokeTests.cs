@@ -18,6 +18,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using Xunit.Abstractions;
+using AI.Factory.TestSupport;
 
 namespace AI.Factory.Worker.Tests;
 
@@ -25,13 +26,14 @@ namespace AI.Factory.Worker.Tests;
 /// Phase M — LIVE smoke for the Claude Code / Codex runtimes, opt-in only:
 /// <c>AI_FACTORY_LIVE_SMOKE=ClaudeCode</c> (credential: ANTHROPIC_API_KEY, or CLAUDE_CODE_OAUTH_TOKEN from
 /// <c>claude setup-token</c>) or <c>AI_FACTORY_LIVE_SMOKE=Codex</c> (OPENAI_API_KEY; Codex__ExecutablePath for
-/// the native binary on Windows). Without the variable or the credential the test returns without doing anything.
+/// the native binary on Windows). Without the variable the test is SKIPPED; without the credential it is ENVIRONMENT BLOCKED (never a pass).
 ///
 /// The run goes through the real Factory path — AgentOrchestrator → AdapterDispatchingAgentRuntime → adapter →
 /// isolated CLI — on a disposable git repository with a tiny deterministic task (inspect, change one source
 /// file, add one test, run the tests, report). The Factory then verifies independently: build/test, workspace
 /// integrity, runtime-state cleanup. Evidence is printed as one JSON line; nothing is assumed.
 /// </summary>
+[Collection(TestCollections.RealProcesses)]
 public sealed class CliRuntimeLiveSmokeTests : IDisposable
 {
     private const string FactoryModel = "factory/smoke-model";
@@ -60,22 +62,45 @@ public sealed class CliRuntimeLiveSmokeTests : IDisposable
         }
     }
 
-    [Fact]
+    /// <summary>
+    /// Phase O — AI_FACTORY_LIVE_SMOKE must name the runtime; without it the test is SKIPPED (not passed), and with it but
+    /// without that runtime's credential it is ENVIRONMENT BLOCKED. The credential never leaves the environment.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Method)]
+    private sealed class CliSmokeFactAttribute : FactAttribute
+    {
+        public override string? Skip
+        {
+            get
+            {
+                var runtime = Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_SMOKE");
+                if (LiveTestGate.IsEnabled(runtime) && runtime is not (ClaudeCodeExecutionAdapter.AdapterKey or CodexExecutionAdapter.AdapterKey))
+                {
+                    return "ENVIRONMENT BLOCKED — AI_FACTORY_LIVE_SMOKE must be 'ClaudeCode' or 'Codex'";
+                }
+
+                // ClaudeCode accepts either credential; the adapter takes whichever is present.
+                var required = runtime == ClaudeCodeExecutionAdapter.AdapterKey
+                    && (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"))
+                        || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN")))
+                        ? Array.Empty<string>()
+                        : runtime == ClaudeCodeExecutionAdapter.AdapterKey
+                            ? new[] { "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN" }
+                            : new[] { "OPENAI_API_KEY" };
+
+                return base.Skip ?? LiveTestGate.Evaluate(
+                    new[] { "AI_FACTORY_LIVE_SMOKE" }, required, requiresDocker: false);
+            }
+            set => base.Skip = value;
+        }
+    }
+
+    [CliSmokeFact]
     public async Task LiveSmoke_TinyDeterministicTask_ThroughTheFactoryPath()
     {
-        var runtime = Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_SMOKE");
-        if (runtime is not (ClaudeCodeExecutionAdapter.AdapterKey or CodexExecutionAdapter.AdapterKey))
-        {
-            return;
-        }
-
+        var runtime = Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_SMOKE")!;
         var stateRoot = Path.Combine(_root, "runtime-state");
-        var (adapter, credentialName) = CreateAdapter(runtime, stateRoot);
-        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable(credentialName)))
-        {
-            _output.WriteLine($"{runtime}: {credentialName} not set - NOT_VERIFIED (no credential).");
-            return;
-        }
+        var (adapter, _) = CreateAdapter(runtime, stateRoot);
 
         var workspace = CreateFixtureRepository();
         using var connection = new SqliteConnection("Data Source=:memory:");

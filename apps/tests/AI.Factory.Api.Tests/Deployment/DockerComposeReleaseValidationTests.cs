@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Xunit;
+using AI.Factory.TestSupport;
 
 namespace AI.Factory.Api.Tests.Deployment;
 
@@ -11,14 +12,9 @@ namespace AI.Factory.Api.Tests.Deployment;
 /// </summary>
 public sealed class DockerComposeReleaseValidationTests
 {
-    [Fact]
+    [DockerFact(RequiresDaemon = false)]
     public async Task DockerComposeConfig_WithoutDirectImages_FailsLoudly()
     {
-        if (!IsDockerAvailable())
-        {
-            return;
-        }
-
         var repoRoot = FindRepoRoot();
         var (exitCode, _, stderr) = await RunProcessAsync(
             "docker",
@@ -37,14 +33,9 @@ public sealed class DockerComposeReleaseValidationTests
             $"Expected stderr to contain missing image env error, got: {stderr}");
     }
 
-    [Fact]
+    [DockerFact(RequiresDaemon = false)]
     public async Task DockerComposeConfig_WithoutApiImage_FailsLoudly()
     {
-        if (!IsDockerAvailable())
-        {
-            return;
-        }
-
         var repoRoot = FindRepoRoot();
         var (exitCode, _, stderr) = await RunProcessAsync(
             "docker",
@@ -60,14 +51,9 @@ public sealed class DockerComposeReleaseValidationTests
         Assert.Contains("AI_FACTORY_API_IMAGE must be set", stderr, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [DockerFact(RequiresDaemon = false)]
     public async Task DockerComposeConfig_WithImmutableDirectImagesSet_ExitsZero()
     {
-        if (!IsDockerAvailable())
-        {
-            return;
-        }
-
         var repoRoot = FindRepoRoot();
         var (exitCode, _, stderr) = await RunProcessAsync(
             "docker",
@@ -82,14 +68,9 @@ public sealed class DockerComposeReleaseValidationTests
         Assert.True(exitCode == 0, $"`docker compose config -q` failed with exit code {exitCode}: {stderr}");
     }
 
-    [Fact]
+    [DockerFact(RequiresDaemon = false)]
     public async Task DockerComposeConfig_WithoutWorkerImage_FailsLoudly()
     {
-        if (!IsDockerAvailable())
-        {
-            return;
-        }
-
         var repoRoot = FindRepoRoot();
         var (exitCode, _, stderr) = await RunProcessAsync(
             "docker",
@@ -110,31 +91,6 @@ public sealed class DockerComposeReleaseValidationTests
         var baseFile = Path.Combine(repoRoot, "docker-compose.yml");
         var releaseFile = Path.Combine(repoRoot, "docker-compose.release.yml");
         return $"compose -f \"{baseFile}\" -f \"{releaseFile}\" config -q";
-    }
-
-    private static bool IsDockerAvailable()
-    {
-        try
-        {
-            using var process = Process.Start(new ProcessStartInfo("docker", "--version")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            });
-
-            if (process is null)
-            {
-                return false;
-            }
-
-            process.WaitForExit(5000);
-            return process.HasExited && process.ExitCode == 0;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
     }
 
     private static async Task<(int ExitCode, string Stdout, string Stderr)> RunProcessAsync(

@@ -10,6 +10,7 @@ using AI.Factory.Infrastructure.Agents.Cli;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using Xunit.Abstractions;
+using AI.Factory.TestSupport;
 
 namespace AI.Factory.Application.Tests.Execution;
 
@@ -27,6 +28,7 @@ namespace AI.Factory.Application.Tests.Execution;
 /// <b>What it does NOT prove:</b> anything about a model. The "model" here is a script. A pass is NOT live
 /// model-backed certification — that needs a real credential and is reported separately.
 /// </summary>
+[Collection(TestCollections.RealProcesses)]
 public sealed class ClaudeCodeLiveContractTests : IDisposable
 {
     private const string FactoryKey = "sk-ant-api03-PHASEN-FACTORY-SYNTHETIC-aaaaaaaaaaaaaaaaaaaaaaaa";
@@ -59,11 +61,9 @@ public sealed class ClaudeCodeLiveContractTests : IDisposable
         }
     }
 
-    private static string? Executable =>
-        Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_CLAUDE_CONTRACT") == "1"
-            && Environment.GetEnvironmentVariable("ClaudeCode__ExecutablePath") is { Length: > 0 } path && File.Exists(path)
-                ? path
-                : null;
+    // Phase O — the opt-in and the path are enforced by the [LiveFact]/[LiveTheory] attributes below (a missing opt-in is SKIPPED,
+    // a missing path ENVIRONMENT BLOCKED), so a test body can never silently "pass" without running.
+    private static string Executable => Environment.GetEnvironmentVariable("ClaudeCode__ExecutablePath")!;
 
     // ---------------------------------------------------------------- scripted provider endpoint
 
@@ -276,7 +276,7 @@ public sealed class ClaudeCodeLiveContractTests : IDisposable
 
         var options = new ClaudeCodeOptions
         {
-            ExecutablePath = Executable!,
+            ExecutablePath = Executable,
             CredentialSecretName = credentialVariable,
             CredentialEnvironmentVariable = credentialVariable,
             Models = new() { [RoutedModel] = "claude-haiku-4-5" }
@@ -309,14 +309,12 @@ public sealed class ClaudeCodeLiveContractTests : IDisposable
 
     // ---------------------------------------------------------------- tests
 
-    [Theory]
+    [LiveTheory("AI_FACTORY_LIVE_CLAUDE_CONTRACT", RequiredEnvironment = new[] { "ClaudeCode__ExecutablePath" })]
     [InlineData("ANTHROPIC_API_KEY", FactoryKey)]
     [InlineData("CLAUDE_CODE_OAUTH_TOKEN", FactoryOauth)]
     public async Task FactoryCredential_IsTheOnlyOneTheProviderEverSees_AndTheFirst401StopsTheRunInSeconds(
         string credentialVariable, string factoryCredential)
     {
-        if (Executable is null) { return; }
-
         var previous = Environment.GetEnvironmentVariable("ANTHROPIC_BASE_URL");
         await using var provider = new ScriptedProvider(Mode.Unauthorized);
         Ambient(set: true); // ambient credentials A that must never win
@@ -354,11 +352,9 @@ public sealed class ClaudeCodeLiveContractTests : IDisposable
         }
     }
 
-    [Fact]
+    [LiveFact("AI_FACTORY_LIVE_CLAUDE_CONTRACT", RequiredEnvironment = new[] { "ClaudeCode__ExecutablePath" })]
     public async Task ScriptedEndpoint_RealCli_CreatesTheFile_AndTheRealResultEventIsReadCorrectly()
     {
-        if (Executable is null) { return; }
-
         var previous = Environment.GetEnvironmentVariable("ANTHROPIC_BASE_URL");
         var target = Path.Combine(_workspace, "FACTORY_CLAUDE_SMOKE.txt");
         await using var provider = new ScriptedProvider(Mode.ScriptedFileTask, target, "AI_FACTORY_CLAUDE_SMOKE_OK");
@@ -390,11 +386,9 @@ public sealed class ClaudeCodeLiveContractTests : IDisposable
         }
     }
 
-    [Fact]
+    [LiveFact("AI_FACTORY_LIVE_CLAUDE_CONTRACT", RequiredEnvironment = new[] { "ClaudeCode__ExecutablePath" })]
     public async Task HungProvider_FactoryDeadline_TerminatesTheRealProcessTree_AsTimedOut()
     {
-        if (Executable is null) { return; }
-
         var previous = Environment.GetEnvironmentVariable("ANTHROPIC_BASE_URL");
         await using var provider = new ScriptedProvider(Mode.Hang);
         try
@@ -417,11 +411,9 @@ public sealed class ClaudeCodeLiveContractTests : IDisposable
         }
     }
 
-    [Fact]
+    [LiveFact("AI_FACTORY_LIVE_CLAUDE_CONTRACT", RequiredEnvironment = new[] { "ClaudeCode__ExecutablePath" })]
     public async Task HungProvider_Cancellation_TerminatesTheRealProcessTree_AsCancelled()
     {
-        if (Executable is null) { return; }
-
         var previous = Environment.GetEnvironmentVariable("ANTHROPIC_BASE_URL");
         await using var provider = new ScriptedProvider(Mode.Hang);
         using var cts = new CancellationTokenSource();

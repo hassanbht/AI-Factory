@@ -59,8 +59,6 @@ public sealed class ModelGatewayLiveTests : IDisposable
     [Fact]
     public async Task DisposableAgentRun_RoutesProfileAndModelRoute_ToASyntheticAdapter_NoModelCall()
     {
-        BenchmarkHarness.TryLoadEnvLive();
-
         var dbOptions = new DbContextOptionsBuilder<FactoryDbContext>()
             .UseSqlite(_connection)
             .Options;

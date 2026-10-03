@@ -6,6 +6,7 @@ using AI.Factory.Infrastructure.Agents;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using AI.Factory.TestSupport;
 
 namespace AI.Factory.Api.Tests;
 
@@ -20,11 +21,9 @@ namespace AI.Factory.Api.Tests;
 ///
 ///   AI_FACTORY_HERMES_SMOKE_TEST=true dotnet test --filter RealHermesApiE2ETests
 /// </summary>
+[Collection(TestCollections.DockerAndBuilds)]
 public sealed class RealHermesApiE2ETests
 {
-    private static bool Enabled =>
-        bool.TryParse(Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_SMOKE_TEST"), out var enabled) && enabled;
-
     // Phase D — the same AI_FACTORY_LIVE_* variables the Worker live harness reads
     // (LiveWorkerHost), with the previously hard-coded OmniRoute values as defaults.
     private static string LiveBaseUrl =>
@@ -36,14 +35,9 @@ public sealed class RealHermesApiE2ETests
     private static string LiveApiKeySecretName =>
         Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_API_KEY_SECRET") ?? "OMNIROUTE_API_KEY";
 
-    [Fact]
+    [LiveFact("AI_FACTORY_HERMES_SMOKE_TEST", RequiresDocker = true)]
     public async Task PostRun_ThenRealClaimAndOrchestrate_ThenGet_ShowsSucceeded()
     {
-        if (!Enabled)
-        {
-            return;
-        }
-
         var workspaceRoot = Path.Combine(Path.GetTempPath(), "ai-factory-api-e2e-workspace-" + Guid.NewGuid().ToString("N"));
         var dataVolume = Path.Combine(Path.GetTempPath(), "ai-factory-api-e2e-data-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(workspaceRoot);

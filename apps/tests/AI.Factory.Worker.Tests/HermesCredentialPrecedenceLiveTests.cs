@@ -8,6 +8,7 @@ using AI.Factory.Infrastructure.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using Xunit.Abstractions;
+using AI.Factory.TestSupport;
 
 namespace AI.Factory.Worker.Tests;
 
@@ -22,6 +23,7 @@ namespace AI.Factory.Worker.Tests;
 /// ever reaches the provider.</item>
 /// </list>
 /// </summary>
+[Collection(TestCollections.DockerAndBuilds)]
 public sealed class HermesCredentialPrecedenceLiveTests : IDisposable
 {
     private const string FactoryKey = "sk-or-v1-factory-selected-credential-0001";
@@ -48,8 +50,6 @@ public sealed class HermesCredentialPrecedenceLiveTests : IDisposable
             _output.WriteLine($"cleanup: {ex.Message}");
         }
     }
-
-    private static bool Enabled => Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_HERMES_CREDENTIALS") == "1";
 
     /// <summary>Minimal HTTP endpoint: records every Authorization header, answers 401.</summary>
     private sealed class RecordingProvider : IAsyncDisposable
@@ -125,14 +125,9 @@ public sealed class HermesCredentialPrecedenceLiveTests : IDisposable
 
     private static string BaseUrl(RecordingProvider provider) => $"http://host.docker.internal:{provider.Port}/api/v1";
 
-    [Fact]
+    [LiveFact("AI_FACTORY_LIVE_HERMES_CREDENTIALS", RequiresDocker = true)]
     public async Task OldMountStyle_AmbientHermesEnvWins_ReproducingTheBenchmarkDefect()
     {
-        if (!Enabled)
-        {
-            return;
-        }
-
         await using var provider = new RecordingProvider();
         var workspace = Directory.CreateDirectory(Path.Combine(_root, "ws-old")).FullName;
         var info = new ProcessStartInfo("docker") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
@@ -161,14 +156,9 @@ public sealed class HermesCredentialPrecedenceLiveTests : IDisposable
         Assert.DoesNotContain(provider.Authorizations, a => a.Contains(FactoryKey, StringComparison.Ordinal));
     }
 
-    [Fact]
+    [LiveFact("AI_FACTORY_LIVE_HERMES_CREDENTIALS", RequiresDocker = true)]
     public async Task PhaseMExecutor_OnlyTheFactoryKeyReachesTheProvider()
     {
-        if (!Enabled)
-        {
-            return;
-        }
-
         await using var provider = new RecordingProvider();
         AmbientHermesHome(); // present on the host, exactly as a developer's ~/.hermes would be
         var options = new HermesOptions

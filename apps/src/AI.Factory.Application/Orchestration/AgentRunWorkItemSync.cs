@@ -314,6 +314,10 @@ public sealed class AgentRunWorkItemSync : IAgentRunWorkItemSync
             // actually gone wrong yet, and VerificationGate overwrites it with
             // the real build/test summary if something has.
             WorkItemExecutionResultOutcome.ExecutionMetadataUnavailable => (WorkItemStatus.Testing, null),
+            // Phase P — an exit-0 run whose own report says it failed stays a failure: no verification,
+            // no acceptance, no review.
+            WorkItemExecutionResultOutcome.ExecutionReportedFailure =>
+                (WorkItemStatus.Failed, mapped.Summary ?? "Agent reported its own execution as failed."),
             _ => (WorkItemStatus.Failed, "Unrecognized execution outcome.")
         };
     }
@@ -336,6 +340,21 @@ public sealed class AgentRunWorkItemSync : IAgentRunWorkItemSync
                 "WorkItemExecutionMetadataUnavailable AgentRunId={AgentRunId} Reason=NoValidStructuredResult",
                 agentRun.Id);
             return new WorkItemExecutionResult(WorkItemExecutionResultOutcome.ExecutionMetadataUnavailable, null);
+        }
+
+        if (structuredResult.Status is StructuredResultStatus.Failed or StructuredResultStatus.TimedOut or StructuredResultStatus.Cancelled)
+        {
+            var reason = structuredResult.Summary
+                ?? structuredResult.Errors.FirstOrDefault()
+                ?? "no reason given";
+
+            _logger.LogWarning(
+                "WorkItemExecutionReportedFailure AgentRunId={AgentRunId} ReportedStatus={ReportedStatus}",
+                agentRun.Id, structuredResult.Status);
+
+            return new WorkItemExecutionResult(
+                WorkItemExecutionResultOutcome.ExecutionReportedFailure,
+                $"Agent reported status '{structuredResult.Status}' although its run exited successfully: {reason}");
         }
 
         try

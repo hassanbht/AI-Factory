@@ -9,6 +9,7 @@ using AI.Factory.Worker.Tests.Fixtures;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using Xunit.Abstractions;
+using AI.Factory.TestSupport;
 
 namespace AI.Factory.Worker.Tests;
 
@@ -26,24 +27,10 @@ public sealed class RuntimeBenchmarkE2ETests
         _output = output;
     }
 
-    private static bool LiveEnabled
-    {
-        get
-        {
-            BenchmarkHarness.TryLoadEnvLive();
-            return (bool.TryParse(Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_BENCHMARK"), out var b) && b)
-                || (bool.TryParse(Environment.GetEnvironmentVariable("AI_FACTORY_RUN_BENCHMARK"), out var rb) && rb);
-        }
-    }
-
-    private static bool LiveBenchmarkEnabled => LiveEnabled;
-
-    [Fact]
+    [LiveFact("AI_FACTORY_LIVE_BENCHMARK", "AI_FACTORY_RUN_BENCHMARK", RequiredEnvironment = new[] { "OPENROUTER_API_KEY" })]
     public async Task CheckOpenRouterConnectivity()
     {
-        BenchmarkHarness.TryLoadEnvLive();
         var key = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
-        if (string.IsNullOrWhiteSpace(key)) return;
 
         using var client = new HttpClient();
         client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", key);
@@ -331,15 +318,9 @@ public sealed class RuntimeBenchmarkE2ETests
         public Task<bool> DeleteConversationAsync(string conversationId, CancellationToken cancellationToken = default) => Task.FromResult(true);
     }
 
-    [Fact]
+    [LiveFact("AI_FACTORY_LIVE_BENCHMARK", "AI_FACTORY_RUN_BENCHMARK", RequiresDocker = true, RequiredEnvironment = new[] { "OPENROUTER_API_KEY" })]
     public async Task Live_ControlledBenchmark_HermesVsOpenHands_EmpiricalComparison()
     {
-        if (!LiveEnabled)
-        {
-            _output.WriteLine("Live benchmark skipped (AI_FACTORY_HERMES_SMOKE_TEST not set).");
-            return;
-        }
-
         var baselineRoot = Path.Combine(Path.GetTempPath(), "aif-bench-master-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(baselineRoot);
 
@@ -446,12 +427,6 @@ public sealed class RuntimeBenchmarkE2ETests
 
     private async Task Live_ControlledBenchmark_RepresentativeWorkloadCategories(string taskKey)
     {
-        if (!LiveBenchmarkEnabled)
-        {
-            _output.WriteLine($"Live benchmark for {taskKey} skipped (AI_FACTORY_RUN_BENCHMARK not set).");
-            return;
-        }
-
         var task = taskKey switch
         {
             "TaskA" => BenchmarkTaskDefinition.TaskA_SingleFile(),
@@ -506,15 +481,15 @@ public sealed class RuntimeBenchmarkE2ETests
         }
     }
 
-    [Fact]
+    [LiveFact("AI_FACTORY_LIVE_BENCHMARK", "AI_FACTORY_RUN_BENCHMARK", RequiresDocker = true, RequiredEnvironment = new[] { "OPENROUTER_API_KEY" })]
     public Task Live_Benchmark_TaskB_MultiFile() =>
         Live_ControlledBenchmark_RepresentativeWorkloadCategories("TaskB");
 
-    [Fact]
+    [LiveFact("AI_FACTORY_LIVE_BENCHMARK", "AI_FACTORY_RUN_BENCHMARK", RequiresDocker = true, RequiredEnvironment = new[] { "OPENROUTER_API_KEY" })]
     public Task Live_Benchmark_TaskC_BugFix() =>
         Live_ControlledBenchmark_RepresentativeWorkloadCategories("TaskC");
 
-    [Fact]
+    [LiveFact("AI_FACTORY_LIVE_BENCHMARK", "AI_FACTORY_RUN_BENCHMARK", RequiresDocker = true, RequiredEnvironment = new[] { "OPENROUTER_API_KEY" })]
     public Task Live_Benchmark_TaskD_TestRepair() =>
         Live_ControlledBenchmark_RepresentativeWorkloadCategories("TaskD");
 }

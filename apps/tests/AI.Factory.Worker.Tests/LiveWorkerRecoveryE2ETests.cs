@@ -10,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Xunit;
 using Xunit.Abstractions;
+using AI.Factory.TestSupport;
 
 namespace AI.Factory.Worker.Tests;
 
@@ -34,6 +35,7 @@ namespace AI.Factory.Worker.Tests;
 ///   --filter FullyQualifiedName~LiveWorkerRecoveryE2ETests
 /// </code>
 /// </summary>
+[Collection(TestCollections.DockerAndBuilds)]
 public sealed class LiveWorkerRecoveryE2ETests
 {
     private const string RecoveryProjectDescription =
@@ -46,14 +48,9 @@ public sealed class LiveWorkerRecoveryE2ETests
 
     public LiveWorkerRecoveryE2ETests(ITestOutputHelper output) => _output = output;
 
-    [Fact]
+    [LiveFact("AI_FACTORY_HERMES_SMOKE_TEST", RequiresDocker = true)]
     public async Task WorkerInterruptedMidAgentRun_RecoversOnRestart_WithoutDuplicatingWork()
     {
-        if (!LiveWorkerHost.Enabled)
-        {
-            return;
-        }
-
         using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(30));
         var cancellationToken = cts.Token;
 

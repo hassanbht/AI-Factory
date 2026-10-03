@@ -294,6 +294,11 @@ public sealed class HermesAgentExecutor : IAgentExecutor
             processTimeout = TimeSpan.FromSeconds(_options.TimeoutSeconds);
         }
 
+        // Phase O — the `docker run` client was started and did not come back normally (cancelled, timed out, failed
+        // while running): the daemon may still be creating the container, so cleanup reconciles instead of looking once.
+        var launched = false;
+        var finishedNormally = false;
+
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -303,6 +308,7 @@ public sealed class HermesAgentExecutor : IAgentExecutor
             DeleteRunReport(workspacePath, agentRunId);
 
             var startedAt = DateTimeOffset.UtcNow;
+            launched = true;
             var result = await _processRunner.RunAsync(
                 new ProcessRunRequest(
                     "docker",
@@ -313,6 +319,7 @@ public sealed class HermesAgentExecutor : IAgentExecutor
                 cancellationToken);
 
             stopwatch.Stop();
+            finishedNormally = !result.TimedOut;
 
             if (result.TimedOut)
             {
@@ -413,6 +420,7 @@ public sealed class HermesAgentExecutor : IAgentExecutor
         catch (ProcessLaunchException ex)
         {
             stopwatch.Stop();
+            launched = false; // docker.exe itself never started: no client, so no daemon request in flight.
 
             _logger.LogError(
                 ex,
@@ -441,7 +449,7 @@ public sealed class HermesAgentExecutor : IAgentExecutor
         }
         finally
         {
-            await CleanupContainerAsync(containerName);
+            await CleanupContainerAsync(containerName, reconcile: launched && !finishedNormally);
 
             // Timeout, cancellation and launch failures never reach ReadRunReport; the report
             // must not be left in a workspace that is a git working tree.
@@ -650,22 +658,16 @@ public sealed class HermesAgentExecutor : IAgentExecutor
             ? value
             : null;
 
-    private async Task CleanupContainerAsync(string containerName)
+    private async Task CleanupContainerAsync(string containerName, bool reconcile)
     {
+        // Never throws: it runs in a finally block and must not replace the run's own outcome.
         try
         {
-            using var cleanupCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            var cleanupRequest = new ProcessRunRequest(
-                "docker",
-                new[] { "rm", "-f", "-v", containerName },
-                TimeSpan.FromSeconds(10));
-
-            await _processRunner.RunAsync(cleanupRequest, cleanupCts.Token);
-            _logger.LogDebug("Hermes container cleanup completed for {ContainerName}", containerName);
+            await DockerContainerCleanup.RemoveAsync(_processRunner, containerName, _logger, reconcile);
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Hermes container cleanup for {ContainerName} finished or container already removed.", containerName);
+            _logger.LogWarning(ex, "Hermes container cleanup for {ContainerName} threw.", containerName);
         }
     }
 

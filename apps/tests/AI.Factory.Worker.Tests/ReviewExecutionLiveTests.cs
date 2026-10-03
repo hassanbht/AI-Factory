@@ -17,6 +17,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using Xunit.Abstractions;
+using AI.Factory.TestSupport;
 
 namespace AI.Factory.Worker.Tests;
 
@@ -29,6 +30,7 @@ namespace AI.Factory.Worker.Tests;
 ///    Create -> Source -> Start -> WorkItem -> Implementation -> Verification -> Acceptance -> Review (via Adapter) -> HumanReview -> Approval -> Completed.
 /// Runs in disposable workspace and throwaway SQLite database with zero container leaks.
 /// </summary>
+[Collection(TestCollections.DockerAndBuilds)]
 public sealed class ReviewExecutionLiveTests : IDisposable
 {
     private readonly ITestOutputHelper _output;
@@ -71,16 +73,12 @@ public sealed class ReviewExecutionLiveTests : IDisposable
         return db;
     }
 
-    [Fact]
+    // Phase O — a real, billed OpenRouter call through real Hermes: never part of the default run. It needs the explicit
+    // Hermes opt-in, Docker and the key (from the environment, or from .env.live once the opt-in is set).
+    [LiveFact("AI_FACTORY_HERMES_SMOKE_TEST", RequiresDocker = true, RequiredEnvironment = new[] { "OPENROUTER_API_KEY" })]
     public async Task LiveReview_ExecutesRealModel_ThroughHermesExecutionAdapter()
     {
-        BenchmarkHarness.TryLoadEnvLive();
-        var apiKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
-        if (string.IsNullOrWhiteSpace(apiKey))
-        {
-            _output.WriteLine("[SKIP] OPENROUTER_API_KEY not configured — skipping live model execution.");
-            return;
-        }
+        var apiKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY")!;
 
         var preContainers = BenchmarkHarness.GetFactoryContainerCount();
         _output.WriteLine($"[SETUP] Pre-execution container count: {preContainers}");

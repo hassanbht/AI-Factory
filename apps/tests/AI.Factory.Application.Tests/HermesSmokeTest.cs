@@ -2,6 +2,7 @@ using AI.Factory.Application.Abstractions;
 using AI.Factory.Infrastructure.Agents;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+using AI.Factory.TestSupport;
 
 namespace AI.Factory.Application.Tests;
 
@@ -15,20 +16,12 @@ namespace AI.Factory.Application.Tests;
 /// Task: create a file named hello.txt containing "Hello AI Factory" in the
 /// agent's workspace, then verify the file exists with matching content.
 /// </summary>
+[Collection(TestCollections.DockerAndBuilds)]
 public sealed class HermesSmokeTest
 {
-    [Fact]
+    [LiveFact("AI_FACTORY_HERMES_SMOKE_TEST", RequiresDocker = true)]
     public async Task RealHermesExecution_CreatesRequestedFile_InWorkspace()
     {
-        if (!bool.TryParse(Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_SMOKE_TEST"), out var enabled) || !enabled)
-        {
-            // Disabled by default — never runs automatically in CI. This is
-            // a deliberate no-op pass, not a skipped/inconclusive result:
-            // xUnit v2 has no first-class "skip at runtime" primitive, so an
-            // early return is the standard way to gate an opt-in test.
-            return;
-        }
-
         var liveBaseUrl = Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_BASE_URL");
         var liveSecretName = Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_API_KEY_SECRET") ?? "OPENROUTER_API_KEY";
         var liveModel = Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_MODEL");

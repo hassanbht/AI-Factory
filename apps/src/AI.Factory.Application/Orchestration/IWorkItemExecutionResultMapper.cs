@@ -62,7 +62,17 @@ public enum WorkItemExecutionResultOutcome
     /// policy is to hand such a run to the Factory's own verification rather
     /// than dead-ending it.
     /// </summary>
-    ExecutionMetadataUnavailable
+    ExecutionMetadataUnavailable,
+
+    /// <summary>
+    /// Phase P — the AgentRun ended Succeeded at the runtime level (e.g. exit code 0), but the agent's
+    /// own valid structured result explicitly reports Failed, TimedOut or Cancelled. That report is not
+    /// "unusable metadata": it is the agent saying it did not do the work, so the WorkItem fails with the
+    /// agent's own reason and never enters verification or acceptance. Like
+    /// <see cref="ExecutionMetadataUnavailable"/>, produced only at the interpretation boundary in
+    /// <see cref="AgentRunWorkItemSync"/>.
+    /// </summary>
+    ExecutionReportedFailure
 }
 
 public sealed record WorkItemExecutionResult(WorkItemExecutionResultOutcome Outcome, string? Summary);

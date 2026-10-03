@@ -1,9 +1,11 @@
 using System.Runtime.InteropServices;
 using AI.Factory.Infrastructure.Agents;
 using Xunit;
+using AI.Factory.TestSupport;
 
 namespace AI.Factory.Application.Tests;
 
+[Collection(TestCollections.RealProcesses)]
 public sealed class SystemProcessRunnerTests
 {
     // These tests exercise SystemProcessRunner's own mechanics (timeout,
@@ -33,6 +35,31 @@ public sealed class SystemProcessRunnerTests
         Assert.Equal(0, result.ExitCode);
         Assert.False(result.TimedOut);
         Assert.Contains("hello-from-test", result.StandardOutput);
+    }
+
+    /// <summary>
+    /// Phase O (O7) — a failure mode none of the others cover: a child that writes megabytes to BOTH pipes. With synchronous
+    /// reading, or one pipe read after the other, the child blocks on a full pipe and the run deadlocks until the timeout.
+    /// Everything must be captured, exit code intact, well inside the deadline.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_MegabytesOnBothStdoutAndStderr_DoesNotDeadlock_AndIsCapturedInFull()
+    {
+        const int lines = 20_000;
+        var args = IsWindows
+            ? new[] { "/c", "for /L %i in (1,1,20000) do @(echo out%i xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx& echo err%i xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 1>&2)" }
+            : new[] { "-c", "i=1; while [ $i -le 20000 ]; do echo out$i xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; echo err$i xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 1>&2; i=$((i+1)); done" };
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        var result = await _runner.RunAsync(new ProcessRunRequest(ShellExe, args, TimeSpan.FromSeconds(90)));
+
+        stopwatch.Stop();
+        Assert.False(result.TimedOut, $"deadlocked on a full pipe: took {stopwatch.Elapsed}");
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(lines, result.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
+        Assert.Equal(lines, result.StandardError.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
+        Assert.Contains($"out{lines} ", result.StandardOutput);
+        Assert.Contains($"err{lines} ", result.StandardError);
     }
 
     [Fact]
@@ -113,14 +140,9 @@ public sealed class SystemProcessRunnerTests
     /// end with the root's own exit code, not wait for the descendant until the timeout (which reported a
     /// finished CLI as TimedOut).
     /// </summary>
-    [Fact]
+    [WindowsFact]
     public async Task RunAsync_RootExitedButADescendantHoldsThePipes_ReturnsTheRootExitCode_NotATimeout()
     {
-        if (!IsWindows)
-        {
-            return;
-        }
-
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
         var result = await _runner.RunAsync(new ProcessRunRequest(

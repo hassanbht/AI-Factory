@@ -20,6 +20,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+using AI.Factory.TestSupport;
 
 namespace AI.Factory.Worker.Tests;
 
@@ -34,6 +35,7 @@ namespace AI.Factory.Worker.Tests;
 /// Project Testing -> Project Reviewing -> HumanReview ->
 /// Human Approval -> Project Completed.
 /// </summary>
+[Collection(TestCollections.DockerAndBuilds)]
 public sealed class GoldenProjectLifecycleE2ETests : IDisposable
 {
     private readonly string _tempDir;

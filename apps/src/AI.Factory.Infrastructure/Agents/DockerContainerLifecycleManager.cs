@@ -39,22 +39,28 @@ public sealed class DockerContainerLifecycleManager : IContainerLifecycleManager
 
     public async Task EnsureCleanupAsync(Guid agentRunId, CancellationToken cancellationToken = default)
     {
-        var containerName = DockerContainerNaming.GetContainerName(agentRunId);
-        try
-        {
-            using var cleanupCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            var request = new ProcessRunRequest(
-                "docker",
-                new[] { "rm", "-f", "-v", containerName },
-                TimeSpan.FromSeconds(10));
+        await DockerContainerCleanup.RemoveAsync(
+            _processRunner,
+            DockerContainerNaming.GetContainerName(agentRunId),
+            _logger,
+            reconcile: false,
+            cancellationToken: cancellationToken);
+    }
 
-            await _processRunner.RunAsync(request, cleanupCts.Token);
-            _logger.LogDebug("Container cleanup requested for {ContainerName}.", containerName);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Container cleanup for {ContainerName} finished or container already removed.", containerName);
-        }
+    /// <summary>
+    /// Phase O — cleanup after an interrupted launch: keeps removing this run's container for a short bounded window,
+    /// because the daemon may still create it after the launch client was killed. See <see cref="DockerContainerCleanup"/>.
+    /// </summary>
+    public async Task<ContainerCleanupOutcome> ReconcileCleanupAsync(Guid agentRunId, CancellationToken cancellationToken = default)
+    {
+        var result = await DockerContainerCleanup.RemoveAsync(
+            _processRunner,
+            DockerContainerNaming.GetContainerName(agentRunId),
+            _logger,
+            reconcile: true,
+            cancellationToken: cancellationToken);
+
+        return result.Outcome;
     }
 
     public async Task<int> SweepOrphanContainersAsync(CancellationToken cancellationToken = default)

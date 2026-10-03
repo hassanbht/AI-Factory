@@ -1,6 +1,7 @@
 using AI.Factory.Worker.Tests.Fixtures;
 using Xunit;
 using Xunit.Abstractions;
+using AI.Factory.TestSupport;
 
 namespace AI.Factory.Worker.Tests;
 
@@ -12,43 +13,35 @@ namespace AI.Factory.Worker.Tests;
 /// bare repository (BenchmarkHarness).
 ///
 /// Opt-in (real containers, minutes per run): set AI_FACTORY_LIVE_GATEWAY_AGENTRUN=true and
-/// OPENROUTER_API_KEY. The assertion is the Phase J truthfulness invariant, whichever way the
+/// OPENROUTER_API_KEY; otherwise SKIPPED / ENVIRONMENT BLOCKED, never passed. The assertion is the Phase J truthfulness invariant, whichever way the
 /// external gateway answers: a Succeeded AgentRun must carry measured model usage, and a run
 /// that did not succeed must never reach WorkItem Completed.
 /// </summary>
+[Collection(TestCollections.DockerAndBuilds)]
 public sealed class GatewayLiveAgentRunTests
 {
     private readonly ITestOutputHelper _output;
 
     public GatewayLiveAgentRunTests(ITestOutputHelper output) => _output = output;
 
-    [Theory]
+    [LiveTheory("AI_FACTORY_LIVE_GATEWAY_AGENTRUN", RequiresDocker = true, RequiredEnvironment = new[] { "OPENROUTER_API_KEY" })]
     [InlineData("Hermes", null)]
     [InlineData("OpenHands", null)]
-    [InlineData("OpenHands", "OmniRoute")]
-    public async Task LiveDisposableAgentRun_ReportsTheGatewayOutcomeTruthfully(string adapter, string? gateway)
+    public Task LiveDisposableAgentRun_ReportsTheGatewayOutcomeTruthfully(string adapter, string? gateway) =>
+        RunLiveAgentRunAsync(adapter, gateway, omniRouteUrl: null);
+
+    // Phase K — the OmniRoute case routes the run explicitly to the OmniRoute gateway, reached from
+    // inside the OpenHands container at AI_FACTORY_LIVE_OMNIROUTE_URL (e.g. host.docker.internal).
+    [LiveFact("AI_FACTORY_LIVE_GATEWAY_AGENTRUN", RequiresDocker = true,
+        RequiredEnvironment = new[] { "OPENROUTER_API_KEY", "AI_FACTORY_LIVE_OMNIROUTE_URL" })]
+    public Task LiveDisposableAgentRun_OmniRouteGateway_ReportsTheGatewayOutcomeTruthfully() =>
+        RunLiveAgentRunAsync("OpenHands", "OmniRoute", Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_OMNIROUTE_URL"));
+
+    private async Task RunLiveAgentRunAsync(string adapter, string? gateway, string? omniRouteUrl)
     {
-        BenchmarkHarness.TryLoadEnvLive();
-
-        // Phase K — the OmniRoute case routes the run explicitly to the OmniRoute gateway, reached from
-        // inside the OpenHands container at AI_FACTORY_LIVE_OMNIROUTE_URL (e.g. host.docker.internal).
-        var omniRouteUrl = Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_OMNIROUTE_URL");
-        if (gateway is not null && string.IsNullOrWhiteSpace(omniRouteUrl))
-        {
-            _output.WriteLine("[SKIP] Set AI_FACTORY_LIVE_OMNIROUTE_URL to run the OmniRoute case.");
-            return;
-        }
-
         var model = gateway is null
             ? BenchmarkHarness.ControlledModel
             : Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_OMNIROUTE_MODEL") ?? "openai/qwen2.5-coder:7b";
-        if (!bool.TryParse(Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_GATEWAY_AGENTRUN"), out var enabled)
-            || !enabled
-            || string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENROUTER_API_KEY")))
-        {
-            _output.WriteLine("[SKIP] Set AI_FACTORY_LIVE_GATEWAY_AGENTRUN=true and OPENROUTER_API_KEY to run.");
-            return;
-        }
 
         var root = Path.Combine(Path.GetTempPath(), $"aif-live-gw-{adapter.ToLowerInvariant()}-{Guid.NewGuid():N}"[..28]);
         Directory.CreateDirectory(root);

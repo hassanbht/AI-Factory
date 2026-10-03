@@ -6,6 +6,7 @@ using AI.Factory.Infrastructure.Agents;
 using AI.Factory.Infrastructure.Validation;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+using AI.Factory.TestSupport;
 
 namespace AI.Factory.Application.Tests;
 
@@ -16,6 +17,7 @@ namespace AI.Factory.Application.Tests;
 /// this repo's own already-restored AI.Factory.Domain.csproj (small, no
 /// network needed) rather than a throwaway scaffolded project.
 /// </summary>
+[Collection(TestCollections.DockerAndBuilds)]
 public sealed class VerificationGateRealBuildIntegrationTests
 {
     // Phase 18.16 §15 — VerificationGate now resolves the workspace through

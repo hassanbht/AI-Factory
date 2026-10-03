@@ -17,6 +17,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Xunit;
 using Xunit.Abstractions;
+using AI.Factory.TestSupport;
 
 namespace AI.Factory.Worker.Tests;
 
@@ -38,27 +39,17 @@ namespace AI.Factory.Worker.Tests;
 ///   dotnet test --filter FullyQualifiedName~LiveProjectLifecycleE2ETests
 /// </code>
 /// </summary>
+[Collection(TestCollections.DockerAndBuilds)]
 public sealed class LiveProjectLifecycleE2ETests
 {
     private readonly ITestOutputHelper _output;
 
     public LiveProjectLifecycleE2ETests(ITestOutputHelper output) => _output = output;
 
-    /// <summary>
-    /// Live provider/model routing and the opt-in gate now live on the shared
-    /// <see cref="LiveWorkerHost"/> (Phase 18.23 §19 — one live harness, not two).
-    /// </summary>
-    private static bool Enabled => LiveWorkerHost.Enabled;
 
-
-    [Fact]
+    [LiveFact("AI_FACTORY_HERMES_SMOKE_TEST", RequiresDocker = true)]
     public async Task RealHermes_FullProjectLifecycle_WithRealRepair_AndHumanApproval()
     {
-        if (!Enabled)
-        {
-            return;
-        }
-
         using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(90));
         var cancellationToken = cts.Token;
 

@@ -22,6 +22,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+using AI.Factory.TestSupport;
 
 namespace AI.Factory.Worker.Tests;
 
@@ -33,6 +34,7 @@ namespace AI.Factory.Worker.Tests;
 /// -> ExecutionOutcome -> AgentRun persisted -> Factory verification / acceptance -> 0 orphan containers.
 /// Opt-in only via AI_FACTORY_OPENHANDS_SMOKE_TEST=true or AI_FACTORY_HERMES_SMOKE_TEST=true.
 /// </summary>
+[Collection(TestCollections.DockerAndBuilds)]
 public sealed class RealOpenHandsE2ETests
 {
     private const string SmokeMarker = "AI_FACTORY_OPENHANDS_SMOKE_E2E_OK";
@@ -44,18 +46,9 @@ public sealed class RealOpenHandsE2ETests
         ?? Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_MODEL")
         ?? "deepseek/deepseek-v4-flash-0731";
 
-    private static bool Enabled =>
-        (bool.TryParse(Environment.GetEnvironmentVariable("AI_FACTORY_OPENHANDS_SMOKE_TEST"), out var enabled) && enabled)
-        || (bool.TryParse(Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_SMOKE_TEST"), out var hermesEnabled) && hermesEnabled);
-
-    [Fact]
+    [LiveFact("AI_FACTORY_OPENHANDS_SMOKE_TEST", "AI_FACTORY_HERMES_SMOKE_TEST", RequiresDocker = true)]
     public async Task Smoke_RealOpenHandsAgentRun_ThroughFullFactoryPipeline_ReachesSucceeded()
     {
-        if (!Enabled)
-        {
-            return;
-        }
-
         using var testHost = BuildHost();
 
         var before = testHost.Metrics.GetSnapshot();
@@ -97,14 +90,9 @@ public sealed class RealOpenHandsE2ETests
         Assert.Equal(OpenHandsExecutionAdapter.ExitReasons.Completed, exitReason);
     }
 
-    [Fact]
+    [LiveFact("AI_FACTORY_OPENHANDS_SMOKE_TEST", "AI_FACTORY_HERMES_SMOKE_TEST", RequiresDocker = true)]
     public async Task StructuredResult_RealOpenHandsAgentRun_ThroughFullFactoryPipeline_ReachesValidStructuredResult()
     {
-        if (!Enabled)
-        {
-            return;
-        }
-
         using var testHost = BuildHost();
 
         const string marker = "AI_FACTORY_OPENHANDS_STRUCTURED_OK";
@@ -134,14 +122,9 @@ public sealed class RealOpenHandsE2ETests
         Assert.Contains(marker, haystack, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
+    [LiveFact("AI_FACTORY_OPENHANDS_SMOKE_TEST", "AI_FACTORY_HERMES_SMOKE_TEST", RequiresDocker = true)]
     public async Task WorkItemExecution_RealOpenHands_ModifiesProjectWorkspace_AndPassesFactoryVerification()
     {
-        if (!Enabled)
-        {
-            return;
-        }
-
         // 1. Build fixture: bare Git repo with a minimal .NET project
         var fixtureTemp = Path.Combine(Path.GetTempPath(), "aif-openhands-e2e-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(fixtureTemp);

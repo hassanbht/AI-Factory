@@ -22,6 +22,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 using AI.Factory.Worker.Tests.Fixtures;
+using AI.Factory.TestSupport;
 
 namespace AI.Factory.Worker.Tests;
 
@@ -40,6 +41,7 @@ namespace AI.Factory.Worker.Tests;
 /// container. No fakes anywhere on the AgentRun -> Worker -> Orchestrator ->
 /// dispatcher -> HermesExecutionAdapter -> HermesAgentExecutor -> Docker path.
 /// </summary>
+[Collection(TestCollections.DockerAndBuilds)]
 public sealed class RealHermesE2ETests
 {
     private const string SmokeMarker = "AI_FACTORY_HERMES_SMOKE_OK";
@@ -57,17 +59,9 @@ public sealed class RealHermesE2ETests
     private static string OmniRouteModel => LiveWorkerHost.LiveModel;
     private static string OmniRouteBaseUrl => LiveWorkerHost.LiveBaseUrl;
 
-    private static bool Enabled =>
-        bool.TryParse(Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_SMOKE_TEST"), out var enabled) && enabled;
-
-    [Fact]
+    [LiveFact("AI_FACTORY_HERMES_SMOKE_TEST", RequiresDocker = true)]
     public async Task Smoke_RealAgentRun_ThroughFullFactoryPipeline_ReachesSucceeded()
     {
-        if (!Enabled)
-        {
-            return;
-        }
-
         using var testHost = BuildHost();
 
         var before = testHost.Metrics.GetSnapshot();
@@ -105,7 +99,7 @@ public sealed class RealHermesE2ETests
         Assert.Contains(testHost.Logs, l => l.Contains("AgentRunCompleted") && l.Contains(runIdText));
     }
 
-    [Fact]
+    [LiveFact("AI_FACTORY_HERMES_SMOKE_TEST", RequiresDocker = true)]
     public async Task StructuredResult_RealAgentRun_ThroughFullFactoryPipeline_ReachesValidStructuredResult()
     {
         // Phase 18.1.8 §11 — every real AgentRun already gets the full
@@ -113,11 +107,6 @@ public sealed class RealHermesE2ETests
         // orchestrator always routes through IAgentInstructionBuilder now);
         // this test confirms the real model honors it and the Factory
         // validates + persists + can read back the result.
-        if (!Enabled)
-        {
-            return;
-        }
-
         using var testHost = BuildHost();
 
         const string marker = "AI_FACTORY_STRUCTURED_RESULT_OK";
@@ -147,14 +136,9 @@ public sealed class RealHermesE2ETests
         Assert.Contains(marker, haystack, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
+    [LiveFact("AI_FACTORY_HERMES_SMOKE_TEST", RequiresDocker = true)]
     public async Task Memory_ScopedEntry_IsFoundAndRealExecutionStillSucceeds()
     {
-        if (!Enabled)
-        {
-            return;
-        }
-
         using var testHost = BuildHost();
         var projectId = Guid.NewGuid();
 
@@ -195,14 +179,9 @@ public sealed class RealHermesE2ETests
         Assert.Contains(found, e => e.Content == "prior run preferred concise answers");
     }
 
-    [Fact]
+    [LiveFact("AI_FACTORY_HERMES_SMOKE_TEST", RequiresDocker = true)]
     public async Task WorkerRecovery_FailingRunThenSucceedingRun_WorkerStaysAlive()
     {
-        if (!Enabled)
-        {
-            return;
-        }
-
         using var testHost = BuildHost();
         var worker = GetAgentRunWorker(testHost.Host);
         using var cts = new CancellationTokenSource();
@@ -239,14 +218,9 @@ public sealed class RealHermesE2ETests
         Assert.Equal(1, snapshot.AgentRunsSucceeded);
     }
 
-    [Fact]
+    [LiveFact("AI_FACTORY_HERMES_SMOKE_TEST", RequiresDocker = true)]
     public async Task Cancellation_WorkerExecutionTimeout_RealHermesProcessIsKilled()
     {
-        if (!Enabled)
-        {
-            return;
-        }
-
         using var testHost = BuildHost(configureWorker: o => o.ExecutionTimeout = TimeSpan.FromSeconds(2));
 
         var (run, _) = await CreateQueuedRunAsync(testHost, SmokePrompt);
@@ -264,14 +238,9 @@ public sealed class RealHermesE2ETests
         Assert.Equal(FailureCategory.Cancelled, final.FailureCategory);
     }
 
-    [Fact]
+    [LiveFact("AI_FACTORY_HERMES_SMOKE_TEST", RequiresDocker = true)]
     public async Task Timeout_HermesProcessTimeoutSeconds_ReportsTimedOut()
     {
-        if (!Enabled)
-        {
-            return;
-        }
-
         using var testHost = BuildHost(
             configureHermes: o => o.TimeoutSeconds = 2,
             configureWorker: o => o.ExecutionTimeout = TimeSpan.FromSeconds(60));
@@ -291,14 +260,9 @@ public sealed class RealHermesE2ETests
         Assert.Equal(FailureCategory.Timeout, final.FailureCategory);
     }
 
-    [Fact]
+    [LiveFact("AI_FACTORY_HERMES_SMOKE_TEST", RequiresDocker = true)]
     public async Task Stability_FiveConsecutiveRealExecutions_AllSucceed()
     {
-        if (!Enabled)
-        {
-            return;
-        }
-
         using var testHost = BuildHost();
         var worker = GetAgentRunWorker(testHost.Host);
         using var cts = new CancellationTokenSource();
@@ -326,7 +290,7 @@ public sealed class RealHermesE2ETests
         Assert.All(results, r => Assert.Equal(AgentRunStatus.Succeeded, r.Status));
     }
 
-    [Fact]
+    [LiveFact("AI_FACTORY_HERMES_SMOKE_TEST", RequiresDocker = true)]
     public async Task Planner_RealAgentRun_ThroughFullFactoryPipeline_MaterializesPersistedPlan()
     {
         // Phase 18.6 §24 — the single narrow real-Hermes gate for the LLM
@@ -334,11 +298,6 @@ public sealed class RealHermesE2ETests
         // AgentOrchestrator -> Hermes -> OmniRoute -> real LLM ->
         // StructuredAgentResult -> ProjectPlanService -> persisted
         // WorkItems, all through the unmodified production pipeline.
-        if (!Enabled)
-        {
-            return;
-        }
-
         const string plannerMarker = "AI_FACTORY_PLANNER_E2E_OK";
 
         using var testHost = BuildHost();
@@ -407,7 +366,7 @@ public sealed class RealHermesE2ETests
         Assert.NotEmpty(plan!.Tasks);
     }
 
-    [Fact]
+    [LiveFact("AI_FACTORY_HERMES_SMOKE_TEST", RequiresDocker = true)]
     public async Task WorkItemExecution_RealAgentRun_ThroughFullFactoryPipeline_UpdatesPersistedWorkItemState()
     {
         // Phase 18.7 §15 — the single narrow real-Hermes gate for WorkItem
@@ -417,11 +376,6 @@ public sealed class RealHermesE2ETests
         // persisted WorkItem state, all through the unmodified production
         // pipeline (AgentRunWorkItemSync's Phase 18.7 sync branch runs
         // automatically inside the Worker's own poll loop, same as always).
-        if (!Enabled)
-        {
-            return;
-        }
-
         const string executionMarker = "AI_FACTORY_WORKITEM_EXECUTION_E2E_OK";
 
         using var testHost = BuildHost();
@@ -610,14 +564,9 @@ public sealed class RealHermesE2ETests
     ///   Hermes image available (AI_FACTORY_HERMES_IMAGE or default)
     ///   git available on PATH
     /// </summary>
-    [Fact]
+    [LiveFact("AI_FACTORY_HERMES_SMOKE_TEST", RequiresDocker = true)]
     public async Task RealHermes_WorkItemExecution_ModifiesProjectWorkspace_AndPassesFactoryVerification()
     {
-        if (!Enabled)
-        {
-            return;
-        }
-
         // ── 1. Build fixture: bare Git repo with a minimal .NET project ──────
         var fixtureTemp = Path.Combine(Path.GetTempPath(), "aif-e2e17-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(fixtureTemp);
@@ -774,14 +723,9 @@ public sealed class RealHermesE2ETests
     /// host filesystem modifications, and executes VerificationGate.
     /// Opt-in only via AI_FACTORY_HERMES_SMOKE_TEST=true.
     /// </summary>
-    [Fact]
+    [LiveFact("AI_FACTORY_HERMES_SMOKE_TEST", RequiresDocker = true)]
     public async Task RealHermes_FullProjectLifecycle_WithRepair_WhenEnabled()
     {
-        if (!Enabled)
-        {
-            return;
-        }
-
         var fixtureTemp = Path.Combine(Path.GetTempPath(), "hermes-p1818-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(fixtureTemp);
         var bareRepoPath = CreateDemoFixtureBareRepo(fixtureTemp);

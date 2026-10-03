@@ -85,6 +85,8 @@ public sealed class OpenHandsExecutionAdapter : IExecutionAdapter
         var stopwatch = Stopwatch.StartNew();
         var workspacePath = ResolveWorkspacePath(spec);
         var containerSpawned = false;
+        var launchCompleted = false;
+        var launchRejected = false;
         string? activeConversationId = null;
         IOpenHandsClient? client = null;
 
@@ -111,7 +113,17 @@ public sealed class OpenHandsExecutionAdapter : IExecutionAdapter
                 // fail (port bind) or be cancelled mid-flight. Cleanup is `docker rm -f` of this run's
                 // own deterministic name (idempotent): it can only ever remove a container of this AgentRun.
                 containerSpawned = true;
-                await LaunchContainerAsync(spec, workspacePath, ephemeralPort, sessionApiKey, cancellationToken);
+                try
+                {
+                    await LaunchContainerAsync(spec, workspacePath, ephemeralPort, sessionApiKey, cancellationToken);
+                    launchCompleted = true;
+                }
+                catch (ContainerLaunchRejectedException)
+                {
+                    // Docker answered with a definite error: nothing is still being created.
+                    launchRejected = true;
+                    throw;
+                }
             }
 
             client = _clientFactory.CreateClient(serverUrl, sessionApiKey);
@@ -213,8 +225,19 @@ public sealed class OpenHandsExecutionAdapter : IExecutionAdapter
             {
                 try
                 {
-                    using var cleanupCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-                    await _lifecycleManager.EnsureCleanupAsync(spec.AgentRunId, cleanupCts.Token);
+                    // Phase O — a launch that was interrupted (cancelled, timed out) may still be completing inside the
+                    // Docker daemon: reconcile for a bounded window instead of removing once and finding nothing.
+                    using var cleanupCts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                    if (launchCompleted || launchRejected)
+                    {
+                        await _lifecycleManager.EnsureCleanupAsync(spec.AgentRunId, cleanupCts.Token);
+                    }
+                    else
+                    {
+                        var cleanup = await _lifecycleManager.ReconcileCleanupAsync(spec.AgentRunId, cleanupCts.Token);
+                        _logger.LogInformation(
+                            "OpenHandsContainerCleanup AgentRunId={AgentRunId} Outcome={Outcome}", spec.AgentRunId, cleanup);
+                    }
                 }
                 catch (Exception cleanupEx)
                 {
@@ -390,8 +413,20 @@ public sealed class OpenHandsExecutionAdapter : IExecutionAdapter
         var result = await _processRunner.RunAsync(processRequest, cancellationToken);
         if (result.ExitCode != 0)
         {
-            throw new InvalidOperationException(
-                $"Failed to start OpenHands container '{containerName}': {result.StandardError}");
+            var message = $"Failed to start OpenHands container '{containerName}': {result.StandardError}";
+
+            // A timed-out launch is NOT a definite answer from Docker (the client was killed mid-request).
+            throw result.TimedOut
+                ? new InvalidOperationException(message)
+                : new ContainerLaunchRejectedException(message);
+        }
+    }
+
+    /// <summary>`docker run -d` returned a non-zero exit code of its own accord, so the daemon has nothing left in flight.</summary>
+    private sealed class ContainerLaunchRejectedException : InvalidOperationException
+    {
+        public ContainerLaunchRejectedException(string message) : base(message)
+        {
         }
     }
 

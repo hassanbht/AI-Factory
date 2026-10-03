@@ -7,6 +7,7 @@ using AI.Factory.Infrastructure.Agents;
 using AI.Factory.Infrastructure.Agents.Cli;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using AI.Factory.TestSupport;
 
 namespace AI.Factory.Application.Tests.Execution;
 
@@ -20,6 +21,7 @@ namespace AI.Factory.Application.Tests.Execution;
 /// release, credential leakage, state cleanup) that every CLI runtime shares. It says nothing about any
 /// model: no model is involved.
 /// </summary>
+[Collection(TestCollections.RealProcesses)]
 public sealed class CliProcessTreeLifecycleTests : IDisposable
 {
     private const string Key = "sk-ant-PHASEN-SYNTHETIC-MARKER-7f3a9c1e5b2d4a60";
@@ -65,7 +67,6 @@ public sealed class CliProcessTreeLifecycleTests : IDisposable
         Codex
     }
 
-    private static bool Applicable => RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
 
     // ---------------------------------------------------------------- fake CLI
 
@@ -217,6 +218,17 @@ public sealed class CliProcessTreeLifecycleTests : IDisposable
         }
     }
 
+    /// <summary>Phase O — a failed assertion names the surface, never the value (xunit's DoesNotContain would print the whole haystack).</summary>
+    private static void AssertNoSecret(string? haystack, string surface, params string[] secrets)
+    {
+        foreach (var secret in secrets)
+        {
+            Assert.False(
+                (haystack ?? string.Empty).Contains(secret, StringComparison.Ordinal),
+                $"a credential reached: {surface}");
+        }
+    }
+
     private static void AssertStatus(ExecutionOutcomeStatus expected, ExecutionOutcome outcome) =>
         Assert.True(expected == outcome.Status,
             $"expected {expected} but was {outcome.Status} (exit '{outcome.ExitReason}', category {outcome.FailureCategory}): {outcome.ErrorMessage}");
@@ -227,13 +239,11 @@ public sealed class CliProcessTreeLifecycleTests : IDisposable
 
     // ---------------------------------------------------------------- timeout
 
-    [Theory]
+    [WindowsTheory]
     [InlineData(Runtime.ClaudeCode)]
     [InlineData(Runtime.Codex)]
     public async Task Timeout_KillsTheWholeProcessTree_ReportsTimedOut_AndRemovesState(Runtime runtime)
     {
-        if (!Applicable) { return; }
-
         var cmd = WriteFakeCli("Start-Sleep -Seconds 300");
         var adapter = CreateAdapter(runtime, cmd);
         var stopwatch = Stopwatch.StartNew();
@@ -251,13 +261,11 @@ public sealed class CliProcessTreeLifecycleTests : IDisposable
 
     // ---------------------------------------------------------------- cancellation
 
-    [Theory]
+    [WindowsTheory]
     [InlineData(Runtime.ClaudeCode)]
     [InlineData(Runtime.Codex)]
     public async Task Cancellation_DuringActiveExecution_KillsTheTree_AndIsCancelledNotFailedOrTimedOut(Runtime runtime)
     {
-        if (!Applicable) { return; }
-
         var cmd = WriteFakeCli("Start-Sleep -Seconds 300");
         var adapter = CreateAdapter(runtime, cmd);
         using var cts = new CancellationTokenSource();
@@ -273,11 +281,9 @@ public sealed class CliProcessTreeLifecycleTests : IDisposable
         AssertNoRuntimeStateLeft();
     }
 
-    [Fact]
+    [WindowsFact]
     public async Task Cancellation_ImmediatelyAfterLaunch_LeavesNoProcessBehind()
     {
-        if (!Applicable) { return; }
-
         var cmd = WriteFakeCli("Start-Sleep -Seconds 300");
         var adapter = CreateAdapter(Runtime.ClaudeCode, cmd);
         using var cts = new CancellationTokenSource();
@@ -303,13 +309,11 @@ public sealed class CliProcessTreeLifecycleTests : IDisposable
         Assert.Empty(Directory.GetFileSystemEntries(_workspace));
     }
 
-    [Theory]
+    [WindowsTheory]
     [InlineData(Runtime.ClaudeCode)]
     [InlineData(Runtime.Codex)]
     public async Task Cancellation_BeforeLaunch_NeverReportsFailureOrSuccess(Runtime runtime)
     {
-        if (!Applicable) { return; }
-
         var cmd = WriteFakeCli("Start-Sleep -Seconds 300");
         var adapter = CreateAdapter(runtime, cmd);
         using var cts = new CancellationTokenSource();
@@ -329,13 +333,11 @@ public sealed class CliProcessTreeLifecycleTests : IDisposable
 
     // ---------------------------------------------------------------- deterministic auth failure (no multi-minute retry loop)
 
-    [Theory]
+    [WindowsTheory]
     [InlineData(Runtime.ClaudeCode)]
     [InlineData(Runtime.Codex)]
     public async Task AuthenticationFailure_StopsTheRunOnTheFirstEvent_AndKillsTheTree(Runtime runtime)
     {
-        if (!Applicable) { return; }
-
         // The CLI would sit in its own retry loop for minutes (Start-Sleep 300 stands in for it).
         var cmd = WriteFakeCli($"Write-Output {AuthFailureEvent(runtime)}\r\nStart-Sleep -Seconds 300");
         var adapter = CreateAdapter(runtime, cmd);
@@ -353,15 +355,92 @@ public sealed class CliProcessTreeLifecycleTests : IDisposable
         AssertNoRuntimeStateLeft();
     }
 
+    /// <summary>
+    /// Phase O (O11) — Claude Code retries a 401 itself (up to 10 times, minutes). The Factory must stay the authority:
+    /// the CLI is stopped at the first 401 and what it would have printed later (here a "success" result after its retries)
+    /// can never turn the run into a success.
+    /// </summary>
+    [WindowsTheory]
+    [InlineData(Runtime.ClaudeCode)]
+    [InlineData(Runtime.Codex)]
+    public async Task AuthenticationFailure_NeverBecomesSuccess_EvenIfTheCliWouldLaterReportOne(Runtime runtime)
+    {
+        var lateSuccess = SuccessEvents(runtime, "LATE-SUCCESS");
+        var cmd = WriteFakeCli(
+            $"Write-Output {AuthFailureEvent(runtime)}\r\nStart-Sleep -Seconds 8\r\n{lateSuccess}\r\nexit 0");
+
+        var outcome = await CreateAdapter(runtime, cmd).ExecuteAsync(Spec(deadline: DateTimeOffset.UtcNow.AddMinutes(2)));
+
+        AssertStatus(ExecutionOutcomeStatus.Failed, outcome);
+        Assert.Equal("Authentication", outcome.GatewayFailure);
+        Assert.DoesNotContain("LATE-SUCCESS", outcome.Output ?? string.Empty);
+        await AssertTreeGone(); // killed at the first 401, long before its 8 s "retries" ended
+        AssertNoRuntimeStateLeft();
+    }
+
+    /// <summary>
+    /// Phase O (O11) — a CLI that keeps emitting retry/progress events forever is not "making progress" in the Factory's
+    /// eyes: the configured deadline stays authoritative and ends it as TimedOut (a failure mode the silent-hang test above
+    /// does not cover — here the pipes are busy the whole time).
+    /// </summary>
+    [WindowsTheory]
+    [InlineData(Runtime.ClaudeCode)]
+    [InlineData(Runtime.Codex)]
+    public async Task CliThatKeepsEmittingRetryEventsForever_IsStoppedByTheFactoryDeadline(Runtime runtime)
+    {
+        var transient = runtime == Runtime.ClaudeCode
+            ? "'{\"type\":\"system\",\"subtype\":\"api_retry\",\"attempt\":1,\"error_status\":529,\"error\":\"overloaded\"}'"
+            : "'{\"type\":\"error\",\"message\":\"stream disconnected, retrying\"}'";
+        var cmd = WriteFakeCli($"while ($true) {{ Write-Output {transient}; Start-Sleep -Milliseconds 200 }}");
+        var stopwatch = Stopwatch.StartNew();
+
+        var outcome = await CreateAdapter(runtime, cmd).ExecuteAsync(Spec(deadline: DateTimeOffset.UtcNow.AddSeconds(6)));
+
+        stopwatch.Stop();
+        AssertStatus(ExecutionOutcomeStatus.TimedOut, outcome);
+        Assert.Equal(FailureCategory.Timeout, outcome.FailureCategory);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(25), $"deadline 6s, took {stopwatch.Elapsed}");
+        await AssertTreeGone();
+        AssertNoRuntimeStateLeft();
+    }
+
+    // ---------------------------------------------------------------- non-zero exit and the stderr pipe
+
+    [WindowsTheory]
+    [InlineData(Runtime.ClaudeCode)]
+    [InlineData(Runtime.Codex)]
+    public async Task NonZeroExit_WithStderr_IsFailed_NeverSuccess_AndStderrIsLoggedRedacted(Runtime runtime)
+    {
+        // A result-looking event on stdout does not rescue a CLI that exited non-zero. stderr is a separate pipe: it is read
+        // in full, redacted, and logged (not echoed into the persisted error); the exit code is the recorded reason.
+        var cmd = WriteFakeCli(
+            "[Console]::Error.WriteLine(\"fatal: cannot continue; token=\" + $env:ANTHROPIC_API_KEY + $env:CODEX_API_KEY)\r\n"
+            + SuccessEvents(runtime, "DONE") + "\r\nexit 2",
+            spawnGrandchild: false);
+        var logger = runtime == Runtime.ClaudeCode ? (ILogger)new ListLogger<ClaudeCodeExecutionAdapter>() : new ListLogger<CodexExecutionAdapter>();
+
+        var outcome = await CreateAdapter(runtime, cmd, logger).ExecuteAsync(Spec());
+
+        AssertStatus(ExecutionOutcomeStatus.Failed, outcome);
+        Assert.Equal("exit:2", outcome.ExitReason);
+        Assert.Contains("exited with code 2", outcome.ErrorMessage);
+        AssertNoSecret(outcome.ErrorMessage, "the failure message", Key, AmbientKey);
+
+        var logs = string.Join('\n', runtime == Runtime.ClaudeCode
+            ? ((ListLogger<ClaudeCodeExecutionAdapter>)logger).Lines
+            : ((ListLogger<CodexExecutionAdapter>)logger).Lines);
+        Assert.Contains("fatal: cannot continue", logs); // the stderr pipe was drained and surfaced
+        AssertNoSecret(logs, "the logs", Key, AmbientKey);
+        AssertNoRuntimeStateLeft();
+    }
+
     // ---------------------------------------------------------------- stdin closure + pipe release
 
-    [Theory]
+    [WindowsTheory]
     [InlineData(Runtime.ClaudeCode)]
     [InlineData(Runtime.Codex)]
     public async Task LargePrompt_IsDeliveredCompletely_AndStdinIsClosed(Runtime runtime)
     {
-        if (!Applicable) { return; }
-
         // The fake reads stdin to EOF before it emits anything: it can only finish if the runner closed stdin.
         var prompt = string.Join('\n', Enumerable.Range(0, 20_000).Select(i => $"line {i} ünïcödé ✓"));
         var cmd = WriteFakeCli(SuccessEvents(runtime, "DONE") + "\r\nexit 0", spawnGrandchild: false);
@@ -378,13 +457,11 @@ public sealed class CliProcessTreeLifecycleTests : IDisposable
     /// The CLI finished and exited 0, but a process it started (a build server, a node-reuse worker) keeps the
     /// inherited stdout/stderr pipes open. The run must complete promptly instead of waiting for that process.
     /// </summary>
-    [Theory]
+    [WindowsTheory]
     [InlineData(Runtime.ClaudeCode)]
     [InlineData(Runtime.Codex)]
     public async Task FinishedCli_WithALingeringGrandchildHoldingThePipes_DoesNotBlockTheRun(Runtime runtime)
     {
-        if (!Applicable) { return; }
-
         var cmd = WriteFakeCli(SuccessEvents(runtime, "DONE") + "\r\nexit 0");
         var stopwatch = Stopwatch.StartNew();
 
@@ -398,13 +475,11 @@ public sealed class CliProcessTreeLifecycleTests : IDisposable
 
     // ---------------------------------------------------------------- success semantics through a real process
 
-    [Theory]
+    [WindowsTheory]
     [InlineData(Runtime.ClaudeCode)]
     [InlineData(Runtime.Codex)]
     public async Task ExitZeroWithoutAResultEvent_IsNeverSuccess_WithARealProcess(Runtime runtime)
     {
-        if (!Applicable) { return; }
-
         var cmd = WriteFakeCli("Write-Output 'not json at all'\r\nWrite-Output '{\"type\":\"assistant\"}'\r\nexit 0", spawnGrandchild: false);
 
         var outcome = await CreateAdapter(runtime, cmd).ExecuteAsync(Spec());
@@ -414,13 +489,11 @@ public sealed class CliProcessTreeLifecycleTests : IDisposable
         AssertNoRuntimeStateLeft();
     }
 
-    [Theory]
+    [WindowsTheory]
     [InlineData(Runtime.ClaudeCode)]
     [InlineData(Runtime.Codex)]
     public async Task ExitZeroWithPartialFinalEvent_IsNeverSuccess(Runtime runtime)
     {
-        if (!Applicable) { return; }
-
         // The final event is cut off mid-JSON (a killed or crashed CLI): it must not count as a completion.
         var truncated = runtime == Runtime.ClaudeCode
             ? "'{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":fal'"
@@ -433,13 +506,11 @@ public sealed class CliProcessTreeLifecycleTests : IDisposable
         AssertNoRuntimeStateLeft();
     }
 
-    [Theory]
+    [WindowsTheory]
     [InlineData(Runtime.ClaudeCode)]
     [InlineData(Runtime.Codex)]
     public async Task SuccessfulStructuredResult_WithARealProcess_Succeeds_WithUsageAndSession(Runtime runtime)
     {
-        if (!Applicable) { return; }
-
         var cmd = WriteFakeCli(SuccessEvents(runtime, "DONE") + "\r\nexit 0", spawnGrandchild: false);
 
         var outcome = await CreateAdapter(runtime, cmd).ExecuteAsync(Spec());
@@ -453,13 +524,11 @@ public sealed class CliProcessTreeLifecycleTests : IDisposable
 
     // ---------------------------------------------------------------- credential leakage matrix
 
-    [Theory]
+    [WindowsTheory]
     [InlineData(Runtime.ClaudeCode, "ANTHROPIC_API_KEY")]
     [InlineData(Runtime.Codex, "CODEX_API_KEY")]
     public async Task SyntheticSecret_ReachesOnlyTheChildEnvironment_AndNoOtherSurface(Runtime runtime, string credentialVariable)
     {
-        if (!Applicable) { return; }
-
         // The fake CLI misbehaves on purpose: it prints the credential into its result text and into stderr,
         // as a model-driven CLI could. Both must be redacted before they reach the outcome or any log.
         var echo = $"[Console]::Error.WriteLine(\"leaked \" + $env:{credentialVariable})\r\n"
@@ -469,30 +538,73 @@ public sealed class CliProcessTreeLifecycleTests : IDisposable
         var adapter = CreateAdapter(runtime, cmd, logger);
         var before = Directory.GetFileSystemEntries(_workspace, "*", SearchOption.AllDirectories);
 
-        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", AmbientKey);
-        Environment.SetEnvironmentVariable("CODEX_API_KEY", AmbientKey);
-        Environment.SetEnvironmentVariable("OPENAI_API_KEY", AmbientKey);
-        Environment.SetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN", AmbientKey);
+        // Phase O (O10) — every ambient credential, provider-routing and CLI-home variable a developer machine can carry. None may
+        // reach the child; the CLI's home must be this run's own directory, never the user's.
+        var ambientHome = Directory.CreateDirectory(Path.Combine(_root, "ambient-user-home")).FullName;
+        var ambient = new Dictionary<string, string?>
+        {
+            ["ANTHROPIC_API_KEY"] = AmbientKey,
+            ["CODEX_API_KEY"] = AmbientKey,
+            ["OPENAI_API_KEY"] = AmbientKey,
+            ["CLAUDE_CODE_OAUTH_TOKEN"] = AmbientKey,
+            ["ANTHROPIC_BASE_URL"] = "http://ambient-routing.invalid:1/anthropic",
+            ["ANTHROPIC_AUTH_TOKEN"] = AmbientKey,
+            ["OPENAI_BASE_URL"] = "http://ambient-routing.invalid:2/openai",
+            ["OPENAI_API_BASE"] = "http://ambient-routing.invalid:3/openai",
+            ["OPENAI_ORG_ID"] = "org-ambient-marker",
+            ["CLAUDE_CONFIG_DIR"] = ambientHome,
+            ["CODEX_HOME"] = ambientHome
+        };
+        var previous = ambient.Keys.ToDictionary(k => k, Environment.GetEnvironmentVariable);
+        foreach (var (name, value) in ambient)
+        {
+            Environment.SetEnvironmentVariable(name, value);
+        }
+
         try
         {
             var outcome = await adapter.ExecuteAsync(Spec());
 
             // argv
             var args = File.ReadAllText(ProbePath("args.txt"));
-            Assert.DoesNotContain(Key, args);
-            Assert.DoesNotContain(AmbientKey, args);
+            AssertNoSecret(args, "argv", Key, AmbientKey);
+            Assert.False(args.Contains("ambient-routing.invalid", StringComparison.Ordinal), "an ambient routing URL reached argv");
 
             // stdin (the prompt)
             var stdin = File.ReadAllText(ProbePath("stdin.txt"));
-            Assert.DoesNotContain(Key, stdin);
-            Assert.DoesNotContain(AmbientKey, stdin);
+            AssertNoSecret(stdin, "stdin (the prompt)", Key, AmbientKey);
 
             // environment: the Factory credential under exactly one variable, no ambient credential anywhere
             var env = File.ReadAllLines(ProbePath("env.txt"));
             Assert.Equal(1, env.Count(l => l.Contains(Key, StringComparison.Ordinal)));
-            Assert.Contains($"{credentialVariable}={Key}", env);
-            Assert.DoesNotContain(env, l => l.Contains(AmbientKey, StringComparison.Ordinal));
+            Assert.True(env.Contains($"{credentialVariable}={Key}"), $"the Factory credential is not in {credentialVariable}");
+            Assert.False(env.Any(l => l.Contains(AmbientKey, StringComparison.Ordinal)), "an ambient credential reached the child environment");
+            Assert.False(env.Any(l => l.Contains("ambient-routing.invalid", StringComparison.Ordinal)), "an ambient provider-routing URL reached the child environment");
+            Assert.False(env.Any(l => l.Contains("org-ambient-marker", StringComparison.Ordinal)), "an ambient organization id reached the child environment");
             Assert.DoesNotContain(env, l => l.StartsWith("CLAUDE_CODE_OAUTH_TOKEN=", StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(env, l => l.StartsWith("ANTHROPIC_AUTH_TOKEN=", StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(env, l => l.StartsWith("OPENAI_BASE_URL=", StringComparison.OrdinalIgnoreCase)
+                || l.StartsWith("OPENAI_API_BASE=", StringComparison.OrdinalIgnoreCase));
+
+            // The CLI's home, config and temp locations are this run's own directory under the Factory state root:
+            // never the user's profile (~/.claude, ~/.codex) and never the ambient CLAUDE_CONFIG_DIR / CODEX_HOME.
+            var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            foreach (var variable in new[] { "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "CLAUDE_CONFIG_DIR", "CODEX_HOME" })
+            {
+                var line = env.FirstOrDefault(l => l.StartsWith(variable + "=", StringComparison.OrdinalIgnoreCase));
+                if (line is null)
+                {
+                    continue; // not every CLI needs every variable
+                }
+
+                var value = line[(variable.Length + 1)..];
+                Assert.True(
+                    value.StartsWith(_stateRoot, StringComparison.OrdinalIgnoreCase),
+                    $"{variable} is not inside the per-run state root");
+                Assert.False(value.StartsWith(ambientHome, StringComparison.OrdinalIgnoreCase), $"{variable} is the ambient home");
+                Assert.False(value.StartsWith(userProfile, StringComparison.OrdinalIgnoreCase) && !value.StartsWith(_stateRoot, StringComparison.OrdinalIgnoreCase),
+                    $"{variable} points into the user's profile");
+            }
             // Other ambient session/provider-routing variables of the host (a developer machine running Claude Code
             // has many CLAUDE_CODE_* and may set ANTHROPIC_BASE_URL) must not reach the child either.
             Assert.DoesNotContain(env, l => l.StartsWith("ANTHROPIC_BASE_URL=", StringComparison.OrdinalIgnoreCase));
@@ -506,14 +618,14 @@ public sealed class CliProcessTreeLifecycleTests : IDisposable
 
             // outcome (output, error, report) and logs
             AssertStatus(ExecutionOutcomeStatus.Succeeded, outcome);
-            Assert.DoesNotContain(Key, outcome.Output ?? string.Empty);
-            Assert.DoesNotContain(Key, outcome.ErrorMessage ?? string.Empty);
+            AssertNoSecret(outcome.Output, "the outcome output", Key, AmbientKey);
+            AssertNoSecret(outcome.ErrorMessage, "the outcome error", Key, AmbientKey);
+            AssertNoSecret(System.Text.Json.JsonSerializer.Serialize(outcome.Report), "the runtime report", Key, AmbientKey);
             Assert.Contains("[REDACTED]", outcome.Output);
             var logs = string.Join('\n', runtime == Runtime.ClaudeCode
                 ? ((ListLogger<ClaudeCodeExecutionAdapter>)logger).Lines
                 : ((ListLogger<CodexExecutionAdapter>)logger).Lines);
-            Assert.DoesNotContain(Key, logs);
-            Assert.DoesNotContain(AmbientKey, logs);
+            AssertNoSecret(logs, "the logs", Key, AmbientKey);
             Assert.Contains("leaked", logs); // stderr was logged — redacted
 
             // workspace, runtime home, temp files
@@ -522,10 +634,11 @@ public sealed class CliProcessTreeLifecycleTests : IDisposable
         }
         finally
         {
-            Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", null);
-            Environment.SetEnvironmentVariable("CODEX_API_KEY", null);
-            Environment.SetEnvironmentVariable("OPENAI_API_KEY", null);
-            Environment.SetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN", null);
+            // Restore what the host really had (the old code cleared these, discarding a developer's own values).
+            foreach (var (name, value) in previous)
+            {
+                Environment.SetEnvironmentVariable(name, value);
+            }
         }
     }
 }

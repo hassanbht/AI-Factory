@@ -14,6 +14,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Xunit;
 using Xunit.Abstractions;
+using AI.Factory.TestSupport;
 
 namespace AI.Factory.Worker.Tests;
 
@@ -33,6 +34,7 @@ namespace AI.Factory.Worker.Tests;
 ///   dotnet test --filter FullyQualifiedName~LivePlannerE2ETests
 /// </code>
 /// </summary>
+[Collection(TestCollections.DockerAndBuilds)]
 public sealed class LivePlannerE2ETests
 {
     private readonly ITestOutputHelper _output;
@@ -93,14 +95,9 @@ public sealed class LivePlannerE2ETests
     /// means the Factory accepted and persisted the plan through its normal
     /// validation — never that the model produced identical prose.
     /// </summary>
-    [Fact]
+    [LiveFact("AI_FACTORY_HERMES_SMOKE_TEST", RequiresDocker = true)]
     public async Task RealPlanner_ProducesValidPersistedPlan_AcrossThreeSuccessfulRuns()
     {
-        if (!LiveWorkerHost.Enabled)
-        {
-            return;
-        }
-
         const int requiredSuccesses = 3;
         const int maxAttempts = 5;
 
@@ -165,14 +162,9 @@ public sealed class LivePlannerE2ETests
     /// real <see cref="IProjectPlanner"/>, and the Project is left with no
     /// WorkItems at all.
     /// </summary>
-    [Fact]
+    [LiveFact("AI_FACTORY_HERMES_SMOKE_TEST", RequiresDocker = true)]
     public async Task InvalidPlannerOutput_PersistsNothing_ThroughTheRealMaterializationPath()
     {
-        if (!LiveWorkerHost.Enabled)
-        {
-            return;
-        }
-
         using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
         var cancellationToken = cts.Token;
 
@@ -238,14 +230,9 @@ public sealed class LivePlannerE2ETests
     /// produced by the real Worker loops (TaskSchedulerHostedService +
     /// AgentRunWorker) and proven from the persisted audit trail.
     /// </summary>
-    [Fact]
+    [LiveFact("AI_FACTORY_HERMES_SMOKE_TEST", RequiresDocker = true)]
     public async Task AutonomousStart_RealPlanner_ForcedRepair_DependentDispatch_ProjectVerification_HumanApproval()
     {
-        if (!LiveWorkerHost.Enabled)
-        {
-            return;
-        }
-
         using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(120));
         var cancellationToken = cts.Token;
 

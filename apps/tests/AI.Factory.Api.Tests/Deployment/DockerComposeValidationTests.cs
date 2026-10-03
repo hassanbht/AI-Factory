@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Xunit;
+using AI.Factory.TestSupport;
 
 namespace AI.Factory.Api.Tests.Deployment;
 
@@ -10,19 +11,9 @@ namespace AI.Factory.Api.Tests.Deployment;
 /// </summary>
 public sealed class DockerComposeValidationTests
 {
-    [Fact]
+    [DockerFact(RequiresDaemon = false)]
     public async Task DockerComposeConfig_OnGeneratedComposeFile_ExitsZero()
     {
-        // xunit 2.9.2 (this project's installed version) has no Assert.Skip/SkippableFact —
-        // that only exists on xunit v3 or the separate Xunit.SkippableFact package, neither of
-        // which is referenced here, and adding one is out of scope for this change. So when
-        // Docker isn't available on the machine running the tests, detect that and return
-        // early: the test trivially passes instead of failing for an unrelated environment reason.
-        if (!IsDockerAvailable())
-        {
-            return;
-        }
-
         var repoRoot = FindRepoRoot();
         var composeFilePath = Path.Combine(repoRoot, "docker-compose.yml");
 
@@ -32,32 +23,6 @@ public sealed class DockerComposeValidationTests
             repoRoot);
 
         Assert.True(exitCode == 0, $"`docker compose config -q` failed with exit code {exitCode}: {stderr}");
-    }
-
-    private static bool IsDockerAvailable()
-    {
-        try
-        {
-            using var process = Process.Start(new ProcessStartInfo("docker", "--version")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            });
-
-            if (process is null)
-            {
-                return false;
-            }
-
-            process.WaitForExit(5000);
-            return process.HasExited && process.ExitCode == 0;
-        }
-        catch (Exception)
-        {
-            // Docker CLI not installed/not on PATH — treated as "unavailable", not a test failure.
-            return false;
-        }
     }
 
     private static async Task<(int ExitCode, string Stdout, string Stderr)> RunProcessAsync(

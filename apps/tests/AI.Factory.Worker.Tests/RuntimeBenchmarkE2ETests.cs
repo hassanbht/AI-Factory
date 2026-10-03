@@ -4,6 +4,7 @@ using AI.Factory.Application.Abstractions.Execution;
 using AI.Factory.Domain.Enums;
 using AI.Factory.Infrastructure.Agents;
 using AI.Factory.Infrastructure.Agents.OpenHands;
+using AI.Factory.TestSupport;
 using AI.Factory.Worker.Tests.Fixtures;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -72,8 +73,8 @@ public sealed class RuntimeBenchmarkE2ETests
         }
         finally
         {
-            try { Directory.Delete(tempA, recursive: true); } catch { }
-            try { Directory.Delete(tempB, recursive: true); } catch { }
+            TestTempDirectory.Delete(tempA, _output);
+            TestTempDirectory.Delete(tempB, _output);
         }
     }
 

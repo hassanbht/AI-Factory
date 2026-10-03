@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="..\Shared\TestTempDirectory.cs" Link="Shared\TestTempDirectory.cs" />
     <Compile Include="..\Shared\TestGating.cs" Link="Shared\TestGating.cs" />
   </ItemGroup>
 

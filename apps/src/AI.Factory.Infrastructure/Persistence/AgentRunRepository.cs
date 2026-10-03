@@ -102,6 +102,15 @@ public sealed class AgentRunRepository : IAgentRunRepository
                 throw new NotFoundException($"AgentRun '{agentRun.Id}' was not found.");
             }
 
+            // Phase M — the merge below exists for benign collisions (a heartbeat touching
+            // UpdatedAtUtc). A concurrent writer that changed Status (cancellation, orphan recovery,
+            // another claim) decided the lifecycle; overwriting it would let a late completion turn a
+            // Cancelled or recovered run into Succeeded. The caller loses the race instead.
+            if (!Equals(dbValues[nameof(AgentRun.Status)], entry.OriginalValues[nameof(AgentRun.Status)]))
+            {
+                throw;
+            }
+
             entry.OriginalValues.SetValues(dbValues);
             existing.Version = dbValues[nameof(AgentRun.Version)] is long ver ? ver : existing.Version;
             if (!ReferenceEquals(existing, agentRun))
@@ -161,6 +170,48 @@ public sealed class AgentRunRepository : IAgentRunRepository
         catch (ConcurrencyConflictException)
         {
             // Transient collision on optimistic concurrency token — safe to ignore on heartbeat
+        }
+    }
+
+    public async Task<IReadOnlyList<AgentRun>> GetRunningWithoutHeartbeatSinceAsync(
+        DateTime heartbeatCutoffUtc,
+        CancellationToken cancellationToken = default)
+    {
+        return await _db.AgentRuns
+            .AsNoTracking()
+            .Where(x => x.Status == AgentRunStatus.Running && x.UpdatedAtUtc < heartbeatCutoffUtc)
+            .OrderBy(x => x.UpdatedAtUtc)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<AgentRun?> TryRecoverOrphanedRunAsync(
+        Guid agentRunId,
+        DateTime heartbeatCutoffUtc,
+        string reason,
+        CancellationToken cancellationToken = default)
+    {
+        var run = await _db.AgentRuns.FirstOrDefaultAsync(x => x.Id == agentRunId, cancellationToken);
+
+        // Re-checked under the row's concurrency token: a run that heartbeated, finished or was
+        // recovered by another Worker since it was listed is left alone.
+        if (run is null || run.Status != AgentRunStatus.Running || run.UpdatedAtUtc >= heartbeatCutoffUtc)
+        {
+            return null;
+        }
+
+        run.TransitionTo(AgentRunStatus.Failed);
+        run.ErrorMessage = $"{AgentRunRecovery.OrphanedMarker}: {reason}.";
+        run.FailureCategory = FailureCategory.Infrastructure;
+
+        try
+        {
+            await _db.SaveChangesAsync(cancellationToken);
+            return run;
+        }
+        catch (ConcurrencyConflictException)
+        {
+            _db.Entry(run).State = EntityState.Detached;
+            return null;
         }
     }
 

@@ -1,5 +1,9 @@
 # Execution Adapter Migration
 
+> **Phase M (2026-10-02):** ClaudeCode and Codex adapters, credential isolation for every runtime, crash recovery,
+> runtime telemetry and workspace integrity are documented in [execution-runtimes.md](execution-runtimes.md); local
+> setup in [local-setup.md](local-setup.md).
+
 Status log for moving AI Factory from a Hermes-specific execution path to a pluggable execution-adapter seam. The approved direction comes from the architecture assessment of 2026-09-24:
 
 ```text
@@ -16,11 +20,15 @@ AI Factory stays the control plane. Adapters execute one AgentRun and report an 
 | C | Real `HermesExecutionAdapter`; artifact recording and disabled-definition policy moved to the Factory | Done, see below |
 | D | Full and live Hermes regression | Done, see below |
 | D.1 | Runtime lifecycle hardening (named containers, cleanup, no hidden timeout retries, single timeout, pinned image) | Done, see below |
+| E | OpenHands Agent Server spike and execution adapter | Done, see below |
 | **F** | **Controlled Hermes vs OpenHands empirical comparison** | **Done, see below** |
-| **G** | **Broad runtime assessment and production profile decisions** | **Done, see below** |
+| **G / G.1** | **Broad runtime assessment and production profile decisions** | **Done, see below** |
 | **H** | **Review migration to execution adapter abstraction** | **Done, see below** |
 | **I** | **Model gateway abstraction and unified model routing** | **Done, see below** |
-| J–K | Telemetry exposure, optional CLI adapters, Hermes legacy reduction | Not started |
+| J | Model gateway operational readiness, preflight and routing observability | Done — LIMITED (external gateway constraint), see below |
+| K | Model gateway boundary completion (Architecture A, `ExecuteAsync` removed) | Done — LIMITED (external gateway constraint), see below |
+| L | Runtime integrity, OpenHands state isolation, legacy path cleanup | Done — LIMITED (external gateway constraint), see below |
+| Next | API-level operational observability / telemetry exposure | Not started |
 
 ## Phase B: Execution Adapter Abstraction
 
@@ -1729,9 +1737,851 @@ Tested in `AI.Factory.Worker.Tests/ModelGatewayLiveTests.cs`:
 - Automatic gateway failover (forbidden in Phase I).
 - Telemetry exposure in public API (Phase J).
 
+---
 
+# Phase J — Model Gateway Operational Readiness, Preflight and Routing Observability
 
+## Result
 
+`LIMITED — EXTERNAL GATEWAY CONSTRAINT`
 
+The gateway architecture from Phase I is intact. Phase J found, and fixed, one real defect that made a
+gateway failure look like a successful AgentRun (live-verified, see J4). After the fix, every
+gateway failure path ends in a failed AgentRun. That is verified by deterministic end-to-end tests
+and by two real disposable AgentRuns (Hermes and OpenHands) against the real OpenRouter. Real model
+generation is still blocked from outside: the OpenRouter account has no credits (HTTP 402), and the
+local OmniRoute instance has no provider credentials (HTTP 401).
 
+This section replaces an earlier, uncommitted Phase J draft in the working tree. That draft contained
+claims that did not hold up against the source: that Hermes passes the gateway as `--provider`, that
+`OPENROUTER_API_KEY` was absent, and that the gateway-only tests proved AgentRun semantics.
 
+---
+
+## J0 — Phase I Verification
+
+| Claim | Result | Evidence |
+|---|---|---|
+| `IModelGateway` is the single gateway abstraction; OpenRouter and OmniRoute are its only implementations | Holds | VERIFIED BY SOURCE; `ModelGatewayArchitectureTests` |
+| Registry is case-insensitive and fails closed; the resolver rejects unknown/disabled gateways and never falls back between gateways | Holds | VERIFIED BY SOURCE; `ModelGatewayResolverTests` |
+| `ModelRoute` carries no secrets (credential *reference* name only) | Holds | VERIFIED BY SOURCE |
+| Runtimes consume gateway routing through the Phase I boundary | **Partly.** OpenHands resolves the route through `ModelGatewayResolver`/`GetTransportInfo()`. Hermes did **not**: `HermesAgentExecutor` built `--provider` from `HermesOptions.Provider` and ignored `AgentExecutionRequest.Gateway`, so a route to another gateway ran silently on the configured provider. Fixed in Phase J (J9). | VERIFIED BY SOURCE |
+| Gateway calls happen through `IModelGateway.ExecuteAsync` | **No.** `ExecuteAsync` has no production caller. Real model traffic goes through the runtimes (Hermes CLI, OpenHands/litellm inside their containers). `ExecuteAsync` is used only by tests and the live gateway probe. | VERIFIED BY SOURCE (grep of all call sites) |
+
+## J1 — Baseline
+
+- Commit `ba2ecda84bf71284e1c791d64982f49f1f873289`, branch `main` (2 commits ahead of `origin/main`).
+- Working tree before Phase J, all preserved: `docs/execution-adapter-migration.md` modified (the earlier Phase J draft, since superseded by this section) and `apps/tests/AI.Factory.Application.Tests/Gateway/GatewayFailurePropagationTests.cs` untracked (left unchanged; its 40 tests still pass).
+- `dotnet build apps/AI.Factory.slnx`: 0 warnings, 0 errors.
+- `dotnet test apps/AI.Factory.slnx`: **1651 passed, 0 failed, 0 skipped** (Api 318, Application 1192 including the 40 untracked draft tests, Worker 141). The Phase I figure of 1611 is out of date.
+
+## J2 — Phase I Evidence Audit: OpenRouter 402 vs "Live AgentRun VERIFIED"
+
+The Phase I report lists "Full lifecycle: Create → WorkItem → Execution Adapter → ModelRoute → Gateway → Runtime → Acceptance — `VERIFIED LIVE`".
+
+The test behind that claim (`ModelGatewayLiveTests`, then named `LiveAgentRun_ExecutesThroughModelGatewayBoundary`) registers an in-test `FakeExecutionAdapter` that returns `Succeeded` with `"fake output"`. It makes no gateway call and no model call, and it runs no Acceptance. What it actually verified is routing: Execution Profile → ModelRoute → dispatcher → selected adapter.
+
+- Resolution: **E. evidence inconsistency**, produced by **B. a synthetic, injected success path**. It was not "after a gateway failure"; the fake adapter is independent of the 402.
+- The 402 (OpenRouter) and the 401 (OmniRoute) are real gateway invocations (VERIFIED LIVE, and re-verified in Phase J). They are not model generation.
+- The test has been renamed to `DisposableAgentRun_RoutesProfileAndModelRoute_ToASyntheticAdapter_NoModelCall`, its output is relabelled `[SYNTHETIC ADAPTER — NO MODEL CALL]`, and its assertions are unchanged. Real disposable AgentRuns now live in `GatewayLiveAgentRunTests` (J16).
+
+```text
+Did a real AgentRun perform successful model generation?
+Phase I evidence : NO — NOT VERIFIED
+Phase J evidence : BLOCKED — EXTERNAL GATEWAY
+```
+
+## J3 — Gateway Failure Propagation
+
+Actual production flow. The gateway call happens inside the runtime:
+
+```text
+Runtime (Hermes CLI / OpenHands+litellm) ── HTTP ──> OpenRouter | OmniRoute
+    │ runtime reports failure (exit code, run report, conversation status)
+    ▼
+HermesAgentExecutor+HermesExecutionAdapter / OpenHandsExecutionAdapter
+    ▼  ExecutionOutcome { Status, FailureCategory, ExitReason, GatewayFailure, Usage }
+AdapterDispatchingAgentRuntime
+    ▼  AgentRunExecutionResult { Success, FailureCategory, ExitReason, GatewayFailure, Provider=gateway }
+AgentOrchestrator
+    ▼  AgentRun { Status, FailureCategory, ErrorMessage, tokens } + StructuredResult.Metadata
+AgentRunWorkItemSync
+    ▼  WorkItem
+```
+
+Normalization:
+
+- Status mapping lives in one place, `ModelGatewayFailureClassifier.FromHttpStatus` (Application). It replaces the two duplicated private `MapStatusCode` methods: 401 Authentication, 402 Billing, 403 Authorization, 404 ModelUnavailable, 408/504 Timeout, 400/422 InvalidRequest, 429 RateLimited, 502/503 GatewayUnavailable, other 5xx ProviderUnavailable.
+- Runtime-reported reason: `FromRuntimeMessage` accepts only an explicit `HTTP nnn` error status (≥ 400, ASCII digits, last one wins). Anything else yields no reason (NOT AVAILABLE). It never guesses.
+- The reason is carried as the provider-neutral name (`"Billing"`, …) in `ExecutionOutcome.GatewayFailure`, `AgentRunExecutionResult.GatewayFailure` and structured-result metadata `GatewayFailure`. `FailureCategory` is deliberately left unchanged (`Agent` for runtime failures). Mapping gateway failures to `Provider`/`Model` would make them eligible for the orchestrator's existing Phase 18.26 model fallback, which Phase J must not introduce.
+- Cancellation stays `Cancelled`. A gateway-stated timeout (HTTP 408/504) and process/deadline timeouts stay `TimedOut`.
+
+## J4 — AgentRun Success Semantics
+
+**Defect found (class E/D, VERIFIED LIVE):** `hermes -z` (0.20.6) exits **0** when the gateway rejects every call. Live run against OpenRouter: exit 0 after about 33 s, with stdout ending `Billing or credits exhausted: HTTP 402: Insufficient credits…`. Hermes source (`hermes_cli/oneshot.py`) returns 0 whenever a non-empty final response exists, and on a failed API call the final response is the error summary. `HermesAgentExecutor` treated exit 0 as success, so the AgentRun persisted as **Succeeded**. Downstream:
+
+- AgentRunWorkItemSync treated it as "execution finished, metadata unavailable" and moved the WorkItem to Testing, then the VerificationGate. The live harness shows that gate *passing* on the untouched workspace (J16).
+- Review (Phase H path): the billing text failed to parse as findings, degraded to a single **Info** finding, and the review **did not block** (VERIFIED BY SOURCE, `AgentCodeReviewer.ParseFindings`).
+
+**Fix, within the existing Hermes executor:** Hermes' own pipeline contract, `-z --usage-file <path>`, writes a JSON run report (`failed`, `input_tokens`, `output_tokens`, `total_tokens`). The executor points it at `/workspace/.aif-hermes-run-{AgentRunId:N}.json`, the only location both mount topologies share with the Worker. After the process exits it reads the report and deletes it. Every exit path deletes it. The report is rejected if it is a symlink or larger than 64 KB. Exit 0 with `failed: true` is a failure: error `Hermes reported a failed run (exit code 0): …` (sanitized, tail kept), `ExitReason=exit:0`, `GatewayFailure` from the stated status.
+
+Verified outcomes (`GatewayFailureAgentRunEndToEndTests`, fake process and fake HTTP only, real orchestrator on SQLite, real AgentRunWorkItemSync):
+
+| Injected | AgentRun | FailureCategory | GatewayFailure | Tokens | Artifacts | WorkItem | Verification / completion called |
+|---|---|---|---|---|---|---|---|
+| OpenRouter 402 via Hermes | Failed | Agent | Billing | null | 0 | Failed | 0 / 0 |
+| 401 / 403 / 429 / 404 / 503 via Hermes | Failed | Agent | Authentication / Authorization / RateLimited / ModelUnavailable / GatewayUnavailable | null | 0 | Failed | 0 / 0 |
+| OmniRoute 401 via Hermes (`--provider openai`) | Failed | Agent | Authentication | null | — | Failed | 0 |
+| OpenRouter failure via OpenHands (conversation `error`) | Failed | Agent | not available | null | 0 | Failed | 0 / 0 |
+| Review on Hermes 402 | — | — | — | — | — | — | review **blocks** (Critical finding) |
+
+No automatic retry (exactly one Hermes launch; see J11). No fallback: the OmniRoute run's docker arguments contain only `--provider openai`. No success metadata is fabricated. The report file is not left in the workspace. The real OpenRouter/OmniRoute gateway classes are registered with an HTTP handler that throws if touched, which proves the adapters never make a direct gateway call.
+
+## J5 — Acceptance Boundary
+
+Existing semantics, now proven end to end with the defect above removed:
+
+- `AgentRun Failed/TimedOut` → `WorkItem Failed`; `Cancelled` → `WorkItem Cancelled`. No VerificationGate, no completion processor, no artifacts.
+- `AgentRun Succeeded` → `WorkItem Testing` → VerificationGate (build/test), even without a usable structured result.
+
+So a gateway failure reaches Acceptance only if it is misreported as `Succeeded`, which was exactly the Hermes exit-0 defect. No lifecycle state was added.
+
+## J6 — Verification vs Execution Success
+
+| Term | What it means here |
+|---|---|
+| Gateway request completed | an HTTP response came back (includes 402/401) |
+| Gateway failure classified | the status was mapped to `ModelGatewayFailureReason` |
+| Runtime process completed | the container exited; exit 0 is not success for Hermes without a clean run report |
+| Execution result mapped | `ExecutionOutcome` → `AgentRun` persisted |
+| Verification executed / passed | build/test ran / passed on the workspace. It passes on an untouched workspace, so on its own it proves nothing about generation (live, J16) |
+| Model generation succeeded | a completion was produced (a Succeeded AgentRun with measured usage) — **not observed in Phase J** |
+
+## J7 — Preflight
+
+- `ModelRoutingPreflight` (production: `Enabled`, `FailStartupOnUnservableModel`) checks each configured model against the gateway's public `GET /models` catalog. The catalog call carries no API key. "Verified" therefore means **MODEL AVAILABLE (listed)**. It does not mean AUTHENTICATED, and it never means MODEL EXECUTED. A provider outage is reported as unreachable, not as an invalid model. It never executes a task, creates an AgentRun, starts a runtime, retries, or switches model/gateway (VERIFIED BY SOURCE).
+- New in Phase J: `ModelGatewayOptions.Validate(ExecutionOptions)` (Api and Worker startup). Every execution profile that names a gateway must name a **configured, enabled** one, otherwise startup fails. This covers CONFIGURED; it is not a reachability check.
+- `ProductionModelRouteConfigurationTests` checks that both Production `appsettings` files contain only explicit model IDs (no `openrouter/auto*`, no `auto/*`), that every Worker profile names an enabled gateway, and that the Phase G/H mapping is unchanged.
+
+| State | Checked by | When |
+|---|---|---|
+| CONFIGURED / ENABLED | `ModelGatewayOptions.Validate(execution)`, resolver | startup / every run |
+| REACHABLE | preflight catalog fetch (outage is non-fatal) | startup (production) |
+| AUTHENTICATED | not checked by preflight | first real call |
+| MODEL AVAILABLE | preflight catalog listing | startup (production) |
+| MODEL EXECUTED | only a real AgentRun with measured usage | never by preflight |
+
+## J8 — Routing Observability
+
+Per AgentRun, using existing storage only:
+
+| Field | Where |
+|---|---|
+| ProjectId, WorkItemId, AgentRunId, CorrelationId, Attempt | AgentRun columns (Attempt also in metadata) |
+| Execution adapter / runtime | metadata `ExecutionAdapter` |
+| Gateway | metadata `Gateway` (new: the route's gateway key as the adapter received it) |
+| Model | AgentRun `Model`; metadata `SelectedModel`, `PrimaryModel` |
+| Model-router provider id | AgentRun `Provider`; metadata `Provider` (not the gateway) |
+| Duration | AgentRun `StartedAt`/`CompletedAt`; logs `DurationMs` |
+| Terminal outcome, failure category, error | AgentRun `Status`, `FailureCategory`, `ErrorMessage` (sanitized) |
+| Exit reason | metadata `ExitReason` |
+| Gateway failure reason | metadata `GatewayFailure` (new; only when stated by the runtime) |
+| Tokens | AgentRun `PromptTokens`/`CompletionTokens`/`TotalTokens` |
+
+Containers are correlated to their AgentRun by name and label: `ai-factory-agent-{id}`, `agent-run-id`. No new table, telemetry store or endpoint.
+
+## J9 — Explicit Routing / No Fallback
+
+- Hermes fix (fail closed): `HermesAgentExecutor` resolves the routed gateway through `ModelGatewayResolver`. An unknown or disabled gateway is refused without launching Hermes. So is a gateway whose CLI provider differs from `HermesOptions.Provider` (e.g. OmniRoute → `openai` while Hermes is configured for `openrouter`). If `HermesOptions.Provider` is empty the route cannot be confirmed; a warning `HermesGatewayRouteUnverified` is logged and the run proceeds, as before.
+- There is no gateway-to-gateway fallback anywhere in the Factory. The only model fallback is the pre-existing, explicit Phase 18.26 policy in `AgentOrchestrator`: the next configured candidate, and only for `Provider`/`Model`/`Infrastructure` categories. Production configures one candidate per category, and runtime gateway failures are `Agent`, so it cannot fire for them.
+- Base `appsettings.json` (Development) still routes every category to `auto/coding:free`. This predates Phase I (class N) and is overridden in Production. Phase J does not change model IDs.
+
+## J10 — Usage and Request IDs
+
+- Gateway level: `ModelGatewayUsage` from the response body; `RequestId` from the body `id` (success, or 2xx-with-error) or the `x-request-id` header (failure).
+- Hermes: usage now comes from its run report, positive values only (a 402 run reports 0, so NOT MEASURED). Previously it was always null.
+- OpenHands: an unreported prompt/completion count was zero-filled. It now stays null, and the total is derived only when both parts are known.
+- Live 402/401: usage NOT MEASURED; no `x-request-id` header was returned; the runtimes expose no upstream request ID. AgentRun ↔ gateway request correlation is therefore **NOT AVAILABLE** beyond AgentRunId/CorrelationId/container labels.
+- Benchmark harness defect fixed (class L): it read tokens from structured-result metadata keys the orchestrator never writes, so harness token figures were always null. It now reads the AgentRun columns.
+
+## J11 — Retry
+
+- There is a single Factory retry owner: `ResilienceAgentExecutorDecorator`. It retries only transient **launch** failures. New guard in `AgentExecutionFailureClassifier`: a process that ran and exited 0 is never a launch failure, so a runtime-reported gateway failure is never retried, even when its text contains a transient marker such as "connection refused". Regression tests cover 402, 401, 403, and a 503 with "connection refused".
+- Gateways make one HTTP request per `ExecuteAsync` (draft tests `OpenRouter/OmniRoute_SingleRequestPerCall_NoHiddenRetry`). The resolver and adapters do not retry.
+- Runtime-internal retries are outside the Factory. Hermes retries transient API errors internally (`max_retries`) and treats 402/401 as non-retryable (VERIFIED BY SOURCE). Hermes also has its own `fallback_providers` feature; the Factory does not configure it, and it is not active with a fresh data volume (VERIFIED LIVE). The persisted production data volume is NOT VERIFIED.
+
+## J12 — Timeout / Cancellation
+
+There is still one semantic owner: `AgentRun.ExecutionDeadline`. The Hermes process timeout is the smaller of the remaining deadline and `HermesOptions.TimeoutSeconds`, and OpenHands polls until the deadline. Cancellation propagates unchanged; the existing adapter tests pass. A Hermes-reported failure is `TimedOut` only when the gateway itself stated 408/504 (not because the text contains "timeout"). `ModelGateway:Gateways:*:TimeoutSeconds` is bound but applied nowhere (dead configuration, left unchanged, not wired, to avoid a second timeout). Direct `ExecuteAsync` calls use the HttpClient default and the caller's token.
+
+## J13 — Hermes / OpenHands / Review Regression
+
+- Hermes: route propagation now enforced (J9). Result mapping is unchanged except for the exit-0 failure. Timeout and cancellation are unchanged. The exact docker command test gains only `--usage-file …`. All Hermes tests pass.
+- OpenHands: the route goes through `ModelGatewayResolver` (`openrouter/{model}`, gateway base URL), with no direct gateway HTTP. Only the usage zero-fill changed. All OpenHands tests pass.
+- Review (Phase H): unchanged code and semantics. `AgentCodeReviewer` → `IAgentExecutionDispatcher` → Review→Hermes profile. The golden-equivalence, outcome-matrix and profile-independence tests pass; the golden test ignores the new `Gateway`/`GatewayFailure` metadata the same way it ignores Phase C's `ExecutionAdapter`/`ExitReason`. Behaviour change inherited from J4: a gateway-failed review now blocks instead of passing.
+
+## J14 — OpenRouter Live (this environment, `OPENROUTER_API_KEY` = PRESENT)
+
+| Path | Result | Duration | Usage | Request ID |
+|---|---|---|---|---|
+| `OpenRouterGateway` direct (`ModelGatewayLiveTests`) | `VERIFIED LIVE — GATEWAY BILLING BLOCK` (HTTP 402, Billing) | 378 ms | NOT MEASURED | none returned |
+| Hermes container, `-z`, `--provider openrouter` | HTTP 402 reported, exit 0 (the defect) | ≈33 s incl. container start | — | — |
+| Disposable AgentRun via Hermes (after fix) | AgentRun Failed, `GatewayFailure=Billing`, WorkItem Failed | 18.5 s | NOT MEASURED | NOT AVAILABLE |
+| Disposable AgentRun via OpenHands | AgentRun Failed (`error state`), WorkItem Failed | 20.0 s | NOT MEASURED | NOT AVAILABLE |
+
+Model `deepseek/deepseek-v4-flash-0731` (explicit). Cleanup: containers removed (verified by the harness), temp dirs deleted.
+
+## J15 — OmniRoute Live
+
+The local instance at `127.0.0.1:20128` is reachable. `OmniRouteGateway` direct → HTTP 401 `No active credentials for provider: openai.` → `Authentication`, 2065 ms, usage NOT MEASURED. Model `openai/qwen2.5-coder:7b`. No OpenRouter fallback. OmniRoute is disabled in configuration, so no AgentRun was routed through it live; the OmniRoute→Hermes path is covered deterministically (J4). The Phase I 401 remains historical evidence and reproduces.
+
+## J16 — Full AgentRun (live, Production Worker composition, throwaway DB and workspace)
+
+| Stage | Status |
+|---|---|
+| Execution Profile | VERIFIED |
+| ModelRoute (explicit model) | VERIFIED |
+| Gateway Resolver | VERIFIED (Hermes route check; OpenHands transport) |
+| Gateway (real OpenRouter) | VERIFIED — reached, HTTP 402 |
+| Runtime (real Hermes / OpenHands containers) | VERIFIED — ran, reported failure |
+| ExecutionOutcome | VERIFIED — Failed |
+| AgentRun | VERIFIED — Failed, no artifacts, no tokens |
+| Verification (Factory lifecycle) | VERIFIED — not run (WorkItem Failed). The harness's own independent gate call "Passed" on the untouched workspace |
+| Acceptance | VERIFIED — not reached |
+| Model generation | NOT VERIFIED — Case B (gateway invoked, external billing blocked generation) |
+
+Run with `AI_FACTORY_LIVE_GATEWAY_AGENTRUN=true dotnet test apps/tests/AI.Factory.Worker.Tests --filter GatewayLiveAgentRunTests`.
+
+## J17 — Security
+
+- Gateway error bodies and network messages are sanitized (`SensitiveDataSanitizer`: bearer tokens, `api_key=`, `sk-…`, paths) and bounded to 500 characters. Hermes-reported failure text and the Hermes output log tail are sanitized too. Tests prove a `sk-or-v1-…` value in an upstream body never reaches `ErrorMessage`, `StructuredResult` or `ModelGatewayFailure.Message`.
+- API keys are resolved backend-side through `ISecretProvider` and injected into containers. They are never logged: `SystemProcessRunner` does not log arguments, and no log line carries a key. `ModelRoute`, `ModelGatewayTransportInfo`, AgentRun and the Review result carry secret *names* only. Test fixtures use obvious fake values. In this report the key is shown as PRESENT.
+- Pre-existing (class N, unchanged): the provider key reaches the container as a `docker run -e NAME=VALUE` argument, which is visible in the host process list while the container starts.
+
+## J18 — API / Database / Flutter
+
+- API: no endpoint, DTO or contract change. The existing open `structuredResult.metadata` map now also carries `Gateway` and `GatewayFailure` (provider-neutral names; no request IDs, no credentials), just as it already carries `ExecutionAdapter`/`ExitReason`.
+- Database: no schema change, no migration, no new table.
+- Flutter: no change.
+
+## J19 — Tests
+
+| | Api | Application | Worker | Total |
+|---|---|---|---|---|
+| Baseline | 318 | 1192 | 141 | **1651** passed, 0 failed |
+| Phase J full run 1 | 318 | 1241 | 145 + 1 failed | 1704 passed, 1 failed (flaky, below) |
+| Phase J full run 2 | 318 | 1246 | 146 | **1710** passed, 0 failed, 0 skipped |
+| Phase J full run 3 | 318 | 1246 | 146 | **1710** passed, 0 failed, 0 skipped |
+
+Run 1 predates the review fixes (+5 Application tests since). New or changed: `GatewayFailureAgentRunEndToEndTests` (15), `GatewayOperationalReadinessTests` (35), a resilience no-retry theory (4), `ProductionModelRouteConfigurationTests` (3), `GatewayLiveAgentRunTests` (2, opt-in; they return early unless enabled), `HermesExecutionAdapterTests.DockerCommand…` (`--usage-file` added), and the golden test (Phase J metadata ignored).
+
+Pre-existing flaky test (class L, non-blocking): `MultiWorkerRecoveryAcceptanceTests.TwoWorkers_…` fails intermittently under full-suite load (`totalRunsRecovered` 0 ≠ 1) and passes in isolation (3/3) and in full run 2. Worker B's startup recovery is started fire-and-forget and can recover the seeded stale run first. It is not touched by Phase J.
+
+## J20 — Failure Classification
+
+| # | Finding | Class | Blocking | Action |
+|---|---|---|---|---|
+| 1 | Hermes exit 0 on gateway failure → AgentRun Succeeded; Review passes | E / D | yes (fixed) | run report (`--usage-file`) |
+| 2 | Hermes ignored the routed gateway (silent provider substitution) | D | yes (fixed) | fail-closed route check |
+| 3 | Phase I "Full AgentRun VERIFIED LIVE" was a synthetic adapter | L (evidence) | no | test renamed, docs corrected |
+| 4 | Raw, unbounded upstream error bodies in `ModelGatewayFailure.Message` | B / C | no (fixed) | sanitize + bound |
+| 5 | 2xx without a completion / with an error object → `Success=true`; non-JSON 2xx threw | B / C | no (fixed; no production caller) | fail as `ModelGatewayResponse.Failed` |
+| 6 | OpenHands zero-filled unknown token counts | D | no (fixed) | keep null |
+| 7 | Harness read tokens from metadata that is never written | L | no (fixed) | read AgentRun columns |
+| 8 | `GatewayEntryOptions.TimeoutSeconds` unused | F | no | documented |
+| 9 | OpenRouter account has no credits | I | external | add credits |
+| 10 | OmniRoute has no provider credentials | H | external | configure OmniRoute |
+| 11 | Dev `appsettings.json` routes to `auto/coding:free` | N | no | owner decision |
+| 12 | `MultiWorkerRecoveryAcceptanceTests` race | L / N | no | separate task |
+
+## J21 — Evidence Classification
+
+- VERIFIED BY SOURCE: single gateway abstraction; `ExecuteAsync` has no production caller; the Hermes `--provider` source; Hermes oneshot exit-code semantics; unauthenticated preflight catalog; `AgentCodeReviewer` degrade-to-Info path; dead gateway timeout config; no key logging.
+- VERIFIED BY TEST EXECUTION: every J4 row; no retry on exit-0 failure; startup profile→gateway validation; sanitization; 2xx-without-completion handling; usage null rules; Phase H golden/matrix; architecture and composition-root tests.
+- VERIFIED LIVE: OpenRouter 402 (direct, Hermes, two AgentRuns); OmniRoute 401 (direct); Hermes exit 0 on 402; the post-fix AgentRuns fail truthfully; container cleanup.
+- INFERENCE: OpenHands/litellm retry internally before reporting `error`; the persisted production Hermes data volume configures no fallback provider.
+- NOT MEASURED: any successful model generation, token usage, upstream request IDs, cost.
+
+## J22 — Known Limitations (verified)
+
+1. Real model generation is blocked externally (OpenRouter 402, OmniRoute 401).
+2. OpenHands does not expose the upstream HTTP status, so `GatewayFailure` is NOT AVAILABLE for OpenHands runs. The run still fails truthfully.
+3. The Hermes run report is best-effort. If it is absent, exit 0 keeps its previous meaning (a warning is logged). The pinned image produced it in every live run.
+4. With `HermesOptions.Provider` empty (the Development config), the Hermes gateway route cannot be confirmed; a warning is logged.
+5. No AgentRun ↔ upstream request-ID correlation, because the runtimes do not expose one.
+
+## Deferred
+
+- public gateway telemetry API
+- UI gateway diagnostics
+- automatic routing
+- gateway failover
+- model scoring
+- latency-based routing
+- provider ranking
+- new runtimes
+- ACP
+- CrewAI
+
+# Phase K — Model Gateway Boundary Completion
+
+## Result
+
+`LIMITED — EXTERNAL GATEWAY CONSTRAINT`
+
+The gateway boundary is now one truthful architecture: **A — the gateway is a transport/configuration
+abstraction; the runtimes send every model request.** `IModelGateway.ExecuteAsync` (no production
+caller) and the unused Phase 18.1.1 Factory-side completion stack (`IAiModelRouter` / `IModelProvider`,
+a second model transport with its own status taxonomy and retry wrapper) were removed. Routing is now
+deterministic and fail-closed for both runtimes; Hermes can no longer be pointed at a different
+provider, credential or endpoint than the gateway its run was routed to. Real model generation is
+still blocked externally: OpenRouter HTTP 402 (no credits), OmniRoute HTTP 401 (no provider credentials).
+
+## K0 — Architecture Audit (production call graph)
+
+Verified by source (grep of every `IModelGateway`/`ExecuteAsync(`/gateway/`GetTransportInfo`/
+`FormatModelIdentifier` reference) and by the Phase K live runs.
+
+```text
+Implementation / Repair (AgentTypeProfiles -> "OpenHands" profile, Gateway OpenRouter)
+  AgentRunWorker -> AgentOrchestrator -> AdapterDispatchingAgentRuntime -> ExecutionProfileResolver
+  -> OpenHandsExecutionAdapter -> ModelGatewayResolver.Resolve(ModelRoute)
+  -> OpenRouterGateway.GetTransportInfo() + FormatModelIdentifier()      (configuration only)
+  -> POST /api/conversations {llm: model "openrouter/<id>", base_url, api_key}  (Agent Server, 127.0.0.1)
+  -> OpenHands Agent Server container -> LiteLLM -> HTTPS -> OpenRouter
+
+Review (AgentCodeReviewer -> IAgentExecutionDispatcher; AgentTypeProfiles Review -> "Hermes")
+Planner AgentRuns (no AgentTypeProfiles entry -> DefaultProfile "Hermes")
+Every other AgentRun (DefaultProfile "Hermes")
+  -> AdapterDispatchingAgentRuntime -> HermesExecutionAdapter -> ResilienceAgentExecutorDecorator
+  -> HermesAgentExecutor.CheckGatewayRoute (ModelGatewayResolver, fail closed)
+  -> docker run hermes -z ... -m <id> --provider openrouter -e OPENROUTER_API_KEY
+  -> Hermes CLI in its container -> HTTPS -> OpenRouter
+
+ModelTaskPlanner (ITaskPlanner): registered in both hosts, no production consumer (no type injects
+  ITaskPlanner). If used it calls IAgentExecutor (Hermes) directly with no route; Phase K checks such
+  calls against ModelGateway:DefaultGateway.
+
+ModelRoutingPreflight: GET {AiProviders BaseUrl}/models (unauthenticated catalog) — not a model request.
+```
+
+**Who actually sends the model HTTP request?**
+
+| Path | Sender |
+|---|---|
+| Hermes (Review, Planner AgentRuns, default) | the Hermes CLI inside the Hermes container |
+| OpenHands (Implementation, Repair) | LiteLLM inside the OpenHands Agent Server container |
+| Review | Hermes CLI (Review profile -> Hermes) |
+| Planner | Hermes CLI (DefaultProfile Hermes) |
+| Implementation | LiteLLM in OpenHands |
+| Repair | LiteLLM in OpenHands |
+| AI Factory process | **nothing** — no production code sends a model completion (enforced by `GatewayBoundaryTests`: no `chat/completions` literal anywhere in `apps/src`) |
+
+## Gateway Responsibility Decision
+
+**A — Transport/Configuration.** Evidence: both production runtimes own their tool loop, streaming,
+conversation lifecycle and model protocol inside their containers; routing a request through the
+Factory would need a proxy, which nothing requires. The gateway owns: key, endpoint (`BaseUrl`),
+credential reference (secret NAME), the env var the provider's clients read, the Hermes CLI provider
+name, and the LiteLLM model route. The runtime owns: the model request, retries inside its loop, tool
+calls, usage reporting. The Factory owns: resolution (fail closed), failure interpretation
+(`ModelGatewayFailureClassifier`), lifecycle. No proxy was built.
+
+## `IModelGateway.ExecuteAsync`
+
+- Production callers: **0**. Runtime callers: **0**. Test callers before Phase K: gateway unit tests,
+  `GatewayFailurePropagationTests` (prior Phase J draft), Phase I direct live tests.
+- Decision: **REMOVE / REPLACE**. `IModelGateway` is now `GatewayKey`, `FormatModelIdentifier`,
+  `GetTransportInfo`. Deleted with it: `ModelGatewayRequest`, `ModelGatewayResponse`,
+  `ModelGatewayUsage`, `ModelGatewayCapabilities`, the `ModelGatewayFailure` record, the gateways'
+  HttpClient/ISecretProvider dependencies and named HttpClients, and the unused failure reasons
+  `TransportFailure`, `Cancellation`, `UnsupportedFeature`. `Capabilities` had no production reader
+  (OpenRouter claimed ToolCalling/Streaming/StructuredOutput — NOT VERIFIED), so it was removed rather
+  than kept as an unverified claim.
+- Also removed (same reason, pre-existing): `IAiModelRouter`, `AiModelRouter`, `IModelProvider`,
+  `IAiModelProviderRegistry`, `AiModelProviderRegistry`, `AiRoutingOptions`,
+  `OpenAiCompatibleModelProvider`, `FakeModelProvider`, `ResilienceModelProviderDecorator` (registered,
+  never injected; its own HTTP status map conflicted with the gateway taxonomy, e.g. 404 ->
+  InvalidRequest), the `AiRouting` config section, and dead `TimeoutSeconds`/`Priority`/
+  `EnvironmentVariableName` config keys.
+- Hidden consumers: none — the solution builds with 0 warnings/0 errors and the full suite passes.
+
+## Hermes
+
+Route: profile -> `ModelRoute.GatewayKey` (or, unrouted, `ModelGateway:DefaultGateway`) ->
+`ModelGatewayResolver` -> `HermesAgentExecutor.CheckGatewayRoute`, which refuses before any container
+starts when:
+
+| Condition | Result |
+|---|---|
+| gateway unknown / disabled | `Model gateway route rejected: …` |
+| `Hermes:Provider` empty (was: "unverified", proceed) | refused — Hermes would use its persisted default |
+| `Hermes:Provider` ≠ gateway `CliProviderName` | refused |
+| `Hermes:ProviderApiKeySecretName` ≠ gateway `ApiKeySecretName` | refused |
+| `Hermes:ProviderApiKeyEnvironmentVariable` ≠ gateway `EnvironmentVariableName` | refused |
+| `{PROVIDER}_BASE_URL` override ≠ gateway `BaseUrl` | refused |
+| no override and the gateway endpoint is not Hermes' verified built-in endpoint for that provider | refused (override required; only `openrouter` -> `https://openrouter.ai/api/v1` is verified) |
+
+Production (`Provider` openrouter, secret/env `OPENROUTER_API_KEY`, no override, gateway OpenRouter at
+the default URL) passes. Verified by test (`GatewayBoundaryTests`, `GatewayFailureAgentRunEndToEndTests`)
+and live. Dev `appsettings.json` has no `Hermes:Provider`, so dev Hermes runs are now refused with an
+explicit message instead of running on an unknown provider.
+
+## OpenHands
+
+Route: profile -> `ModelRoute` -> `ModelGatewayResolver.Resolve` (required; no resolver = fail closed) ->
+endpoint `transport.BaseUrl`, model `FormatModelIdentifier(modelId)`, key via
+`ISecretProvider(transport.ApiKeySecretName)`. Removed: the hardcoded `openrouter/` fallback branch,
+`OpenHandsOptions.ProviderBaseUrl/ProviderApiKeySecretName/ProviderApiKeyEnvironmentVariable`, and
+the raw `Environment.GetEnvironmentVariable` fallback. `OpenHandsOptions.DefaultModel` is used only
+when the route carries no model id (unchanged semantics, now also for whitespace ids).
+
+## Model Identifier
+
+| Gateway | Factory id | Hermes `-m` | OpenHands/LiteLLM `model` | Upstream receives |
+|---|---|---|---|---|
+| OpenRouter | `deepseek/deepseek-v4-flash-0731` | unchanged | `openrouter/deepseek/deepseek-v4-flash-0731` | `deepseek/deepseek-v4-flash-0731` |
+| OpenRouter | `openrouter/x` | unchanged | `openrouter/x` (not double-prefixed) | `x` — ids in OpenRouter's own `openrouter/` namespace (auto-routers, forbidden) are not addressable via OpenHands |
+| OmniRoute | `openai/qwen2.5-coder:7b` | unchanged | `openai/openai/qwen2.5-coder:7b` | `openai/qwen2.5-coder:7b` |
+
+OmniRoute was fixed in Phase K: it used to strip `openrouter/` and pass the id unprefixed, so LiteLLM
+consumed the id's own namespace as its provider route (`openai/qwen…` reached OmniRoute as `qwen…`).
+LiteLLM's documented OpenAI-compatible route is `openai/<model>` with `api_base`. No auto ids, no
+aliases, no rewriting; Production ids are explicit (`ProductionModelRouteConfigurationTests`).
+
+## Credential Ownership
+
+| | Hermes | OpenHands |
+|---|---|---|
+| Resolved | `HermesAgentExecutor` via `ISecretProvider` (secret name = gateway's, enforced) | adapter via `ISecretProvider(transport.ApiKeySecretName)` |
+| Injected | `docker run -e OPENROUTER_API_KEY` (name only); value in the docker CLI's controlled environment | HTTP JSON body to the Agent Server on 127.0.0.1 (session-key protected) |
+| Process arguments | **MITIGATED** (was Phase J's open item): value no longer in argv — live probe, 36 sightings of the real `docker run` command line, key by name 36, key value 0 | provider key never in argv; the per-run `SESSION_API_KEY` moved from argv to the CLI environment too, and the CLI no longer inherits the Worker environment |
+| Environment | docker CLI process env (same user/root only); container env (readable by the agent and by `docker inspect`) — inherent to env injection, ACCEPTED | Agent Server memory |
+| Persisted | not by the Factory | **OPEN SECURITY ISSUE (low):** the Agent Server writes `conversations/<id>/base_state.json` into the mounted Project workspace with the `api_key` Fernet-encrypted (plaintext not found — live probe with a fake key); conversation events land there too. Fix deferred to a follow-up task (the persistence setting could not be verified from the bundled image). |
+| Logged | no | no — adapter now logs and persists only the sanitized, bounded error (an Agent Server error body can echo the request) |
+
+## Error Taxonomy
+
+One mapping, `ModelGatewayFailureClassifier.FromHttpStatus`: Authentication 401, Billing 402,
+Authorization 403, ModelUnavailable 404, RateLimited 429, Timeout 408/504, InvalidRequest 400/422,
+GatewayUnavailable 502/503, ProviderUnavailable ≥500, Unknown. Cancellation is
+`ExecutionOutcomeStatus.Cancelled`, not a gateway reason. Propagation: Hermes `HTTP nnn` text ->
+`ExecutionOutcome.GatewayFailure` -> AgentRun metadata `GatewayFailure`; `FailureCategory` stays
+`Agent` (keeps gateway failures out of the model-fallback policy). OpenHands: the repository's client
+reads only `execution_status` and `stats`, so `GatewayFailure` = NOT AVAILABLE (never guessed).
+Review on a gateway failure -> Critical blocking finding. WorkItem -> Failed, no verification.
+
+## Preflight
+
+| State | Proven by |
+|---|---|
+| Configured | enabled `AiProviders` entry with an OpenAI-compatible catalog; Phase K: its BaseUrl must equal the same-named gateway's (startup validation) |
+| Reachable | catalog answered |
+| CatalogAvailable | model id listed (`VerifiedModel`) |
+| Authenticated | NOT PROVEN — the catalog call is unauthenticated |
+| Executable | NOT PROVEN — no model request is made |
+
+`ModelGateway:DefaultGateway` must now name a configured, enabled gateway (startup validation).
+
+## Usage
+
+Hermes: positive counts from its run report, else null. OpenHands: reported counts only, total only
+when both parts exist. Failed-before-generation runs: NOT MEASURED (all Phase K live runs). No
+estimation, no cost.
+
+## Request Correlation
+
+NOT AVAILABLE: neither runtime exposes an upstream request id; the gateway types no longer make
+requests, so they have none either.
+
+## Live OpenRouter
+
+Key PRESENT. Real disposable AgentRuns, Production Worker composition, model
+`deepseek/deepseek-v4-flash-0731`, throwaway DB/workspace:
+
+| Run | Result | Duration | Usage | Request id | Cleanup |
+|---|---|---|---|---|---|
+| Hermes | Failed, `exit:0`, `GatewayFailure=Billing` (HTTP 402 "Insufficient credits") | 18.6 s / 16.5 s (2 runs) | NOT MEASURED | NOT AVAILABLE | 0 containers before/after |
+| OpenHands | Failed, `error`, GatewayFailure NOT AVAILABLE | 11.2 s / 12.2 s (2 runs) | NOT MEASURED | NOT AVAILABLE | 0 before/after |
+
+`VERIFIED LIVE — EXTERNAL BILLING BLOCK`. The 402 (not 401) also proves the key reached the
+container through the name-only `-e` injection.
+
+## Live OmniRoute
+
+Local instance `127.0.0.1:20128`. Real disposable AgentRun routed explicitly to the OmniRoute gateway
+(OpenHands, endpoint `http://host.docker.internal:20128/v1`, model `openai/qwen2.5-coder:7b`): Failed,
+`error`, GatewayFailure NOT AVAILABLE, 13.9 s / 12.3 s, usage NOT MEASURED, 0 containers left. Direct
+probe of its chat endpoint with `OMNIROUTE_API_KEY` (PRESENT): HTTP 401 "No active credentials for
+provider: openai." in 96 ms. `VERIFIED LIVE — EXTERNAL AUTHENTICATION BLOCK`.
+
+## Live AgentRun
+
+| Stage | Status |
+|---|---|
+| Execution Profile, Adapter, ModelRoute, Gateway resolution | VERIFIED |
+| Runtime (real Hermes / OpenHands containers) | VERIFIED |
+| Gateway path (real OpenRouter / OmniRoute reached) | VERIFIED |
+| Real model generation | **NOT VERIFIED** — 402 / 401 |
+| ExecutionOutcome, AgentRun | VERIFIED — Failed, truthfully |
+| Verification, Acceptance | VERIFIED — correctly not run (WorkItem Failed) |
+
+`Real Model Generation = NOT VERIFIED`.
+
+## Acceptance
+
+Not reached by any live run (correct). The harness's own independent verify "Passed" on the untouched
+workspace each time — Acceptance success ≠ generation.
+
+## Cleanup
+
+Factory-owned containers 0 before and 0 after every live run; the OpenHands probe container was
+started with `--rm` and stopped. No global Docker cleanup, no foreign containers touched.
+
+## Security
+
+Secrets backend-only; `ModelRoute`/AgentRun carry names only; gateways hold no secret or HttpClient
+(test-enforced); no Authorization header logged; Hermes key out of argv (live-verified); OpenHands
+errors sanitized; `SensitiveDataSanitizer` now also redacts JSON-quoted values (`"api_key":"…"`,
+quoted values with spaces). No new network exposure, Docker socket use or Agent Server exposure.
+Open: OpenHands workspace persistence (above).
+
+## Tests
+
+- Build: 0 warnings, 0 errors.
+- Full suite, run twice after the final change: **1650 passed, 0 failed, 0 skipped** each
+  (Api 314, Application 1190, Worker 146). Phase J end: 1710 (318/1246/146); the difference is the
+  removed dead-stack and `ExecuteAsync` tests, net of the new ones.
+- New/changed: `GatewayBoundaryTests` (Hermes route authority incl. unrouted calls, slim contract,
+  layering, source scan), OpenRouter/OmniRoute descriptor tests, readiness tests (default gateway,
+  catalog endpoint, JSON redaction), OpenHands adapter routing/fail-closed/redaction tests, Hermes argv
+  test, `WorkerCompositionRootTests.ProductionRuntimes_AreWiredToTheModelGatewayResolver`, live
+  OmniRoute case.
+- Live (opt-in): `GatewayLiveAgentRunTests` 3/3 passed (Hermes alone first, then all three).
+- `dotnet format whitespace` on the changed files: 9 findings, all on pre-existing lines.
+
+## API
+
+No contract change. `structuredResult.metadata` keys unchanged since Phase J. The diagnostics metric
+`AiRoutingFallbacks` stays in the snapshot (contract) but has no producer now.
+
+## Database
+
+No schema change, no migration.
+
+## Flutter
+
+No change.
+
+## Known Limitations
+
+1. Real generation blocked externally (402 / 401).
+2. OpenHands exposes no upstream HTTP status -> GatewayFailure NOT AVAILABLE.
+3. OpenHands Agent Server persists conversation state (encrypted key, events) into the Project
+   workspace (`conversations/`).
+4. The Hermes provider key is visible in the container environment (`docker inspect`, the agent itself).
+5. Hermes routes only to gateways whose endpoint it is known to reach: OpenRouter by default; others
+   need an explicit `{PROVIDER}_BASE_URL`.
+6. Missing Hermes run report: exit 0 still counts as success (Phase J, unchanged).
+7. `ModelTaskPlanner` and the `AiRoutingFallbacks` metric are registered/exposed without a consumer.
+
+## Deferred
+
+- public gateway telemetry
+- automatic routing
+- gateway failover
+- model scoring
+- provider ranking
+- UI changes
+- additional runtimes
+- ACP/CrewAI
+- moving OpenHands conversation persistence out of the Project workspace
+
+# Phase L — Runtime Integrity, State Isolation and Legacy Path Cleanup
+
+## Result
+
+`LIMITED — EXTERNAL GATEWAY CONSTRAINT`
+
+The Phase K gateway architecture (A — gateway is transport/configuration, the runtime sends the model
+request) is unchanged. Phase L closed the two runtime-integrity gaps Phase K left open and removed the
+last dead model path:
+
+- OpenHands Agent Server state (`conversations/`, `bash_events/`) no longer lands in the Project
+  workspace. It is relocated into the per-run container's writable layer and destroyed with the container.
+- Hermes `exit 0` is no longer success on its own. Success now needs Hermes' own run report saying the
+  run completed; a missing, unreadable or incomplete report is a failed AgentRun.
+- `ModelTaskPlanner` / `ITaskPlanner` (no production consumer, the only non-adapter caller of the raw
+  `IAgentExecutor`) was removed with its options, validator, config section and tests.
+- The producer-less AI-request counters were removed; their snapshot fields stay in
+  `GET /api/operations/metrics` (`RETAINED — CONTRACT COMPATIBILITY`).
+
+Real model generation is still blocked externally (OpenRouter HTTP 402, OmniRoute HTTP 401).
+
+## L0 — Phase K Verification
+
+Verified against the current tree (HEAD `ba2ecda` plus the uncommitted Phase K work), not the Phase K
+report:
+
+- `IModelGateway` has three members (`GatewayKey`, `FormatModelIdentifier`, `GetTransportInfo`); no
+  `ExecuteAsync`; no `chat/completions` anywhere under `apps/src` (test-enforced). VERIFIED BY SOURCE / TEST.
+- Baseline before Phase L changes: build 0 warnings / 0 errors; tests Api 314, Application 1190,
+  Worker 146 = **1650 passed**, 0 failed, 0 skipped. VERIFIED BY TEST EXECUTION.
+- Working tree before Phase L: branch `main`, 62 tracked files changed (Phase K), 6 untracked, 0 staged.
+
+## OpenHands State Ownership
+
+Probed live against the pinned image `ghcr.io/openhands/agent-server:1.49.4-python@sha256:9b215fb9…`
+(fake key, unreachable LLM endpoint, disposable workspace):
+
+| Question | Answer | Evidence |
+|---|---|---|
+| Where is state written | `workspace/conversations/<id>/` and `workspace/bash_events/`, relative to the server's working directory `/` — i.e. inside the `/workspace` bind mount = the Project workspace | VERIFIED LIVE (`persistence_dir=workspace/conversations/<id>`) |
+| Which process | the Agent Server itself (not the agent / LLM: the LLM call never succeeded) | VERIFIED LIVE |
+| When | `conversations/` at server startup, before any conversation; `<id>/` on conversation create; `bash_events/` on the first terminal command | VERIFIED LIVE |
+| Files | `base_state.json` (agent/LLM config incl. the API key **encrypted**), `meta.json`, `events/event-*.json` (prompts, tool history), `owner_lease.json`, lock/marker files | VERIFIED LIVE |
+| Plaintext key in files | not found | VERIFIED LIVE |
+| Recorded as artifacts | yes on a successful run: `FileSystemArtifactRecorder` records every file except `bin/obj/node_modules/.git/.vs` | VERIFIED BY SOURCE |
+| Committable | yes: untracked `conversations/`, `bash_events/` in `git status` | VERIFIED LIVE (baseline probe) |
+| Lifetime / deleter | indefinite; nobody deleted it (the Factory removed only the container) | VERIFIED BY SOURCE |
+| Collisions | per-conversation subdirectories; per-run containers | VERIFIED LIVE |
+| Relocatable | yes: `OH_CONVERSATIONS_PATH` and `OH_BASH_EVENTS_DIR` are honoured by 1.49.4 | VERIFIED LIVE |
+
+The server also runs `git init` in a workspace that is not yet a git repository (observed in a bare
+probe directory). Factory Project workspaces are git working trees, so this has no effect on them;
+`.git` is excluded from artifact recording.
+
+## State Isolation Decision
+
+**Option C — Agent Server internal state outside the Project mount, supported by the pinned runtime.**
+
+`OpenHandsExecutionAdapter.LaunchContainerAsync` adds
+`-e OH_CONVERSATIONS_PATH=/tmp/aif-openhands/conversations` and
+`-e OH_BASH_EVENTS_DIR=/tmp/aif-openhands/bash_events`
+(`OpenHandsExecutionAdapter.RuntimeStateRoot`). `/tmp` is in the container's writable layer: the image
+declares no `VOLUME`s and runs as the non-root `openhands` user (a path under `/` is not writable — the
+first probe with `/aif-runtime` failed at startup with `PermissionError`, which is also how the env var
+was proven to be honoured). No host directory, no volume and no new mount were added: the workspace
+stays the only host path the container sees (test-enforced).
+
+Rejected: A/B (a state volume or host directory adds a second host path to own and clean, for no
+benefit — the state is not needed after the run); D (cleanup of workspace files would mean deleting
+files from a user workspace, and relocation is possible); `.gitignore` (hides, does not isolate).
+
+External-server mode (`OpenHands:BaseUrl` set) is unchanged: that server's storage belongs to its
+operator; the Factory does not launch it and cannot relocate it. No shipped configuration sets it.
+
+## Conversation Retention
+
+**Not required after the AgentRun.** The adapter reads the terminal status, final response and usage
+through the API before cleanup; nothing reads conversation state afterwards and no Factory recovery
+path resumes an OpenHands conversation. Policy: the state lives exactly as long as the run's container.
+
+| Terminal path | State removed by | Evidence |
+|---|---|---|
+| success / failure / timeout / cancellation | `EnsureCleanupAsync` → `docker rm -f` of the run's own container in the adapter's `finally` | VERIFIED BY TEST EXECUTION (each path) + VERIFIED LIVE (failure) |
+| startup failure | same — `containerSpawned` is now set *before* `docker run -d`, so a launch that created the container and then failed (port bind) or was cancelled is removed too (previously left to the orphan sweep) | VERIFIED BY TEST EXECUTION |
+| Worker interruption | `SweepOrphanContainersAsync` on restart removes labelled containers whose AgentRun is terminal, unknown or stale — the state goes with it. Before Phase L the workspace copy survived forever | VERIFIED BY SOURCE |
+
+No new database table, no Factory entity, no retention store.
+
+## Artifact Contamination
+
+`OpenHandsStateIsolationLiveTests` (opt-in, real pinned container through the real adapter, fake key,
+the container's own closed loopback port as the gateway endpoint — no provider contacted): two
+concurrent AgentRuns in two git workspaces. After both: no `conversations/` or `bash_events/`, and
+`FileSystemArtifactRecorder` over each workspace records exactly `README.md` — the project's own file.
+**Passed (16 s).** Mutation check: with the two env vars disabled the test **fails**
+(`conversations/` present), so it discriminates. Artifact semantics ("record every file") unchanged.
+
+## Git Contamination
+
+Same live test: `git status --porcelain --untracked-files=all` empty for both workspaces; the fake key
+is in no working-tree file. The real-key live runs (`GatewayLiveAgentRunTests`, now asserting no
+`conversations*` / `bash_events*` in the changed files) show only `src|tests/bin|obj` (the harness's
+own verification build). VERIFIED LIVE.
+
+## Hermes Success Semantics
+
+What `hermes -z --usage-file` does in 0.20.6 (VERIFIED BY SOURCE, `hermes_cli/oneshot.py`,
+`agent/turn_finalizer.py` inside the pinned image):
+
+- `_write_usage_file` is called on every terminal path of `run_oneshot`: agent exception (then exit 1),
+  `KeyboardInterrupt`/`SystemExit` (then re-raised), and normal completion (then exit 0, 1 or 2). It is
+  best-effort: a failing write is swallowed. Early argument errors exit 2 without a report.
+- The report carries `"failed"` and `"completed"`. `completed` is true only when a final response exists,
+  the run did not fail, and it ended normally (text response or within the iteration budget).
+- Exit 0 is possible with `completed: false`: a partial run (stopped on invalid tool calls) or an
+  exhausted iteration budget that still printed text exits 0 with `failed: false`.
+
+So before Phase L two false-success paths existed: exit 0 + no report, and exit 0 + `completed: false`.
+
+Phase L rule (`HermesAgentExecutor`):
+
+```text
+Succeeded  ⇔  exit 0  ∧  report is a readable JSON object  ∧  failed = false  ∧  completed = true
+```
+
+| Case | Result | Error |
+|---|---|---|
+| exit 0 + `failed:false, completed:true` | Succeeded | — |
+| exit 0 + `failed:true` | Failed | `Hermes reported a failed run (exit code 0): <sanitized summary>` (Phase J, unchanged) |
+| exit 0 + report missing / empty / malformed / not an object / symlink / oversized | Failed | `Hermes execution report unavailable (exit code 0): …success cannot be proven.` |
+| exit 0 + `failed:false`, `completed` false / absent / not JSON `true` | Failed | `Hermes reported an incomplete run (exit code 0): the conversation did not complete.` |
+| exit ≠ 0 (any report) | Failed | stderr or `Process exited with code N.` |
+| timeout / cancellation | TimedOut / Cancelled | unchanged |
+
+FailureCategory = `Agent` (existing taxonomy), no new lifecycle state. Exit-0 failures are never
+retried (`AgentExecutionFailureClassifier`: ExitCode 0 ⇒ not a transient launch failure). The report
+file is always deleted — after the run, and now also **before** the launch, so a stale or pre-placed
+file at that path (the workspace is agent-writable) can never stand in for this launch's report.
+`HermesExecutionAdapter` reads a gateway reason from stdout only for the `Hermes reported a failed run`
+case: on an unproven or incomplete run stdout is the agent's own text, and an "HTTP 429" in it is not
+a gateway failure (found in review, fixed, E2E-tested).
+
+## Missing Report
+
+Decision **C — report absence is an explicit execution failure.** A (impossible) does not hold: the
+write is best-effort and can fail silently. B (another trustworthy signal) does not exist: stdout is
+model text that the agent controls, and exit 0 is exactly what is in question. Live: the report was
+PRESENT in every observed run (Phase J/K/L). Review keeps its Phase H behaviour: a failed dispatch is
+already a blocking "review could not be performed" outcome.
+
+## False-Success Regression
+
+| Scenario | Expected | Test |
+|---|---|---|
+| Hermes HTTP 402 / 401 / 403 / 429 / 404 / 503 (exit 0 + failed report) | Failed, no Acceptance | `GatewayFailureAgentRunEndToEndTests` (Phase J/K) |
+| Hermes exit 0 + missing report | Failed, no Acceptance, not retried | `HermesExitZero_WithoutACompletedRunReport_…` (E2E), `ExecuteAsync_ExitZero_WithoutACompletedRunReport_…` (unit) |
+| Hermes exit 0 + incomplete / malformed / empty report | Failed | same unit theory (8 cases) |
+| Hermes exit 0 + stale pre-placed or oversized report | Failed | `ExecuteAsync_ReportPlacedBeforeTheLaunch_OrOversized_NeverCountsAsSuccess` |
+| Hermes exit non-zero + success report | Failed | `ExecuteAsync_NonZeroExit_WithASuccessfulRunReport_IsStillFailure` |
+| OpenHands terminal error | Failed, no Acceptance | `OpenRouter402_ThroughOpenHands_…`, `ContainerMode_EveryTerminalPath_…(failed)` |
+| Cancellation | Cancelled | Hermes `ExecuteAsync_PropagatesCancellation`, OpenHands `…(cancelled)` |
+| Timeout | TimedOut | Hermes `ExecuteAsync_ReturnsFailure_OnTimeout`, adapter `ProcessTimeout_IsTimedOut…`, OpenHands `…(timedout)` |
+
+## ModelTaskPlanner
+
+Consumer audit (whole repository): `ITaskPlanner` had **0 production consumers** — two DI registrations
+(Api, Worker) and one composition-root test resolving it. `ModelTaskPlanner` was the only Application
+type holding the raw `IAgentExecutor`, i.e. the only model path that bypassed the execution adapters and
+`ModelRoute`. `TaskPlanValidator`, `TaskPlan`, `PlannedTask`, `TaskPlanRequest`,
+`InvalidTaskPlanException`, `TaskPlanningException` and `ModelTaskPlannerOptions` had no other user.
+
+Removed: `ModelTaskPlanner.cs`, `ModelTaskPlannerOptions.cs`, `TaskPlanValidator.cs`, `ITaskPlanner.cs`,
+both registrations, the `TaskPlanner` config section (Api, Worker), the dead `InvalidTaskPlanException`
+case in `ApiExceptionMapper` (nothing can throw it), `ModelTaskPlannerTests` (9) and
+`TaskPlanValidatorTests` (8), the composition-root `ITaskPlanner` case. `TaskComplexity` is kept (used by
+`IModelRouter`). Routing consequence: every Hermes execution now goes through `HermesExecutionAdapter`
+with a `ModelRoute`; `RuntimeBoundaryArchitectureTests` fails if any Application type holds
+`IAgentExecutor` again.
+
+## AiRoutingFallbacks
+
+Classification **B — public API contract field**: `OperationalMetricsSnapshot` is returned as-is by
+`GET /api/operations/metrics`. No Flutter consumer; external monitoring unknown.
+**RETAINED FOR CONTRACT COMPATIBILITY**, together with `AiRequests`, `AiRequestsSucceeded`,
+`AiRequestsFailed`, `AiProviderFailures`, `AiRateLimited`, `AverageAiRequestDurationMs`,
+`TotalAiRequestDurationMs` — always `0` / `null`. Their six `RecordAi*` producers had no caller since
+Phase K and were removed (internal interface, implementation and one test fake).
+`AiRequestFields_AreRetainedInTheMetricsContract_AsUnmeasured` pins the JSON names.
+
+## Dead Configuration
+
+| Key | Classification | Action |
+|---|---|---|
+| `AiRouting` | dead (Phase K) | already removed in Phase K; none left |
+| `AiProviders:*:Priority` / `TimeoutSeconds`, `ModelGateway:*:TimeoutSeconds` / `EnvironmentVariableName` | dead (Phase K) | already removed in Phase K; none left |
+| `OpenHands:Provider*` | dead (Phase K) | already removed; none left |
+| `TaskPlanner` | dead (Phase L) | removed (Api, Worker) |
+| `Hermes:TimeoutSeconds`, `OpenViking:TimeoutSeconds`, `ModelRoutingPreflight:TimeoutSeconds` | active | kept |
+| `Hermes:ProviderApiKeySecretName` / `ProviderApiKeyEnvironmentVariable` | active | kept |
+| top-level `CircuitBreaker` (Api, Worker) | dead, **pre-existing** (no binding; predates Phase K) | not removed — outside Phase L scope, reported |
+
+No new configuration source was added; `RuntimeStateRoot` is a constant, not a setting.
+
+## Security
+
+| Finding | Classification |
+|---|---|
+| OpenHands conversation state (encrypted key, prompts, tool history) in the Project workspace | **RESOLVED** — relocated out of the mount, destroyed with the container (VERIFIED LIVE) |
+| OpenHands state accidentally recorded as artifacts / committed | **RESOLVED** (VERIFIED LIVE) |
+| Encrypted LLM key inside the running container (`/tmp/aif-openhands/…/base_state.json`), readable by the agent | **ACCEPTED** — same trust domain as the Agent Server that holds the key in memory; lifetime = container |
+| Provider key in OpenHands container env | NOT PRESENT (sent in the API body); `SESSION_API_KEY` by name only (Phase K) |
+| Hermes key on the docker command line | NOT PRESENT (Phase K MITIGATED, unchanged) |
+| Secrets in ModelRoute / AgentRun / logs | NOT PRESENT (unchanged; exit-0 failure output is sanitized) |
+| New host filesystem / Docker socket / network exposure | none (single `-v` workspace mount, test-enforced; port still `127.0.0.1`) |
+| Cleanup deleting foreign resources | not possible — `docker rm -f` by this run's deterministic name; the sweep filters Factory labels |
+| OpenHands external-server mode storage | **ACCEPTED** — operator-owned; not used by shipped config |
+| Hermes run report lives in the agent-writable workspace: an agent could write a "completed" report itself during the run | **MITIGATED** — deleted before the launch, Hermes overwrites it on every terminal path, links/oversized files rejected; residual only if Hermes' own write then fails silently |
+
+## Cleanup
+
+Factory-owned containers: 0 before and 0 after every live run (state-isolation test, three real-key
+AgentRuns, mutation check). Deterministic paths per the retention table above.
+
+## Tests
+
+| Run | Api | Application | Worker | Total |
+|---|---|---|---|---|
+| Baseline (before Phase L) | 314 | 1190 | 146 | 1650 passed |
+| Phase L full run 1 (final code) | 314 | 1194 | 146 | **1654** passed, 0 failed, 0 skipped |
+| Phase L full run 2 (final code) | 314 | 1194 | 146 | **1654** passed, 0 failed, 0 skipped |
+
+Build: 0 warnings, 0 errors. Application: +23 (Hermes report theory 8, stale/oversized report 1,
+non-zero exit 1, E2E missing/incomplete 2, OpenHands relocation 1 + cleanup theory 4, architecture 5,
+metrics contract 1), −17 planner/validator, −2 dead-metric tests. Worker: −1 (`ITaskPlanner` case),
++1 opt-in live test. One intermediate run had a failure in
+`ResilienceDependencyIntegrationTests.BulkheadRejection_DoesNotTripCircuit` (a `Task.Delay(30)` timing
+test, unrelated to Phase L); it passed in every later run (pre-existing flake).
+`dotnet format whitespace`: no finding on any line Phase L wrote (remaining findings are pre-existing).
+
+## Live Validation
+
+| Run | Real | Gateway / model | Result | Notes |
+|---|---|---|---|---|
+| OpenHands state isolation ×2 concurrent | real container, fake key | loopback, no provider | Failed (as required) | no state in workspace, git clean, artifacts = `README.md`, 0 containers |
+| Hermes AgentRun ×2 | yes, real key | OpenRouter / `deepseek/deepseek-v4-flash-0731` | Failed, `GatewayFailure=Billing`, exit:0, 16.4 s / 18.1 s | report **PRESENT** (`failed:true`), WorkItem Failed, 0 artifacts, cleaned |
+| OpenHands AgentRun ×2 | yes, real key | OpenRouter / same | Failed, error, 12.3 s / 11.8 s | no `conversations/` in git status, 0 artifacts, cleaned |
+| OpenHands AgentRun ×2 | yes, real key | OmniRoute / `openai/qwen2.5-coder:7b` | Failed, error, 13.3 s / 11.3 s | same |
+
+The second round ran on the final (post-review) code. Usage NOT MEASURED in every run; request IDs
+NOT AVAILABLE.
+
+`Real Model Generation = NOT VERIFIED` (OpenRouter 402, OmniRoute 401 — VERIFIED LIVE — EXTERNAL BLOCK).
+`Conversation state in Project workspace = NO`. `Runtime state cleanup = VERIFIED`.
+
+## API
+
+No public API change. `GET /api/operations/metrics` keeps every field (AI-request fields retained, 0/null).
+
+## Database
+
+No schema change, no migration, no new table.
+
+## Flutter
+
+No change.
+
+## Known Limitations
+
+1. Real model generation is blocked externally (OpenRouter 402, OmniRoute 401); the success path of
+   both runtimes is verified only by source and deterministic tests.
+2. The Hermes `completed` semantics are VERIFIED BY SOURCE in 0.20.6; a live successful run with
+   `completed: true` has not been observed (no credits).
+3. OpenHands still reports no HTTP status for a gateway failure (`GatewayFailure = NOT AVAILABLE`).
+4. OpenHands external-server mode (`OpenHands:BaseUrl`) keeps that server's own storage location.
+5. Pre-existing unbound `CircuitBreaker` configuration section.
+6. The Hermes run report shares the agent-writable workspace (MITIGATED, see Security); moving it to a
+   per-run path outside the workspace would need a second mount and was not justified by evidence.
+
+## Deferred
+
+- public telemetry
+- gateway UI
+- automatic routing
+- gateway failover
+- provider/model scoring
+- new runtimes
+- ACP/CrewAI
+- future API observability phase

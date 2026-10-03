@@ -1,8 +1,11 @@
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Abstractions.Execution;
+using AI.Factory.Application.Execution;
+using AI.Factory.Application.Gateway;
 using AI.Factory.Domain.Enums;
 using AI.Factory.Infrastructure.Agents;
 using AI.Factory.Infrastructure.Agents.OpenHands;
+using AI.Factory.Infrastructure.Gateways;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -14,10 +17,14 @@ public sealed class OpenHandsExecutionAdapterTests
     {
         public List<ProcessRunRequest> Requests { get; } = new();
 
+        /// <summary>Exit code of `docker run` (the container launch); everything else exits 0.</summary>
+        public int LaunchExitCode { get; init; }
+
         public Task<ProcessRunResult> RunAsync(ProcessRunRequest request, CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
-            return Task.FromResult(new ProcessRunResult(0, string.Empty, string.Empty, false));
+            var exitCode = request.Arguments.FirstOrDefault() == "run" ? LaunchExitCode : 0;
+            return Task.FromResult(new ProcessRunResult(exitCode, string.Empty, exitCode == 0 ? string.Empty : "port is already allocated", false));
         }
     }
 
@@ -45,6 +52,7 @@ public sealed class OpenHandsExecutionAdapterTests
         public OpenHandsCreateConversationRequest? LastCreateRequest { get; private set; }
         public string? LastMessageSent { get; private set; }
         public OpenHandsStatsDto? Stats { get; set; }
+        public Exception? CreateFailure { get; set; }
 
         public Task<bool> CheckHealthAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(true);
@@ -54,6 +62,11 @@ public sealed class OpenHandsExecutionAdapterTests
             CancellationToken cancellationToken = default)
         {
             LastCreateRequest = request;
+            if (CreateFailure is not null)
+            {
+                throw CreateFailure;
+            }
+
             return Task.FromResult(new OpenHandsConversationInfo
             {
                 Id = ConversationId,
@@ -141,6 +154,91 @@ public sealed class OpenHandsExecutionAdapterTests
         Model: new ModelRoute(model, gateway),
         Deadline: deadline);
 
+    /// <summary>The real gateway descriptors behind a resolver, as the composition roots wire them.</summary>
+    private static ModelGatewayResolver Resolver() => new(
+        new ModelGatewayRegistry(new AI.Factory.Application.Abstractions.Gateway.IModelGateway[] { new OpenRouterGateway(), new OmniRouteGateway() }),
+        new ModelGatewayOptions
+        {
+            DefaultGateway = OpenRouterGateway.Key,
+            Gateways =
+            {
+                [OpenRouterGateway.Key] = new GatewayEntryOptions { BaseUrl = OpenRouterGateway.DefaultBaseUrl },
+                [OmniRouteGateway.Key] = new GatewayEntryOptions { BaseUrl = OmniRouteGateway.DefaultBaseUrl, Enabled = false }
+            }
+        });
+
+    private static OpenHandsExecutionAdapter RoutedAdapter(FakeClientFactory clientFactory, ModelGatewayResolver? resolver) => new(
+        new OpenHandsOptions { BaseUrl = "http://127.0.0.1:48080", PollIntervalSeconds = 0.01 },
+        new FakeProcessRunner(),
+        new FakeLifecycleManager(),
+        new FailureClassifier(),
+        NullLogger<OpenHandsExecutionAdapter>.Instance,
+        clientFactory: clientFactory,
+        secretProvider: new FakeSecretProvider(),
+        gatewayResolver: resolver);
+
+    [Fact]
+    public async Task ExecuteAsync_SendsTheRoutedGatewaysEndpointModelRouteAndKey_ToTheAgentServer()
+    {
+        var clientFactory = new FakeClientFactory();
+        clientFactory.Client.ExecutionStatuses.Enqueue("running");
+        clientFactory.Client.ExecutionStatuses.Enqueue("finished");
+
+        var outcome = await RoutedAdapter(clientFactory, Resolver()).ExecuteAsync(CreateSpec());
+
+        Assert.Equal(ExecutionOutcomeStatus.Succeeded, outcome.Status);
+        var llm = clientFactory.Client.LastCreateRequest!.AgentSettings.Llm;
+        Assert.Equal("openrouter/deepseek/deepseek-v4-flash-0731", llm.Model);
+        Assert.Equal(OpenRouterGateway.DefaultBaseUrl, llm.BaseUrl);
+        Assert.Equal("fake-test-key-12345", llm.ApiKey);
+    }
+
+    [Theory]
+    [InlineData("OmniRoute", "is disabled")]
+    [InlineData("NoSuchGateway", "is not registered")]
+    public async Task ExecuteAsync_UnroutableGateway_FailsClosed_BeforeAnyConversation(string gateway, string reason)
+    {
+        var clientFactory = new FakeClientFactory();
+
+        var outcome = await RoutedAdapter(clientFactory, Resolver()).ExecuteAsync(CreateSpec(gateway: gateway));
+
+        Assert.Equal(ExecutionOutcomeStatus.Failed, outcome.Status);
+        Assert.StartsWith("Model gateway route rejected:", outcome.ErrorMessage);
+        Assert.Contains(reason, outcome.ErrorMessage);
+        Assert.Null(clientFactory.Client.LastCreateRequest);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithoutAGatewayResolver_FailsClosed_NoHardcodedProviderFallback()
+    {
+        var clientFactory = new FakeClientFactory();
+
+        var outcome = await RoutedAdapter(clientFactory, resolver: null).ExecuteAsync(CreateSpec());
+
+        Assert.Equal(ExecutionOutcomeStatus.Failed, outcome.Status);
+        Assert.Contains("requires a model gateway resolver", outcome.ErrorMessage);
+        Assert.Null(clientFactory.Client.LastCreateRequest);
+    }
+
+    [Theory]
+    [InlineData("sk-or-v1-0123456789abcdef0123456789abcdef")]
+    [InlineData("omni-7f3a9c2e5b8d1f4a6c0e9b2d")]
+    public async Task ExecuteAsync_AgentServerErrorEchoingTheApiKey_IsRedactedAndBounded(string key)
+    {
+        var clientFactory = new FakeClientFactory();
+        clientFactory.Client.CreateFailure = new HttpRequestException(
+            "OpenHands conversation creation failed: UnprocessableEntity {\"detail\":[{\"input\":{\"model\":\"x\",\"api_key\":\""
+                + key + "\"}}]} " + new string('x', 2_000));
+
+        var outcome = await RoutedAdapter(clientFactory, Resolver()).ExecuteAsync(CreateSpec());
+
+        Assert.Equal(ExecutionOutcomeStatus.Failed, outcome.Status);
+        Assert.DoesNotContain(key, outcome.ErrorMessage);
+        Assert.Contains("OpenHands conversation creation failed", outcome.ErrorMessage);
+        Assert.True(outcome.ErrorMessage!.Length <= 600);
+        Assert.Null(outcome.GatewayFailure);
+    }
+
     [Fact]
     public void Identity_HasOpenHandsKey_AndFactoryRoutedModelCapability()
     {
@@ -212,7 +310,8 @@ public sealed class OpenHandsExecutionAdapterTests
             new FailureClassifier(),
             NullLogger<OpenHandsExecutionAdapter>.Instance,
             clientFactory: clientFactory,
-            secretProvider: new FakeSecretProvider());
+            secretProvider: new FakeSecretProvider(),
+            gatewayResolver: Resolver());
 
         var spec = CreateSpec();
         var outcome = await adapter.ExecuteAsync(spec);
@@ -243,7 +342,8 @@ public sealed class OpenHandsExecutionAdapterTests
             new FailureClassifier(),
             NullLogger<OpenHandsExecutionAdapter>.Instance,
             clientFactory: clientFactory,
-            secretProvider: new FakeSecretProvider());
+            secretProvider: new FakeSecretProvider(),
+            gatewayResolver: Resolver());
 
         var spec = CreateSpec();
         var outcome = await adapter.ExecuteAsync(spec);
@@ -272,7 +372,8 @@ public sealed class OpenHandsExecutionAdapterTests
             new FailureClassifier(),
             NullLogger<OpenHandsExecutionAdapter>.Instance,
             clientFactory: clientFactory,
-            secretProvider: new FakeSecretProvider());
+            secretProvider: new FakeSecretProvider(),
+            gatewayResolver: Resolver());
 
         var spec = CreateSpec();
 
@@ -307,7 +408,8 @@ public sealed class OpenHandsExecutionAdapterTests
             new FailureClassifier(),
             NullLogger<OpenHandsExecutionAdapter>.Instance,
             clientFactory: clientFactory,
-            secretProvider: new FakeSecretProvider());
+            secretProvider: new FakeSecretProvider(),
+            gatewayResolver: Resolver());
 
         var spec = CreateSpec();
         var outcome = await adapter.ExecuteAsync(spec);
@@ -315,4 +417,78 @@ public sealed class OpenHandsExecutionAdapterTests
         Assert.Equal(ExecutionOutcomeStatus.Succeeded, outcome.Status);
         Assert.Contains(spec.AgentRunId, lifecycle.CleanedRuns);
     }
+
+    // ---------------------------------------------------------------- Phase L — runtime state
+
+    [Fact]
+    public async Task ContainerMode_RelocatesAgentServerState_OutOfTheWorkspaceMount_WithNoNewMount()
+    {
+        var runner = new FakeProcessRunner();
+        var clientFactory = new FakeClientFactory();
+        clientFactory.Client.ExecutionStatuses.Enqueue("running");
+        clientFactory.Client.ExecutionStatuses.Enqueue("finished");
+
+        await ContainerAdapter(runner, new FakeLifecycleManager(), clientFactory).ExecuteAsync(CreateSpec());
+
+        var args = runner.Requests.Single(r => r.Arguments.FirstOrDefault() == "run").Arguments.ToList();
+        var environment = ValuesOf(args, "-e");
+        Assert.Contains($"OH_CONVERSATIONS_PATH={OpenHandsExecutionAdapter.RuntimeStateRoot}/conversations", environment);
+        Assert.Contains($"OH_BASH_EVENTS_DIR={OpenHandsExecutionAdapter.RuntimeStateRoot}/bash_events", environment);
+        Assert.False(OpenHandsExecutionAdapter.RuntimeStateRoot.StartsWith("/workspace", StringComparison.Ordinal));
+
+        // The workspace stays the only host path the container sees: no state volume, no new exposure.
+        var mount = Assert.Single(ValuesOf(args, "-v"));
+        Assert.EndsWith(":/workspace", mount);
+        Assert.DoesNotContain("--mount", args);
+    }
+
+    public static TheoryData<string> TerminalPaths => new() { "failed", "cancelled", "timedout", "startup-failure" };
+
+    [Theory]
+    [MemberData(nameof(TerminalPaths))]
+    public async Task ContainerMode_EveryTerminalPath_RemovesThisRunsContainer_AndWithItTheRuntimeState(string path)
+    {
+        var runner = new FakeProcessRunner { LaunchExitCode = path == "startup-failure" ? 125 : 0 };
+        var lifecycle = new FakeLifecycleManager();
+        var clientFactory = new FakeClientFactory();
+        for (var i = 0; i < 50; i++)
+        {
+            clientFactory.Client.ExecutionStatuses.Enqueue(path == "failed" && i == 1 ? "error" : "running");
+        }
+
+        using var cts = new CancellationTokenSource();
+        if (path == "cancelled")
+        {
+            cts.CancelAfter(50);
+        }
+
+        // The adapter is built first and the deadline is generous, so the run is always launched before
+        // it expires (an already-expired deadline returns TimedOut without spawning anything).
+        var adapter = ContainerAdapter(runner, lifecycle, clientFactory);
+        var spec = CreateSpec(deadline: path == "timedout" ? DateTimeOffset.UtcNow.AddSeconds(2.5) : null);
+        var outcome = await adapter.ExecuteAsync(spec, cts.Token);
+
+        var expected = path switch
+        {
+            "cancelled" => ExecutionOutcomeStatus.Cancelled,
+            "timedout" => ExecutionOutcomeStatus.TimedOut,
+            _ => ExecutionOutcomeStatus.Failed
+        };
+        Assert.Equal(expected, outcome.Status);
+        Assert.Equal(new[] { spec.AgentRunId }, lifecycle.CleanedRuns);
+    }
+
+    private static OpenHandsExecutionAdapter ContainerAdapter(
+        FakeProcessRunner runner, FakeLifecycleManager lifecycle, FakeClientFactory clientFactory) => new(
+        new OpenHandsOptions { BaseUrl = null, PollIntervalSeconds = 0.01 },
+        runner,
+        lifecycle,
+        new FailureClassifier(),
+        NullLogger<OpenHandsExecutionAdapter>.Instance,
+        clientFactory: clientFactory,
+        secretProvider: new FakeSecretProvider(),
+        gatewayResolver: Resolver());
+
+    private static List<string> ValuesOf(List<string> args, string flag) =>
+        args.Select((arg, i) => (arg, i)).Where(x => x.arg == flag).Select(x => args[x.i + 1]).ToList();
 }

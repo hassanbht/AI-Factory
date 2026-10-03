@@ -68,7 +68,8 @@ public sealed class ProjectPlanner : IProjectPlanner
         {
             throw new ConflictException(
                 $"Project '{projectId}' must be in '{ProjectStatus.Planning}' status to generate a plan; " +
-                $"current status is '{project.Status}'.");
+                $"current status is '{project.Status}'. For the autonomous lifecycle use POST /api/projects/{projectId}/start, " +
+                "which drives the Project through Planning itself.");
         }
 
         // §17 — ProjectPlanService remains authoritative; a Project that

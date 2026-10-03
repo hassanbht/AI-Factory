@@ -45,7 +45,7 @@ public sealed class DockerContainerLifecycleManager : IContainerLifecycleManager
             using var cleanupCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             var request = new ProcessRunRequest(
                 "docker",
-                new[] { "rm", "-f", containerName },
+                new[] { "rm", "-f", "-v", containerName },
                 TimeSpan.FromSeconds(10));
 
             await _processRunner.RunAsync(request, cleanupCts.Token);
@@ -180,7 +180,7 @@ public sealed class DockerContainerLifecycleManager : IContainerLifecycleManager
                 {
                     using var rmCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                     await _processRunner.RunAsync(
-                        new ProcessRunRequest("docker", new[] { "rm", "-f", containerId }, TimeSpan.FromSeconds(10)),
+                        new ProcessRunRequest("docker", new[] { "rm", "-f", "-v", containerId }, TimeSpan.FromSeconds(10)),
                         rmCts.Token);
 
                     sweptCount++;

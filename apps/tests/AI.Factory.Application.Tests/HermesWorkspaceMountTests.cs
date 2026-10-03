@@ -49,7 +49,6 @@ public sealed class HermesWorkspaceMountTests
         var options = new HermesOptions
         {
             DockerImage = "test/image:latest",
-            DataVolume = "/host/data",
             WorkspaceRoot = root
             // WorkspaceVolumeName deliberately unset — the host/dev/test topology.
         };
@@ -77,7 +76,6 @@ public sealed class HermesWorkspaceMountTests
         var options = new HermesOptions
         {
             DockerImage = "test/image:latest",
-            DataVolume = "ai_factory_production_hermes",
             WorkspaceRoot = root,
             WorkspaceVolumeName = "ai_factory_production_workspace"
         };
@@ -112,7 +110,6 @@ public sealed class HermesWorkspaceMountTests
         var options = new HermesOptions
         {
             DockerImage = "test/image:latest",
-            DataVolume = "ai_factory_production_hermes",
             WorkspaceRoot = root,
             WorkspaceVolumeName = "ai_factory_production_workspace"
         };
@@ -138,7 +135,6 @@ public sealed class HermesWorkspaceMountTests
         var options = new HermesOptions
         {
             DockerImage = "test/image:latest",
-            DataVolume = "ai_factory_production_hermes",
             WorkspaceRoot = root,
             AdditionalEnvironmentVariables =
             {

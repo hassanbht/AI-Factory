@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Abstractions.Execution;
 using AI.Factory.Application.Abstractions.Gateway;
@@ -6,7 +5,6 @@ using AI.Factory.Application.Execution;
 using AI.Factory.Application.Gateway;
 using AI.Factory.Domain.Entities;
 using AI.Factory.Domain.Enums;
-using AI.Factory.Infrastructure.Configuration;
 using AI.Factory.Infrastructure.Gateways;
 using AI.Factory.Infrastructure.Persistence;
 using AI.Factory.Worker.Tests.Fixtures;
@@ -19,11 +17,12 @@ using Xunit.Abstractions;
 namespace AI.Factory.Worker.Tests;
 
 /// <summary>
-/// Phase I §48, §49 & §50 — Live Model Gateway and Full Execution Validation.
-/// Tests that:
-/// 1. Real OpenRouterGateway executes against real OpenRouter endpoint with real model.
-/// 2. OmniRouteGateway fails closed when service is unavailable (no silent fallback).
-/// 3. End-to-end disposable AgentRun runs through Execution Adapter -> ModelRoute -> Gateway -> Runtime -> Acceptance.
+/// Phase I §50 — a disposable AgentRun routes Execution Profile -> ModelRoute -> dispatcher to the
+/// selected adapter. The adapter is a synthetic in-test fake that returns Succeeded without any
+/// gateway or model call, so this proves routing only — never model generation (Phase J). The
+/// Phase I direct-gateway live calls were removed in Phase K together with
+/// IModelGateway.ExecuteAsync, which no production code ever called; real gateway traffic is
+/// exercised only through the runtimes, in GatewayLiveAgentRunTests.
 /// </summary>
 public sealed class ModelGatewayLiveTests : IDisposable
 {
@@ -58,103 +57,7 @@ public sealed class ModelGatewayLiveTests : IDisposable
     }
 
     [Fact]
-    public async Task LiveOpenRouter_RealModelInvocation_ThroughModelGatewayAbstraction()
-    {
-        BenchmarkHarness.TryLoadEnvLive();
-        var apiKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
-        if (string.IsNullOrWhiteSpace(apiKey))
-        {
-            _output.WriteLine("[SKIP] OPENROUTER_API_KEY not configured — skipping live gateway test.");
-            return;
-        }
-
-        var secretProvider = new EnvironmentSecretProvider(NullLogger<EnvironmentSecretProvider>.Instance);
-        using var httpClient = new HttpClient { BaseAddress = new Uri("https://openrouter.ai/api/v1/") };
-        var gateway = new OpenRouterGateway(
-            httpClient,
-            secretProvider,
-            NullLogger<OpenRouterGateway>.Instance);
-
-        var modelId = "deepseek/deepseek-v4-flash-0731";
-        var request = new ModelGatewayRequest(
-            ModelId: modelId,
-            Messages: new[]
-            {
-                new ModelGatewayMessage("system", "You are an automated software test agent."),
-                new ModelGatewayMessage("user", "Respond with the single word: ACKNOWLEDGED")
-            },
-            MaxTokens: 10,
-            Temperature: 0.0f);
-
-        var sw = Stopwatch.StartNew();
-        var response = await gateway.ExecuteAsync(request);
-        sw.Stop();
-
-        _output.WriteLine($"[LIVE OPENROUTER] Duration: {sw.ElapsedMilliseconds}ms, Success: {response.IsSuccess}, RequestId: {response.RequestId}");
-
-        if (response.IsSuccess)
-        {
-            _output.WriteLine($"[LIVE OPENROUTER] Response Text: {response.Text}");
-            _output.WriteLine($"[LIVE OPENROUTER] Tokens: In={response.Usage?.InputTokens}, Out={response.Usage?.OutputTokens}, Total={response.Usage?.TotalTokens}");
-            Assert.NotNull(response.Text);
-        }
-        else
-        {
-            _output.WriteLine($"[LIVE OPENROUTER] Failure: Reason={response.Failure?.Reason}, StatusCode={response.Failure?.StatusCode}, Message={response.Failure?.Message}");
-            Assert.NotNull(response.Failure);
-            // Verify failure is classified into our typed taxonomy (e.g. Billing, RateLimited, Authentication, etc.)
-            Assert.True(
-                response.Failure.Reason is ModelGatewayFailureReason.Billing
-                || response.Failure.Reason is ModelGatewayFailureReason.RateLimited
-                || response.Failure.Reason is ModelGatewayFailureReason.Authentication
-                || response.Failure.Reason is ModelGatewayFailureReason.ProviderUnavailable,
-                $"Unexpected failure classification: {response.Failure.Reason}");
-        }
-    }
-
-    [Fact]
-    public async Task LiveOmniRoute_RealInvocation_ProvesFailClosedOrGatewayUnavailable()
-    {
-        var secretProvider = new EnvironmentSecretProvider(NullLogger<EnvironmentSecretProvider>.Instance);
-        using var httpClient = new HttpClient { BaseAddress = new Uri("http://127.0.0.1:20128/v1/"), Timeout = TimeSpan.FromSeconds(3) };
-        var gateway = new OmniRouteGateway(
-            httpClient,
-            secretProvider,
-            NullLogger<OmniRouteGateway>.Instance);
-
-        var request = new ModelGatewayRequest(
-            ModelId: "openai/qwen2.5-coder:7b",
-            Messages: new[] { new ModelGatewayMessage("user", "ping") },
-            MaxTokens: 5);
-
-        var sw = Stopwatch.StartNew();
-        var response = await gateway.ExecuteAsync(request);
-        sw.Stop();
-
-        _output.WriteLine($"[LIVE OMNIROUTE] Duration: {sw.ElapsedMilliseconds}ms, Success: {response.IsSuccess}");
-
-        if (response.IsSuccess)
-        {
-            _output.WriteLine($"[LIVE OMNIROUTE] Response: {response.Text}");
-        }
-        else
-        {
-            _output.WriteLine($"[LIVE OMNIROUTE] Reason: {response.Failure?.Reason}, StatusCode: {response.Failure?.StatusCode}, Message: {response.Failure?.Message}");
-            // Real OmniRoute response must be classified into our typed taxonomy
-            Assert.True(
-                response.Failure?.Reason is ModelGatewayFailureReason.Authentication
-                || response.Failure?.Reason is ModelGatewayFailureReason.InvalidRequest
-                || response.Failure?.Reason is ModelGatewayFailureReason.ModelUnavailable
-                || response.Failure?.Reason is ModelGatewayFailureReason.ProviderUnavailable
-                || response.Failure?.Reason is ModelGatewayFailureReason.GatewayUnavailable
-                || response.Failure?.Reason is ModelGatewayFailureReason.TransportFailure
-                || response.Failure?.Reason is ModelGatewayFailureReason.Timeout,
-                $"Unexpected OmniRoute failure reason: {response.Failure?.Reason}");
-        }
-    }
-
-    [Fact]
-    public async Task LiveAgentRun_ExecutesThroughModelGatewayBoundary()
+    public async Task DisposableAgentRun_RoutesProfileAndModelRoute_ToASyntheticAdapter_NoModelCall()
     {
         BenchmarkHarness.TryLoadEnvLive();
 
@@ -228,12 +131,8 @@ public sealed class ModelGatewayLiveTests : IDisposable
             }
         };
 
-        var secretProvider = new EnvironmentSecretProvider(NullLogger<EnvironmentSecretProvider>.Instance);
-        using var openRouterClient = new HttpClient { BaseAddress = new Uri("https://openrouter.ai/api/v1/") };
-        using var omniRouteClient = new HttpClient { BaseAddress = new Uri("http://localhost:20128/v1/") };
-
-        var openRouterGateway = new OpenRouterGateway(openRouterClient, secretProvider, NullLogger<OpenRouterGateway>.Instance);
-        var omniRouteGateway = new OmniRouteGateway(omniRouteClient, secretProvider, NullLogger<OmniRouteGateway>.Instance);
+        var openRouterGateway = new OpenRouterGateway();
+        var omniRouteGateway = new OmniRouteGateway();
 
         var gatewayRegistry = new ModelGatewayRegistry(new IModelGateway[] { openRouterGateway, omniRouteGateway });
         var gatewayResolver = new ModelGatewayResolver(gatewayRegistry, modelGatewayOptions);
@@ -271,7 +170,7 @@ public sealed class ModelGatewayLiveTests : IDisposable
         // Execute through dispatcher
         var result = await dispatcher.ExecuteAsync(agentRun);
 
-        _output.WriteLine($"[LIVE AGENTRUN] Outcome: Success={result.Success}, Adapter={result.ExecutionAdapter}, Provider={result.Provider}, Model={result.Model}");
+        _output.WriteLine($"[SYNTHETIC ADAPTER — NO MODEL CALL] Outcome: Success={result.Success}, Adapter={result.ExecutionAdapter}, Provider={result.Provider}, Model={result.Model}");
 
         Assert.Equal("OpenHands", result.ExecutionAdapter);
         Assert.Equal("OpenRouter", result.Provider);

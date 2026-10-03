@@ -1,3 +1,4 @@
+using AI.Factory.Infrastructure.Agents.Cli;
 using System.Text.Json;
 using System.Threading.RateLimiting;
 using AI.Factory.Application.Abstractions;
@@ -14,7 +15,6 @@ using AI.Factory.Infrastructure.Agents.OpenHands;
 using AI.Factory.Infrastructure.Configuration;
 using AI.Factory.Infrastructure.Context;
 using AI.Factory.Infrastructure.Persistence;
-using AI.Factory.Infrastructure.Providers;
 using AI.Factory.Infrastructure.Resilience;
 using AI.Factory.Infrastructure.Shutdown;
 using AI.Factory.Api.HealthChecks;
@@ -148,19 +148,10 @@ builder.Services.AddScoped<AI.Factory.Application.Planning.IProjectPlanner, AI.F
 var hermesOptions = new HermesOptions();
 builder.Configuration.GetSection("Hermes").Bind(hermesOptions);
 
-if (string.IsNullOrWhiteSpace(hermesOptions.DataVolume))
-{
-    hermesOptions.DataVolume = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-        ".hermes");
-}
-
 if (string.IsNullOrWhiteSpace(hermesOptions.WorkspaceRoot))
 {
     hermesOptions.WorkspaceRoot = "../../../sandbox/agent-workspace";
 }
-
-hermesOptions.DataVolume = DeploymentPaths.Expand(hermesOptions.DataVolume);
 hermesOptions.WorkspaceRoot = DeploymentPaths.Expand(hermesOptions.WorkspaceRoot);
 
 builder.Services.AddSingleton(hermesOptions);
@@ -170,6 +161,14 @@ builder.Configuration.GetSection("CommandPolicy").Bind(commandPolicyOptions);
 builder.Services.AddSingleton(commandPolicyOptions);
 builder.Services.AddSingleton<IProcessRunner, SystemProcessRunner>();
 builder.Services.AddScoped<HermesAgentExecutor>();
+// Phase M — before the Docker manager: a single IContainerLifecycleManager resolves to the last one (OpenHands).
+var cliRuntimeOptions = new CliRuntimeOptions();
+builder.Configuration.GetSection(CliRuntimeOptions.SectionName).Bind(cliRuntimeOptions);
+var claudeCodeOptions = new ClaudeCodeOptions();
+builder.Configuration.GetSection(ClaudeCodeOptions.SectionName).Bind(claudeCodeOptions);
+var codexOptions = new CodexOptions();
+builder.Configuration.GetSection(CodexOptions.SectionName).Bind(codexOptions);
+builder.Services.AddCliExecutionAdapters(cliRuntimeOptions, claudeCodeOptions, codexOptions);
 builder.Services.AddScoped<AI.Factory.Application.Abstractions.Execution.IContainerLifecycleManager, DockerContainerLifecycleManager>();
 
 var resilienceOptions = new ResilienceOptions();
@@ -196,9 +195,9 @@ builder.Services.AddScoped<IAgentExecutor>(sp =>
 
 // Execution-adapter Phases B/C — IAgentRuntime is the Factory dispatcher
 // (AgentDefinition policy, then AgentType -> Execution profile -> adapter).
-// The only adapter is HermesExecutionAdapter, which runs Hermes through the
-// same resilience-decorated IAgentExecutor above (used by ModelTaskPlanner
-// and HermesExecutionAdapter; Review migrated to execution adapter in Phase H).
+// HermesExecutionAdapter runs Hermes through the same resilience-decorated
+// IAgentExecutor above — its only consumer since Phase L removed the unused
+// ModelTaskPlanner (Review migrated to execution adapter in Phase H).
 // No "Execution" section = the built-in single Hermes profile.
 var executionOptions = new AI.Factory.Application.Execution.ExecutionOptions();
 builder.Configuration.GetSection(AI.Factory.Application.Execution.ExecutionOptions.SectionName).Bind(executionOptions);
@@ -216,38 +215,25 @@ if (modelGatewayOptions.Gateways.Count == 0 && aiProviderOptions.Providers.Count
         {
             Enabled = providerSettings.Enabled,
             BaseUrl = providerSettings.BaseUrl ?? string.Empty,
-            ApiKeySecretName = providerSettings.ApiKeySecretName,
-            TimeoutSeconds = providerSettings.TimeoutSeconds
+            ApiKeySecretName = providerSettings.ApiKeySecretName
         };
     }
 }
-modelGatewayOptions.Validate();
+modelGatewayOptions.Validate(executionOptions, aiProviderOptions);
 builder.Services.AddSingleton(modelGatewayOptions);
 
+// Phase K — gateways are transport descriptors (endpoint, secret NAME, runtime provider); the
+// runtimes send the model requests, so a gateway needs no HttpClient or secret value.
 builder.Services.AddScoped<OpenRouterGateway>(sp =>
 {
-    var options = sp.GetRequiredService<ModelGatewayOptions>();
-    options.Gateways.TryGetValue(OpenRouterGateway.Key, out var entry);
-    var httpClient = sp.GetRequiredService<IHttpClientFactory>().CreateClient(OpenRouterGateway.Key);
-    return new OpenRouterGateway(
-        httpClient,
-        sp.GetRequiredService<ISecretProvider>(),
-        sp.GetRequiredService<ILogger<OpenRouterGateway>>(),
-        entry?.BaseUrl,
-        entry?.ApiKeySecretName);
+    sp.GetRequiredService<ModelGatewayOptions>().Gateways.TryGetValue(OpenRouterGateway.Key, out var entry);
+    return new OpenRouterGateway(entry?.BaseUrl, entry?.ApiKeySecretName);
 });
 
 builder.Services.AddScoped<OmniRouteGateway>(sp =>
 {
-    var options = sp.GetRequiredService<ModelGatewayOptions>();
-    options.Gateways.TryGetValue(OmniRouteGateway.Key, out var entry);
-    var httpClient = sp.GetRequiredService<IHttpClientFactory>().CreateClient(OmniRouteGateway.Key);
-    return new OmniRouteGateway(
-        httpClient,
-        sp.GetRequiredService<ISecretProvider>(),
-        sp.GetRequiredService<ILogger<OmniRouteGateway>>(),
-        entry?.BaseUrl,
-        entry?.ApiKeySecretName);
+    sp.GetRequiredService<ModelGatewayOptions>().Gateways.TryGetValue(OmniRouteGateway.Key, out var entry);
+    return new OmniRouteGateway(entry?.BaseUrl, entry?.ApiKeySecretName);
 });
 
 builder.Services.AddScoped<IModelGatewayRegistry>(sp =>
@@ -297,92 +283,11 @@ builder.Services.AddModelRoutingPreflight(
     aiProviderOptions,
     (sp, name) => sp.GetRequiredService<IHttpClientFactory>().CreateClient(name));
 
-// ------------------------------------------------------------
-// AI provider abstraction & routing (Phase 18.1.1) — provider-neutral
-// execution built on top of the AiProviders/ModelRouting catalogs above.
-// Each enabled provider is wrapped with the same ProviderCall resilience
-// profile used elsewhere, then registered into a scoped, in-memory registry.
-// ------------------------------------------------------------
-
+// Phase K — the Phase 18.1.1 Factory-side completion stack (IAiModelRouter / IModelProvider /
+// OpenAiCompatibleModelProvider) was registered here with no consumer: a second, unused model
+// transport with its own status taxonomy and retry wrapper. Removed; the runtimes own model
+// transport and IModelGateway describes the gateway they are sent to.
 builder.Services.AddHttpClient();
-
-foreach (var (providerId, providerSettings) in aiProviderOptions.Providers)
-{
-    if (!providerSettings.Enabled)
-    {
-        continue;
-    }
-
-    builder.Services.AddHttpClient(providerId, client =>
-    {
-        if (!string.IsNullOrWhiteSpace(providerSettings.BaseUrl))
-        {
-            client.BaseAddress = new Uri(providerSettings.BaseUrl.TrimEnd('/') + "/");
-        }
-
-        client.Timeout = TimeSpan.FromSeconds(providerSettings.TimeoutSeconds);
-    });
-}
-
-builder.Services.AddHttpClient(OpenRouterGateway.Key);
-builder.Services.AddHttpClient(OmniRouteGateway.Key);
-
-builder.Services.AddScoped<IAiModelProviderRegistry>(sp =>
-{
-    var registry = new AiModelProviderRegistry();
-    var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
-    var secretProvider = sp.GetRequiredService<ISecretProvider>();
-    var resilienceExecutor = sp.GetRequiredService<IResilienceExecutor>();
-    var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
-
-    foreach (var (providerId, providerSettings) in aiProviderOptions.Providers)
-    {
-        if (!providerSettings.Enabled)
-        {
-            continue;
-        }
-
-        var providerCapabilities = modelRoutingOptions.Models
-            .Where(m => string.Equals(m.Provider, providerId, StringComparison.OrdinalIgnoreCase))
-            .SelectMany(m => m.Capabilities)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        IModelProvider inner = providerSettings.ProviderType == AiModelProviderKind.Fake
-            ? new FakeModelProvider(providerId, providerCapabilities)
-            : new OpenAiCompatibleModelProvider(
-                providerId,
-                providerCapabilities,
-                httpClientFactory.CreateClient(providerId),
-                secretProvider,
-                providerSettings.ApiKeySecretName,
-                loggerFactory.CreateLogger<OpenAiCompatibleModelProvider>());
-
-        registry.RegisterProvider(new ResilienceModelProviderDecorator(
-            inner, resilienceExecutor, loggerFactory.CreateLogger<ResilienceModelProviderDecorator>()));
-    }
-
-    foreach (var model in modelRoutingOptions.Models)
-    {
-        if (model.Capabilities.Count == 0)
-        {
-            continue;
-        }
-
-        if (registry.TryGetProvider(model.Provider, out _))
-        {
-            registry.RegisterModel(model.ModelId, model.Provider);
-        }
-    }
-
-    return registry;
-});
-
-var aiRoutingOptions = new AiRoutingOptions();
-builder.Configuration.GetSection(AiRoutingOptions.SectionName).Bind(aiRoutingOptions);
-aiRoutingOptions.Validate();
-builder.Services.AddSingleton(aiRoutingOptions);
-builder.Services.AddScoped<IAiModelRouter, AiModelRouter>();
 
 var retryOptions = new RetryOptions();
 builder.Configuration.GetSection("Retry").Bind(retryOptions);
@@ -423,6 +328,7 @@ builder.Services.AddScoped<IValidationRunRepository, ValidationRunRepository>();
 // by VerificationGate after (never instead of) the mandatory build/test run.
 builder.Services.AddScoped<IWorkItemAcceptanceVerifier, WorkItemAcceptanceVerifier>();
 builder.Services.AddScoped<IVerificationGate, VerificationGate>();
+builder.Services.AddScoped<IWorkspaceIntegrityInspector, AI.Factory.Infrastructure.Validation.GitWorkspaceIntegrityInspector>();
 builder.Services.AddScoped<IProjectCompletionGate, ProjectCompletionGate>();
 
 // Phase 18.25 — the single Project lifecycle authority (Analyzing -> ... ->
@@ -492,11 +398,6 @@ builder.Services.AddScoped<IEvaluationRunRepository, EvaluationRunRepository>();
 builder.Services.AddScoped<ILearningStore, LearningStore>();
 builder.Services.AddScoped<LearningService>();
 builder.Services.AddScoped<IWorkItemCompletionProcessor, WorkItemCompletionProcessor>();
-
-var taskPlannerOptions = new ModelTaskPlannerOptions();
-builder.Configuration.GetSection("TaskPlanner").Bind(taskPlannerOptions);
-builder.Services.AddSingleton(taskPlannerOptions);
-builder.Services.AddScoped<ITaskPlanner, ModelTaskPlanner>();
 
 var auditOptions = new AuditOptions();
 builder.Configuration.GetSection("Audit").Bind(auditOptions);
@@ -880,8 +781,11 @@ using (var startupScope = app.Services.CreateScope())
         migrationLogger.LogInformation("Database migrations successfully applied.");
     }
 
+    // Phase M — heartbeat-bounded, never "every Running WorkItem": the Api restarting says nothing about
+    // the Worker, whose live executions keep heartbeating; recovering them here let the scheduler dispatch a
+    // second (repair) run next to the one still executing. Dead executions are the Worker's recovery job.
     var taskStateManager = startupScope.ServiceProvider.GetRequiredService<ITaskStateManager>();
-    await taskStateManager.RecoverOrphanedTasksAsync();
+    await taskStateManager.RecoverStaleExecutionsAsync();
 }
 
 // ------------------------------------------------------------

@@ -27,7 +27,6 @@ public sealed class FailureClassifier : IFailureClassifier
             TimeoutException => new FailureClassificationResult(FailureCategory.Timeout, true, exception.Message),
             System.IO.IOException => new FailureClassificationResult(FailureCategory.Infrastructure, true, exception.Message),
             System.Net.Http.HttpRequestException => new FailureClassificationResult(FailureCategory.Provider, true, exception.Message),
-            AiProviderTransientException => new FailureClassificationResult(FailureCategory.Provider, true, exception.Message),
             UnauthorizedAccessException => new FailureClassificationResult(FailureCategory.Infrastructure, false, exception.Message),
             ArgumentException => new FailureClassificationResult(FailureCategory.Validation, false, exception.Message),
             Exceptions.ValidationException => new FailureClassificationResult(FailureCategory.Validation, false, exception.Message),

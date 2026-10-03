@@ -160,6 +160,11 @@ public sealed class AgentRunHeartbeatScopeIsolationTests
 
         public Task<int> RecoverOrphanedRunsAsync(DateTime? olderThanUtc = null, CancellationToken cancellationToken = default) =>
             Task.FromResult(0);
+
+        public Task<IReadOnlyList<AgentRun>> GetRunningWithoutHeartbeatSinceAsync(DateTime heartbeatCutoffUtc, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<AgentRun>>(Array.Empty<AgentRun>());
+        public Task<AgentRun?> TryRecoverOrphanedRunAsync(Guid agentRunId, DateTime heartbeatCutoffUtc, string reason, CancellationToken cancellationToken = default) =>
+            Task.FromResult<AgentRun?>(null);
     }
 
     [Fact]

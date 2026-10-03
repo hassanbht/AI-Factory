@@ -71,7 +71,7 @@ public sealed class ProjectCompletionGate : IProjectCompletionGate
     {
         if (!AllRequiredWorkItemsCompleted(workItems))
         {
-            return new ProjectCompletionGateResult(ProjectCompletionGateAction.None, null);
+            return await HandleIncompleteWorkAsync(project, workItems, cancellationToken);
         }
 
         if (await _agentRuns.HasActiveRunsForProjectAsync(project.Id, cancellationToken))
@@ -221,6 +221,68 @@ public sealed class ProjectCompletionGate : IProjectCompletionGate
             return false;
         }
     }
+
+    /// <summary>
+    /// Phase M — benchmark defect factory-T1-r2: a WorkItem that ended Failed left the Project in
+    /// Implementation forever with an empty CurrentError, because this gate only ever waited for
+    /// "all Completed". Every required WorkItem is required (see class remarks), so a terminal
+    /// Failed/Cancelled one means the Project can never complete: once no AgentRun is still active,
+    /// the Project fails closed with the WorkItem's own reason. A Blocked WorkItem (an agent's explicit
+    /// repair request) is not terminal — an operator can return it to Ready — so it is surfaced on
+    /// Project.CurrentError instead of being left invisible.
+    /// </summary>
+    private async Task<ProjectCompletionGateResult> HandleIncompleteWorkAsync(
+        Project project, IReadOnlyList<WorkItem> workItems, CancellationToken cancellationToken)
+    {
+        var deadEnds = workItems
+            .Where(x => x.Status is nameof(WorkItemStatus.Failed) or nameof(WorkItemStatus.Cancelled))
+            .ToList();
+        var blocked = workItems.Where(x => x.Status == nameof(WorkItemStatus.Blocked)).ToList();
+
+        if (deadEnds.Count == 0 && blocked.Count == 0)
+        {
+            return new ProjectCompletionGateResult(ProjectCompletionGateAction.None, null);
+        }
+
+        if (await _agentRuns.HasActiveRunsForProjectAsync(project.Id, cancellationToken))
+        {
+            return new ProjectCompletionGateResult(
+                ProjectCompletionGateAction.None, "Active AgentRuns remain for the project.");
+        }
+
+        if (deadEnds.Count > 0)
+        {
+            var reason = "Required WorkItem(s) cannot complete: " + Describe(deadEnds);
+            project.CurrentError = reason;
+
+            return await TryTransitionAsync(project, ProjectStatus.Failed, cancellationToken)
+                ? new ProjectCompletionGateResult(ProjectCompletionGateAction.Failed, reason)
+                : new ProjectCompletionGateResult(ProjectCompletionGateAction.None, null);
+        }
+
+        var waiting = "Waiting for human action: blocked WorkItem(s) " + Describe(blocked);
+
+        if (project.CurrentError != waiting)
+        {
+            project.CurrentError = waiting;
+            project.UpdatedAtUtc = DateTime.UtcNow;
+
+            try
+            {
+                await _projects.SaveChangesAsync(cancellationToken);
+            }
+            catch (ConcurrencyConflictException)
+            {
+                _logger.LogInformation("ProjectCompletionGateLostRace ProjectId={ProjectId} Target=BlockedDiagnostic", project.Id);
+            }
+        }
+
+        return new ProjectCompletionGateResult(ProjectCompletionGateAction.None, waiting);
+    }
+
+    private static string Describe(IEnumerable<WorkItem> items) => string.Join("; ", items
+        .OrderBy(x => x.CreatedAtUtc)
+        .Select(x => $"'{x.Title}' ({x.Id}) is {x.Status}: {x.CurrentError ?? "(no error recorded)"}"));
 
     private static bool AllRequiredWorkItemsCompleted(IReadOnlyList<WorkItem> workItems) =>
         workItems.Count > 0 && workItems.All(x => x.Status == WorkItemStatus.Completed.ToString());

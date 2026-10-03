@@ -29,14 +29,6 @@ public sealed class HermesSmokeTest
             return;
         }
 
-        var dataVolume = Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_DATA");
-        if (string.IsNullOrWhiteSpace(dataVolume))
-        {
-            dataVolume = Directory.Exists(@"D:\Project\.hermes")
-                ? @"D:\Project\.hermes"
-                : Path.Combine(Path.GetTempPath(), "ai-factory-hermes-smoke-data");
-        }
-
         var liveBaseUrl = Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_BASE_URL");
         var liveSecretName = Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_API_KEY_SECRET") ?? "OPENROUTER_API_KEY";
         var liveModel = Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_MODEL");
@@ -44,7 +36,6 @@ public sealed class HermesSmokeTest
         var options = new HermesOptions
         {
             DockerImage = Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_IMAGE") ?? "nousresearch/hermes-agent:0.20.6",
-            DataVolume = dataVolume,
             WorkspaceRoot = Path.Combine(Path.GetTempPath(), "ai-factory-hermes-smoke-workspace"),
             TimeoutSeconds = 120,
             MaxOutputLength = 20_000,
@@ -60,7 +51,6 @@ public sealed class HermesSmokeTest
             options.AdditionalEnvironmentVariables["OPENROUTER_BASE_URL"] = liveBaseUrl;
         }
 
-        Directory.CreateDirectory(options.DataVolume);
         Directory.CreateDirectory(options.WorkspaceRoot);
 
         var secretProvider = new AI.Factory.Infrastructure.Configuration.EnvironmentSecretProvider(

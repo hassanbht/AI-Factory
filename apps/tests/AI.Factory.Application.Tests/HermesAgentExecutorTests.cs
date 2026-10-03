@@ -11,10 +11,13 @@ public sealed class HermesAgentExecutorTests
     {
         private readonly Func<ProcessRunRequest, ProcessRunResult> _respond;
         private readonly Exception? _throwOnRun;
+        private readonly Action<ProcessRunRequest>? _writeReport;
 
-        public FakeProcessRunner(Func<ProcessRunRequest, ProcessRunResult> respond)
+        /// <param name="writeReport">What the scripted Hermes leaves as its run report; defaults to a completed run.</param>
+        public FakeProcessRunner(Func<ProcessRunRequest, ProcessRunResult> respond, Action<ProcessRunRequest>? writeReport = null)
         {
             _respond = respond;
+            _writeReport = writeReport ?? (r => HermesRunReportFake.Write(r));
         }
 
         public FakeProcessRunner(Exception throwOnRun)
@@ -41,7 +44,13 @@ public sealed class HermesAgentExecutorTests
                 throw _throwOnRun;
             }
 
-            return Task.FromResult(_respond(request));
+            var result = _respond(request);
+            if (!result.TimedOut)
+            {
+                _writeReport?.Invoke(request);
+            }
+
+            return Task.FromResult(result);
         }
     }
 
@@ -50,7 +59,6 @@ public sealed class HermesAgentExecutorTests
         return new HermesOptions
         {
             DockerImage = "test/image:latest",
-            DataVolume = "/host/data",
             WorkspaceRoot = Path.Combine(Path.GetTempPath(), "ai-factory-hermes-tests"),
             TimeoutSeconds = 60,
             MaxOutputLength = maxOutputLength
@@ -109,6 +117,87 @@ public sealed class HermesAgentExecutorTests
 
         Assert.False(result.Success);
         Assert.Equal("boom", result.Error);
+    }
+
+    // Phase L — exit 0 alone never proves success: Hermes 0.20.6 writes its run report on every
+    // terminal path of `-z`, so a run is successful only with a report saying it completed.
+    [Theory]
+    [InlineData(null, HermesAgentExecutor.ReportUnavailableError)]                       // report missing
+    [InlineData("", HermesAgentExecutor.ReportUnavailableError)]                         // empty
+    [InlineData("{\"failed\": fal", HermesAgentExecutor.ReportUnavailableError)]         // malformed
+    [InlineData("[]", HermesAgentExecutor.ReportUnavailableError)]                       // not an object
+    [InlineData("{\"failed\": false}", HermesAgentExecutor.RunIncompleteError)]          // no completion claim
+    [InlineData("{\"failed\": false, \"completed\": false, \"partial\": true}", HermesAgentExecutor.RunIncompleteError)]
+    [InlineData("{\"failed\": false, \"completed\": \"true\"}", HermesAgentExecutor.RunIncompleteError)] // not a JSON true
+    [InlineData("{\"failed\": true, \"completed\": false}", "Hermes reported a failed run (exit code 0): ")]
+    public async Task ExecuteAsync_ExitZero_WithoutACompletedRunReport_IsNeverSuccess_AndNeverRetried(
+        string? report, string expectedError)
+    {
+        var workspace = Directory.CreateTempSubdirectory("hermes-report-").FullName;
+        try
+        {
+            var runner = new FakeProcessRunner(
+                _ => new ProcessRunResult(0, "looks done", string.Empty, TimedOut: false),
+                writeReport: r => HermesRunReportFake.WriteRaw(r, report));
+            var executor = new HermesAgentExecutor(MakeOptions(), runner, NullLogger<HermesAgentExecutor>.Instance);
+
+            var result = await executor.ExecuteAsync(new AgentExecutionRequest("coder", null, "do the task", workspace));
+
+            Assert.False(result.Success);
+            Assert.Equal(0, result.ExitCode);
+            Assert.StartsWith(expectedError, result.Error);
+            Assert.False(AgentExecutionFailureClassifier.IsTransientLaunchFailure(result));
+            Assert.Empty(Directory.GetFiles(workspace, ".aif-hermes-run-*"));
+        }
+        finally
+        {
+            Directory.Delete(workspace, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ReportPlacedBeforeTheLaunch_OrOversized_NeverCountsAsSuccess()
+    {
+        var workspace = Directory.CreateTempSubdirectory("hermes-report-").FullName;
+        try
+        {
+            var runId = Guid.NewGuid();
+            var reportPath = Path.Combine(workspace, HermesAgentExecutor.RunReportFileName(runId));
+            var executor = (Action<ProcessRunRequest> writeReport) => new HermesAgentExecutor(
+                MakeOptions(),
+                new FakeProcessRunner(_ => new ProcessRunResult(0, "done", string.Empty, TimedOut: false), writeReport),
+                NullLogger<HermesAgentExecutor>.Instance);
+            var request = new AgentExecutionRequest("coder", null, "do the task", workspace, AgentRunId: runId);
+
+            // A forged/stale "completed" report left in the agent-writable workspace; this launch writes none.
+            File.WriteAllText(reportPath, "{\"failed\": false, \"completed\": true}");
+            var stale = await executor(_ => { }).ExecuteAsync(request);
+
+            // A report far beyond Hermes' few hundred bytes is not its report.
+            var oversized = await executor(r => HermesRunReportFake.WriteRaw(
+                r, "{\"failed\": false, \"completed\": true, \"pad\": \"" + new string('x', 70_000) + "\"}")).ExecuteAsync(request);
+
+            Assert.Equal(HermesAgentExecutor.ReportUnavailableError, stale.Error);
+            Assert.Equal(HermesAgentExecutor.ReportUnavailableError, oversized.Error);
+            Assert.False(stale.Success || oversized.Success);
+            Assert.False(File.Exists(reportPath));
+        }
+        finally
+        {
+            Directory.Delete(workspace, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NonZeroExit_WithASuccessfulRunReport_IsStillFailure()
+    {
+        var runner = new FakeProcessRunner(_ => new ProcessRunResult(1, "done", "agent crashed", TimedOut: false));
+        var executor = new HermesAgentExecutor(MakeOptions(), runner, NullLogger<HermesAgentExecutor>.Instance);
+
+        var result = await executor.ExecuteAsync(new AgentExecutionRequest("coder", null, "do the task", string.Empty));
+
+        Assert.False(result.Success);
+        Assert.Equal("agent crashed", result.Error);
     }
 
     [Fact]

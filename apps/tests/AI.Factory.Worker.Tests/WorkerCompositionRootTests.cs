@@ -90,7 +90,6 @@ public sealed class WorkerCompositionRootTests : IDisposable
     [InlineData(typeof(ITestExecutor))]
     [InlineData(typeof(ICodeReviewer))]
     [InlineData(typeof(IEvaluationEngine))]
-    [InlineData(typeof(ITaskPlanner))]
     [InlineData(typeof(IAuditLogger))]
     [InlineData(typeof(IOrchestrationRunRepository))]
     [InlineData(typeof(IOrchestrationProgressReporter))]
@@ -177,22 +176,43 @@ public sealed class WorkerCompositionRootTests : IDisposable
     }
 
     [Fact]
-    public void ExecutionAdapterRegistry_ContainsHermesAndOpenHandsAdapters()
+    public void ExecutionAdapterRegistry_ContainsAllFourRuntimeAdapters()
     {
         using var scope = _host.Services.CreateScope();
 
         var registry = scope.ServiceProvider
             .GetRequiredService<AI.Factory.Application.Abstractions.Execution.IExecutionAdapterRegistry>();
 
-        Assert.Equal(new[] { "Hermes", "OpenHands" }, registry.Keys);
+        Assert.Equal(new[] { "ClaudeCode", "Codex", "Hermes", "OpenHands" }, registry.Keys);
         Assert.True(registry.TryGet("Hermes", out var hermesAdapter));
         Assert.IsType<AI.Factory.Infrastructure.Agents.HermesExecutionAdapter>(hermesAdapter);
         Assert.True(registry.TryGet("OpenHands", out var openHandsAdapter));
         Assert.IsType<AI.Factory.Infrastructure.Agents.OpenHands.OpenHandsExecutionAdapter>(openHandsAdapter);
         var adapters = scope.ServiceProvider.GetServices<AI.Factory.Application.Abstractions.Execution.IExecutionAdapter>().ToArray();
-        Assert.Equal(2, adapters.Length);
+        Assert.Equal(4, adapters.Length);
         Assert.IsType<AI.Factory.Infrastructure.Agents.ResilienceAgentExecutorDecorator>(
             scope.ServiceProvider.GetRequiredService<IAgentExecutor>());
+    }
+
+    // Phase K — both production runtimes resolve every run through the gateway resolver, so neither
+    // can fall back to runtime-local transport settings (OpenHands fails closed without one; Hermes
+    // checks its configured provider/credential/endpoint against the routed gateway).
+    [Fact]
+    public void ProductionRuntimes_AreWiredToTheModelGatewayResolver()
+    {
+        using var scope = _host.Services.CreateScope();
+        var services = scope.ServiceProvider;
+        var resolver = services.GetRequiredService<AI.Factory.Application.Gateway.ModelGatewayResolver>();
+
+        static object? GatewayResolverOf(object runtime) => runtime.GetType()
+            .GetField("_gatewayResolver", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(runtime);
+
+        Assert.Same(resolver, GatewayResolverOf(services.GetRequiredService<AI.Factory.Infrastructure.Agents.HermesAgentExecutor>()));
+
+        var adapters = services.GetRequiredService<AI.Factory.Application.Abstractions.Execution.IExecutionAdapterRegistry>();
+        Assert.True(adapters.TryGet("OpenHands", out var openHands));
+        Assert.Same(resolver, GatewayResolverOf(openHands!));
     }
 
     [Fact]
@@ -273,6 +293,24 @@ public sealed class WorkerCompositionRootTests : IDisposable
         Assert.Equal("Hermes", Assert.Single(options.Profiles).Value.Adapter);
         Assert.Empty(options.AgentTypeProfiles);
         Assert.Equal("Hermes", resolver.Resolve("Implementation").AdapterKey);
+    }
+
+    /// <summary>
+    /// Phase M — orphan recovery enumerates every runtime lifecycle manager (containers AND local CLI
+    /// processes), while the single-instance resolution the OpenHands adapter uses stays the Docker one.
+    /// </summary>
+    [Fact]
+    public void RuntimeLifecycleManagers_DockerIsTheSingleResolution_AndRecoverySeesBoth()
+    {
+        using var scope = _host.Services.CreateScope();
+
+        Assert.IsType<AI.Factory.Infrastructure.Agents.DockerContainerLifecycleManager>(
+            scope.ServiceProvider.GetRequiredService<AI.Factory.Application.Abstractions.Execution.IContainerLifecycleManager>());
+
+        var all = scope.ServiceProvider.GetServices<AI.Factory.Application.Abstractions.Execution.IContainerLifecycleManager>().ToArray();
+        Assert.Contains(all, m => m is AI.Factory.Infrastructure.Agents.DockerContainerLifecycleManager);
+        Assert.Contains(all, m => m is AI.Factory.Infrastructure.Agents.Cli.LocalProcessLifecycleManager);
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<AgentRunOrphanRecovery>());
     }
 
     [Fact]

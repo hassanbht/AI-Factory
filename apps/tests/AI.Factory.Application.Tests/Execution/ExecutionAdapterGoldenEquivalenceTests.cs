@@ -37,7 +37,8 @@ namespace AI.Factory.Application.Tests.Execution;
 /// The one intended difference: structured-result metadata now also carries
 /// <c>ExecutionAdapter</c> and <c>ExitReason</c> for runs an adapter executed. Those
 /// two keys are asserted explicitly per scenario and then removed before the
-/// baseline comparison; every other byte must match. Normalized values: artifact
+/// baseline comparison; every other byte must match. Phase J likewise adds <c>Gateway</c>
+/// (and <c>GatewayFailure</c> on a gateway-reported failure), removed here the same way. Normalized values: artifact
 /// ids (fresh Guids per database), the temp workspace path and line endings
 /// (the baseline was captured on Windows).
 /// </summary>
@@ -366,6 +367,10 @@ public sealed class ExecutionAdapterGoldenEquivalenceTests : IDisposable
                         break;
                     case "ExitReason":
                         exitReason = value;
+                        break;
+                    // Phase J routing-observability additions (asserted in GatewayFailureAgentRunEndToEndTests).
+                    case "Gateway":
+                    case "GatewayFailure":
                         break;
                     default:
                         metadata[key] = value;

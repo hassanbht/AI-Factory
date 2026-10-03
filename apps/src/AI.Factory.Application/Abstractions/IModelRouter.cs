@@ -66,10 +66,9 @@ public sealed class ModelCapability
     public bool IsAvailable { get; set; } = true;
 
     /// <summary>
-    /// AI capabilities (see <see cref="AiCapability"/>, matched by name) this
-    /// model advertises support for. Empty means the model is not eligible
-    /// for capability-based routing via <see cref="IAiModelRouter"/> — it
-    /// only participates in the legacy task-category routing above.
+    /// Capability names this model advertises (configuration metadata). Phase K: the
+    /// capability-based completion router that consumed them was removed as dead code; routing
+    /// is the task-category routing above.
     /// </summary>
     public List<string> Capabilities { get; set; } = new();
 }

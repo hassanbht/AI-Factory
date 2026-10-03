@@ -87,6 +87,27 @@ public interface IAgentRunRepository
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Phase M — Running AgentRuns whose last heartbeat (UpdatedAtUtc) predates the cutoff: the
+    /// candidates for orphan recovery. Read-only.
+    /// </summary>
+    Task<IReadOnlyList<AgentRun>> GetRunningWithoutHeartbeatSinceAsync(
+        DateTime heartbeatCutoffUtc,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Phase M — terminates ONE orphaned run (Running -> Failed, Infrastructure,
+    /// <see cref="AgentRunRecovery.OrphanedMarker"/> reason) only if it is still Running and still
+    /// without a heartbeat since the cutoff, under its optimistic-concurrency token. Returns the
+    /// recovered run, or null when it heartbeated, finished, or another Worker recovered it first —
+    /// so overlapping Workers recover each run exactly once.
+    /// </summary>
+    Task<AgentRun?> TryRecoverOrphanedRunAsync(
+        Guid agentRunId,
+        DateTime heartbeatCutoffUtc,
+        string reason,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Phase 18.27 — periodic heartbeat for an active AgentRun. Updates
     /// UpdatedAtUtc under optimistic concurrency so that multi-worker recovery
     /// can distinguish healthy, executing runs from dead worker orphans.

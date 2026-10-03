@@ -232,7 +232,23 @@ public sealed class ProjectLifecycleOrchestrator : IProjectLifecycleOrchestrator
 
         if (plannerRun is null)
         {
-            var created = await _planner.GenerateAsync(project.Id, cancellationToken);
+            AgentRun created;
+
+            try
+            {
+                created = await _planner.GenerateAsync(project.Id, cancellationToken);
+            }
+            catch (ValidationException ex)
+            {
+                // Phase M — benchmark finding: a fresh database has no Planner AgentDefinition, and
+                // this threw on every scheduler cycle while the Project sat in Planning with an empty
+                // CurrentError — unbounded and invisible. It is a configuration fault, not a transient one.
+                return await FailClosedAsync(
+                    project,
+                    $"Planner could not be dispatched: {ex.Message} Register the default AgentDefinitions "
+                        + "(scripts/bootstrap-factory.ps1, or POST /api/agents/definitions) and start a new project.",
+                    cancellationToken);
+            }
 
             _logger.LogInformation(
                 "ProjectLifecyclePlannerStarted ProjectId={ProjectId} AgentRunId={AgentRunId}", project.Id, created.Id);

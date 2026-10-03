@@ -1,0 +1,10 @@
+# Per-run config layer: archon workflow run ... --config bench/archon-vs-factory/archon-config.yaml
+# Pins every tier to the benchmark model so Archon and AI Factory use the same model.
+assistants:
+  claude:
+    model: claude-haiku-4-5
+    claudeBinaryPath: C:\Users\h.behtooei\AppData\Local\Microsoft\WinGet\Packages\Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe\claude.exe
+tiers:
+  large: { provider: claude, model: claude-haiku-4-5 }
+  medium: { provider: claude, model: claude-haiku-4-5 }
+  small: { provider: claude, model: claude-haiku-4-5 }

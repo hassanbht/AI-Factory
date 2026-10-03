@@ -134,40 +134,10 @@ public sealed class ConfigurationValidationTests
     }
 
     [Fact]
-    public void AiRoutingOptions_ValidatesSuccessfully_WithDefaultMaxFallbackAttempts()
-    {
-        var options = new AiRoutingOptions();
-
-        options.Validate(); // Does not throw
-    }
-
-    [Theory]
-    [InlineData(0)]
-    [InlineData(-1)]
-    public void AiRoutingOptions_Throws_WhenMaxFallbackAttemptsBelowOne(int maxFallbackAttempts)
-    {
-        var options = new AiRoutingOptions { MaxFallbackAttempts = maxFallbackAttempts };
-
-        var ex = Assert.Throws<InvalidOperationException>(() => options.Validate());
-        Assert.Contains("MaxFallbackAttempts must be >= 1", ex.Message);
-    }
-
-    [Fact]
-    public void AiRoutingOptions_Throws_WhenMaxFallbackAttemptsExceedsBound()
-    {
-        var options = new AiRoutingOptions { MaxFallbackAttempts = 11 };
-
-        var ex = Assert.Throws<InvalidOperationException>(() => options.Validate());
-        Assert.Contains("must be <= 10", ex.Message);
-    }
-
-    [Fact]
-    public void ProviderCredentialSettings_DefaultsToOpenAiCompatible_WithZeroPriority()
+    public void ProviderCredentialSettings_DefaultsToOpenAiCompatible()
     {
         var settings = new ProviderCredentialSettings();
 
         Assert.Equal(AiModelProviderKind.OpenAiCompatible, settings.ProviderType);
-        Assert.Equal(0, settings.Priority);
-        Assert.Equal(60, settings.TimeoutSeconds);
     }
 }

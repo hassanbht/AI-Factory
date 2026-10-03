@@ -309,7 +309,18 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
         // persisting it must not itself be abortable by the same token that
         // just cancelled the run, or a cancelled/timed-out AgentRun would be
         // left stuck at Running forever with no terminal status ever saved.
-        await _agentRunRepository.UpdateAsync(run, CancellationToken.None);
+        try
+        {
+            await _agentRunRepository.UpdateAsync(run, CancellationToken.None);
+        }
+        catch (ConcurrencyConflictException)
+        {
+            // Phase M — another writer (cancellation, orphan recovery) already decided this run's lifecycle;
+            // the repository refuses to overwrite it. That writer owns the outcome and the WorkItem sync.
+            _logger.LogWarning(
+                "AgentRunLostLifecycleRace AgentRunId={AgentRunId} AttemptedStatus={Status}", run.Id, finalStatus);
+            return NotExecuted(run, "AgentRun lifecycle was decided by another writer (cancelled or recovered) during execution.");
+        }
 
         if (runtimeResult.Success)
         {
@@ -624,7 +635,57 @@ public sealed class AgentOrchestrator : IAgentOrchestrator
             metadata["ExitReason"] = runtimeResult.ExitReason;
         }
 
+        // Phase J — routing observability. "Provider" above is the model router's provider
+        // id; "Gateway" is the model gateway the run was routed through (ModelRoute.GatewayKey
+        // as the adapter received it). Only recorded when an adapter ran.
+        if (!string.IsNullOrWhiteSpace(runtimeResult.ExecutionAdapter)
+            && !string.IsNullOrWhiteSpace(runtimeResult.Provider))
+        {
+            metadata["Gateway"] = runtimeResult.Provider;
+        }
+
+        if (!string.IsNullOrWhiteSpace(runtimeResult.GatewayFailure))
+        {
+            metadata["GatewayFailure"] = runtimeResult.GatewayFailure;
+        }
+
+        AddRuntimeReport(metadata, runtimeResult.RuntimeReport);
+
         return baseResult with { Metadata = metadata };
+    }
+
+    /// <summary>
+    /// Phase M — persists what the runtime itself reported (session, cost, request id, version,
+    /// turns, timestamps) as AgentRun structured-result metadata. A field the runtime did not expose
+    /// is simply absent — absence means NOT_AVAILABLE, never zero. Token counts keep their own
+    /// AgentRun columns.
+    /// </summary>
+    private static void AddRuntimeReport(Dictionary<string, string> metadata, Abstractions.Execution.ExecutionRuntimeReport? report)
+    {
+        if (report is null)
+        {
+            return;
+        }
+
+        void Put(string key, string? value)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                metadata[key] = value;
+            }
+        }
+
+        var invariant = System.Globalization.CultureInfo.InvariantCulture;
+        Put("RuntimeVersion", report.RuntimeVersion);
+        Put("RuntimeSessionId", report.SessionId);
+        Put("RuntimeStartedAtUtc", report.StartedAt?.UtcDateTime.ToString("O", invariant));
+        Put("RuntimeCompletedAtUtc", report.CompletedAt?.UtcDateTime.ToString("O", invariant));
+        Put("RuntimeExitCode", report.ExitCode?.ToString(invariant));
+        Put("CostUsd", report.CostUsd?.ToString(invariant));
+        Put("CostSource", report.CostUsd is null ? null : report.CostSource);
+        Put("UpstreamRequestId", report.UpstreamRequestId);
+        Put("RuntimeTurns", report.Turns?.ToString(invariant));
+        Put("RuntimeReportedModel", report.ReportedModel);
     }
 
     private static StructuredResultStatus MapToStructuredStatus(AgentRunStatus status) => status switch

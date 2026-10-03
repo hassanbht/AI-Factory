@@ -41,6 +41,9 @@ public sealed class BenchmarkRunRecord
     public bool CleanupVerified { get; set; }
     public string DiffSummary { get; set; } = string.Empty;
     public string Notes { get; set; } = string.Empty;
+    public string? ErrorMessage { get; set; }
+    public string? GatewayFailure { get; set; }
+    public string? WorkItemStatus { get; set; }
 
     public static readonly JsonSerializerOptions JsonOptions = new()
     {

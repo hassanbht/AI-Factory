@@ -107,18 +107,6 @@ public interface IOperationalMetrics
 
     void RecordRestoreFailed();
 
-    void RecordAiRequestStarted();
-
-    void RecordAiRequestSucceeded(long? durationMs);
-
-    void RecordAiRequestFailed();
-
-    void RecordAiProviderFailure();
-
-    void RecordAiRateLimited();
-
-    void RecordAiRoutingFallback();
-
     // Phase 18.1.6 — AgentRun lifecycle counters. Deliberately separate from
     // the existing RecordAgentExecution(success, durationMs) (IAgentExecutor-
     // level, unchanged) — these answer "how many runs reached each terminal
@@ -154,6 +142,11 @@ public interface IOperationalMetrics
     OperationalMetricsSnapshot GetSnapshot();
 }
 
+/// <remarks>
+/// Phase L — <c>AiRequests</c> … <c>TotalAiRequestDurationMs</c> are RETAINED FOR CONTRACT COMPATIBILITY:
+/// served by GET /api/operations/metrics, but no producer exists since Phase K removed the in-process
+/// model-provider stack (the runtimes make every model request). Always 0 / null; never a measurement.
+/// </remarks>
 public sealed record OperationalMetricsSnapshot(
     DateTime GeneratedAtUtc,
     long OperationsStarted,
@@ -322,14 +315,6 @@ public sealed class OperationalMetrics : IOperationalMetrics
     private long _backupValidated;
     private long _restoreSucceeded;
     private long _restoreFailed;
-
-    private long _aiRequests;
-    private long _aiRequestsSucceeded;
-    private long _aiRequestsFailed;
-    private long _aiProviderFailures;
-    private long _aiRateLimited;
-    private long _aiRoutingFallbacks;
-    private readonly DurationAccumulator _aiRequestDuration = new();
 
     private long _agentRunsCreated;
     private long _agentRunsStarted;
@@ -506,19 +491,6 @@ public sealed class OperationalMetrics : IOperationalMetrics
     public void RecordRestoreSucceeded() => Interlocked.Increment(ref _restoreSucceeded);
     public void RecordRestoreFailed() => Interlocked.Increment(ref _restoreFailed);
 
-    public void RecordAiRequestStarted() => Interlocked.Increment(ref _aiRequests);
-
-    public void RecordAiRequestSucceeded(long? durationMs)
-    {
-        Interlocked.Increment(ref _aiRequestsSucceeded);
-        _aiRequestDuration.Add(durationMs);
-    }
-
-    public void RecordAiRequestFailed() => Interlocked.Increment(ref _aiRequestsFailed);
-    public void RecordAiProviderFailure() => Interlocked.Increment(ref _aiProviderFailures);
-    public void RecordAiRateLimited() => Interlocked.Increment(ref _aiRateLimited);
-    public void RecordAiRoutingFallback() => Interlocked.Increment(ref _aiRoutingFallbacks);
-
     public void RecordAgentRunCreated() => Interlocked.Increment(ref _agentRunsCreated);
     public void RecordAgentRunStarted() => Interlocked.Increment(ref _agentRunsStarted);
     public void RecordAgentRunSucceeded() => Interlocked.Increment(ref _agentRunsSucceeded);
@@ -607,14 +579,14 @@ public sealed class OperationalMetrics : IOperationalMetrics
             Interlocked.Read(ref _backupValidated),
             Interlocked.Read(ref _restoreSucceeded),
             Interlocked.Read(ref _restoreFailed),
-            Interlocked.Read(ref _aiRequests),
-            Interlocked.Read(ref _aiRequestsSucceeded),
-            Interlocked.Read(ref _aiRequestsFailed),
-            Interlocked.Read(ref _aiProviderFailures),
-            Interlocked.Read(ref _aiRateLimited),
-            Interlocked.Read(ref _aiRoutingFallbacks),
-            _aiRequestDuration.Average,
-            _aiRequestDuration.Total,
+            AiRequests: 0,
+            AiRequestsSucceeded: 0,
+            AiRequestsFailed: 0,
+            AiProviderFailures: 0,
+            AiRateLimited: 0,
+            AiRoutingFallbacks: 0,
+            AverageAiRequestDurationMs: null,
+            TotalAiRequestDurationMs: null,
             Interlocked.Read(ref _agentRunsCreated),
             Interlocked.Read(ref _agentRunsStarted),
             Interlocked.Read(ref _agentRunsSucceeded),

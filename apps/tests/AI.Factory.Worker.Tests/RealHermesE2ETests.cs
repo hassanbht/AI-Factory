@@ -1077,7 +1077,6 @@ public sealed class RealHermesE2ETests
         var hermesOptions = new HermesOptions
         {
             DockerImage = Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_IMAGE") ?? "nousresearch/hermes-agent:0.20.6",
-            DataVolume = dataVolume,
             WorkspaceRoot = workspaceRoot,
             TimeoutSeconds = 120,
             MaxOutputLength = 20_000,
@@ -1091,6 +1090,7 @@ public sealed class RealHermesE2ETests
             ProviderApiKeySecretName = LiveWorkerHost.LiveApiKeySecretName
         };
         hermesOptions.AdditionalEnvironmentVariables["OPENROUTER_BASE_URL"] = OmniRouteBaseUrl;
+        LiveWorkerHost.RouteDefaultGatewayTo(builder.Services, OmniRouteBaseUrl, LiveWorkerHost.LiveApiKeySecretName);
         configureHermes?.Invoke(hermesOptions);
 
         var hermesDescriptor = builder.Services.Single(d => d.ServiceType == typeof(HermesOptions));

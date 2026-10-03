@@ -96,7 +96,6 @@ public sealed class ReviewExecutionLiveTests : IDisposable
             NetworkMode = "bridge",
             Provider = "openrouter",
             WorkspaceRoot = _tempRoot,
-            DataVolume = Path.Combine(_tempRoot, "hermes-data"),
             TimeoutSeconds = 180,
             ProviderApiKeyEnvironmentVariable = "OPENROUTER_API_KEY",
             ProviderApiKeySecretName = "OPENROUTER_API_KEY",
@@ -106,7 +105,6 @@ public sealed class ReviewExecutionLiveTests : IDisposable
                 ["OPENROUTER_API_KEY"] = apiKey
             }
         };
-        Directory.CreateDirectory(hermesOptions.DataVolume);
 
         var secretProvider = new EnvironmentSecretProvider(NullLogger<EnvironmentSecretProvider>.Instance);
         var commandPolicy = new CommandPolicyOptions();

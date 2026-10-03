@@ -71,9 +71,11 @@ public sealed class WindowsPlatformOverlayTests
         Assert.DoesNotContain("/var/lib", factoryDb);
 
         Assert.True(root.TryGetProperty("Hermes", out var hermesSection));
-        var hermesData = hermesSection.GetProperty("DataVolume").GetString();
-        Assert.NotNull(hermesData);
-        Assert.Contains("%ProgramData%", hermesData);
+        var hermesWorkspace = hermesSection.GetProperty("WorkspaceRoot").GetString();
+        Assert.NotNull(hermesWorkspace);
+        Assert.Contains("%ProgramData%", hermesWorkspace);
+        // Phase M — Hermes' home is a per-run anonymous volume, never a configured host path.
+        Assert.False(hermesSection.TryGetProperty("DataVolume", out _));
 
         Assert.True(root.TryGetProperty("AgentWorkspace", out var workspaceSection));
         var projectsBase = workspaceSection.GetProperty("ProjectsBaseDirectory").GetString();

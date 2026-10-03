@@ -1,7 +1,9 @@
 namespace AI.Factory.Application.Abstractions.Gateway;
 
 /// <summary>
-/// Normalised failure taxonomy for model gateway operations.
+/// Normalised failure taxonomy for a model gateway rejection, derived only from an HTTP status
+/// the runtime explicitly reported (see ModelGatewayFailureClassifier). Cancellation is not a
+/// gateway reason — it is <c>ExecutionOutcomeStatus.Cancelled</c>.
 /// </summary>
 public enum ModelGatewayFailureReason
 {
@@ -13,18 +15,6 @@ public enum ModelGatewayFailureReason
     ModelUnavailable,
     ProviderUnavailable,
     Timeout,
-    Cancellation,
-    TransportFailure,
     GatewayUnavailable,
-    UnsupportedFeature,
     Unknown
-}
-
-public sealed record ModelGatewayFailure(
-    ModelGatewayFailureReason Reason,
-    string Message,
-    int? HttpStatusCode = null,
-    TimeSpan? RetryAfter = null)
-{
-    public int? StatusCode => HttpStatusCode;
 }

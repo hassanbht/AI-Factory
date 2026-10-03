@@ -105,7 +105,7 @@ public sealed class ExecutionAdapterArchitectureTests
         var forbidden = new[]
         {
             "hermes", "openhands", "docker", "dbcontext", "http://", "https://", "processstartinfo",
-            "system.diagnostics.process", "--provider", "-z", "openrouter", "omniroute"
+            "system.diagnostics.process", "--provider", "-z", "openrouter", "omniroute", "claude", "codex", "anthropic"
         };
 
         var offenders = files
@@ -118,7 +118,7 @@ public sealed class ExecutionAdapterArchitectureTests
     }
 
     [Fact]
-    public void ExecutionAdapters_AreHermesAndOpenHands_NoFuturePlaceholders()
+    public void ExecutionAdapters_AreExactlyTheFourRuntimes_NoFuturePlaceholders()
     {
         var adapters = new[] { ApplicationAssembly, InfrastructureAssembly }
             .SelectMany(a => a.GetTypes())
@@ -126,7 +126,12 @@ public sealed class ExecutionAdapterArchitectureTests
             .OrderBy(t => t.Name, StringComparer.Ordinal)
             .ToArray();
 
-        var expected = new[] { typeof(HermesExecutionAdapter), typeof(AI.Factory.Infrastructure.Agents.OpenHands.OpenHandsExecutionAdapter) }
+        var expected = new[]
+            {
+                typeof(HermesExecutionAdapter), typeof(AI.Factory.Infrastructure.Agents.OpenHands.OpenHandsExecutionAdapter),
+                typeof(AI.Factory.Infrastructure.Agents.Cli.ClaudeCodeExecutionAdapter),
+                typeof(AI.Factory.Infrastructure.Agents.Cli.CodexExecutionAdapter)
+            }
             .OrderBy(t => t.Name, StringComparer.Ordinal)
             .ToArray();
 

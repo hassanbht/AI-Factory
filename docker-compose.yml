@@ -133,7 +133,6 @@ services:
       # is resolved at run time from the OPENROUTER_API_KEY environment secret via
       # EnvironmentSecretProvider and is never written to any compose/appsettings file.
       - Hermes__WorkspaceVolumeName=ai_factory_production_workspace
-      - Hermes__DataVolume=ai_factory_production_hermes
       - AgentWorkspace__ProjectsBaseDirectory=/var/lib/ai-factory/workspace
       - AgentWorkspace__AllowedRoot=/var/lib/ai-factory/workspace
     volumes:

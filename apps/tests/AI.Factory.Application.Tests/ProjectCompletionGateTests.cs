@@ -284,8 +284,6 @@ public sealed class ProjectCompletionGateTests : IDisposable
     [InlineData(WorkItemStatus.Testing)]
     [InlineData(WorkItemStatus.Repairing)]
     [InlineData(WorkItemStatus.Blocked)]
-    [InlineData(WorkItemStatus.Failed)]
-    [InlineData(WorkItemStatus.Cancelled)]
     public async Task ProjectWithNonCompletedWorkItem_IsNotEligible(WorkItemStatus status)
     {
         var projectId = await SeedProjectAtStatusAsync(ProjectStatus.Implementation, $"P-{status}");
@@ -297,6 +295,67 @@ public sealed class ProjectCompletionGateTests : IDisposable
 
         Assert.Equal(ProjectCompletionGateAction.None, result.Action);
         Assert.Equal(ProjectStatus.Implementation, project.Status);
+    }
+
+    // ---------------- Phase M — dead-end WorkItems never leave the Project stuck ----------------
+
+    /// <summary>
+    /// Regression for benchmark factory-T1-r2: a WorkItem ended Failed (its AgentRun TimedOut) and the
+    /// Project stayed idle in Implementation with an empty CurrentError for 25 minutes.
+    /// </summary>
+    [Theory]
+    [InlineData(WorkItemStatus.Failed)]
+    [InlineData(WorkItemStatus.Cancelled)]
+    public async Task TerminalUnfinishedWorkItem_FailsTheProjectClosed_WithItsReason(WorkItemStatus status)
+    {
+        var projectId = await SeedProjectAtStatusAsync(ProjectStatus.Implementation, $"P-dead-{status}");
+        await SeedWorkItemAtStatusAsync(projectId, "done", WorkItemStatus.Completed);
+        await SeedWorkItemAtStatusAsync(projectId, "Add tests", status);
+
+        var audit = new RecordingAuditLogger();
+        await using var db = new FactoryDbContext(_options);
+        var (project, items) = await LoadAsync(db, projectId);
+        var result = await CreateGate(db, auditLogger: audit).EvaluateAsync(project, items);
+
+        Assert.Equal(ProjectCompletionGateAction.Failed, result.Action);
+        Assert.Equal(ProjectStatus.Failed, project.Status);
+        Assert.Contains("'Add tests'", project.CurrentError);
+        Assert.Contains(status.ToString(), project.CurrentError);
+        Assert.Contains(audit.Entries, e => e.EventType == AuditEventType.WorkflowFailed && e.Outcome == "Failed");
+    }
+
+    [Fact]
+    public async Task TerminalUnfinishedWorkItem_WithAnActiveAgentRun_WaitsForTheRunFirst()
+    {
+        var projectId = await SeedProjectAtStatusAsync(ProjectStatus.Implementation, "P-dead-active");
+        await SeedWorkItemAtStatusAsync(projectId, "A", WorkItemStatus.Failed);
+        await SeedAgentRunAsync(projectId, await SeedAgentDefinitionAsync(), AgentRunStatus.Running);
+
+        await using var db = new FactoryDbContext(_options);
+        var (project, items) = await LoadAsync(db, projectId);
+        var result = await CreateGate(db).EvaluateAsync(project, items);
+
+        Assert.Equal(ProjectCompletionGateAction.None, result.Action);
+        Assert.Equal(ProjectStatus.Implementation, project.Status);
+    }
+
+    [Fact]
+    public async Task BlockedWorkItem_IsSurfacedOnTheProject_WithoutFailingIt()
+    {
+        var projectId = await SeedProjectAtStatusAsync(ProjectStatus.Implementation, "P-blocked");
+        await SeedWorkItemAtStatusAsync(projectId, "Needs repair", WorkItemStatus.Blocked);
+
+        await using (var db = new FactoryDbContext(_options))
+        {
+            var (project, items) = await LoadAsync(db, projectId);
+            await CreateGate(db).EvaluateAsync(project, items);
+        }
+
+        await using var verify = new FactoryDbContext(_options);
+        var persisted = await new ProjectRepository(verify).GetByIdAsync(projectId);
+        Assert.Equal(ProjectStatus.Implementation, persisted!.Status);
+        Assert.StartsWith("Waiting for human action", persisted.CurrentError);
+        Assert.Contains("'Needs repair'", persisted.CurrentError);
     }
 
     [Fact]

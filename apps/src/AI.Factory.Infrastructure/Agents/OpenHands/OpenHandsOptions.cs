@@ -40,21 +40,6 @@ public sealed class OpenHandsOptions
     public string DefaultModel { get; set; } = "deepseek/deepseek-v4-flash-0731";
 
     /// <summary>
-    /// Gateway / provider base URL for model inference (e.g. OpenRouter).
-    /// </summary>
-    public string ProviderBaseUrl { get; set; } = "https://openrouter.ai/api/v1";
-
-    /// <summary>
-    /// Secret name to resolve the provider API key through ISecretProvider.
-    /// </summary>
-    public string ProviderApiKeySecretName { get; set; } = "OPENROUTER_API_KEY";
-
-    /// <summary>
-    /// Environment variable name for the provider API key.
-    /// </summary>
-    public string ProviderApiKeyEnvironmentVariable { get; set; } = "OPENROUTER_API_KEY";
-
-    /// <summary>
     /// Python modules to import at agent server startup to register required tools.
     /// </summary>
     public string ImportModules { get; set; } = "openhands.tools.terminal,openhands.tools.file_editor";

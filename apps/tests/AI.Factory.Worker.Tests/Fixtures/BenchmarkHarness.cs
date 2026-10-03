@@ -6,6 +6,7 @@ using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Agents;
 using AI.Factory.Application.Configuration;
 using AI.Factory.Application.Execution;
+using AI.Factory.Application.Gateway;
 using AI.Factory.Application.Orchestration;
 using AI.Factory.Application.Projects;
 using AI.Factory.Application.Tasks;
@@ -123,7 +124,9 @@ public static class BenchmarkHarness
         string model,
         string? openRouterApiKey = null,
         ITestOutputHelper? output = null,
-        BenchmarkTaskDefinition? task = null)
+        BenchmarkTaskDefinition? task = null,
+        string? gateway = null,
+        string? gatewayBaseUrl = null)
     {
         task ??= BenchmarkTaskDefinition.TaskB_MultiFile();
         var iterationTemp = Path.Combine(Path.GetTempPath(), $"aif-bench-{adapter.ToLowerInvariant()}-{runIndex}-{Guid.NewGuid():N}"[..24]);
@@ -147,7 +150,7 @@ public static class BenchmarkHarness
             output?.WriteLine($"[WARNING] Pre-execution Factory-owned container count is {preContainerCount}, expected 0.");
         }
 
-        using var testHost = BuildHost(adapter, iterationTemp, projectsBase, model, openRouterApiKey);
+        using var testHost = BuildHost(adapter, iterationTemp, projectsBase, model, openRouterApiKey, gateway, gatewayBaseUrl);
 
         Guid projectId, workItemId, agentRunId;
         string resolvedProjectRoot;
@@ -206,12 +209,16 @@ public static class BenchmarkHarness
 
         var verificationSw = Stopwatch.StartNew();
         VerificationResult? verification = null;
+        string? workItemStatus = null;
         await using (var scope = testHost.Host.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<FactoryDbContext>();
             var gate = scope.ServiceProvider.GetRequiredService<IVerificationGate>();
             var project = (await new ProjectRepository(db).GetByIdAsync(projectId))!;
             var workItem = (await new WorkItemRepository(db).GetByIdAsync(workItemId))!;
+            // The Factory's own decision (AgentRunWorker -> AgentRunWorkItemSync), captured
+            // before the harness runs its independent verification below.
+            workItemStatus = workItem.Status;
             verification = await gate.VerifyAsync(project, workItem, CancellationToken.None);
         }
         verificationSw.Stop();
@@ -260,7 +267,12 @@ public static class BenchmarkHarness
         }
 
         var (adapterMeta, exitReason) = ReadAdapterMetadata(finalRun?.StructuredResult);
-        var (inputTokens, outputTokens, totalTokens) = ExtractTokens(finalRun?.StructuredResult);
+        // Phase J — token usage is persisted on the AgentRun columns; the structured-result
+        // metadata has never carried it, so the metadata lookup alone always reported null.
+        var (metaInput, metaOutput, metaTotal) = ExtractTokens(finalRun?.StructuredResult);
+        var inputTokens = finalRun?.PromptTokens ?? metaInput;
+        var outputTokens = finalRun?.CompletionTokens ?? metaOutput;
+        var totalTokens = finalRun?.TotalTokens ?? metaTotal;
 
         var record = new BenchmarkRunRecord
         {
@@ -295,7 +307,10 @@ public static class BenchmarkHarness
             ArtifactCount = artifactCount,
             CleanupVerified = cleanupVerified,
             DiffSummary = Truncate(diffOutput, 500),
-            Notes = $"Verification Summary: {verification?.Summary}"
+            Notes = $"Verification Summary: {verification?.Summary}",
+            ErrorMessage = finalRun?.ErrorMessage,
+            GatewayFailure = ReadMetadata(finalRun?.StructuredResult, "GatewayFailure"),
+            WorkItemStatus = workItemStatus
         };
 
         try { Directory.Delete(iterationTemp, recursive: true); } catch { }
@@ -317,6 +332,25 @@ public static class BenchmarkHarness
         catch
         {
             return (null, null);
+        }
+    }
+
+    private static string? ReadMetadata(string? structuredResult, string key)
+    {
+        if (string.IsNullOrWhiteSpace(structuredResult)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(structuredResult);
+            return doc.RootElement.TryGetProperty("Metadata", out var meta)
+                && meta.ValueKind == JsonValueKind.Object
+                && meta.TryGetProperty(key, out var value)
+                && value.ValueKind == JsonValueKind.String
+                    ? value.GetString()
+                    : null;
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 
@@ -363,7 +397,9 @@ public static class BenchmarkHarness
         string tempDir,
         string projectsBase,
         string model,
-        string? openRouterApiKey)
+        string? openRouterApiKey,
+        string? gateway = null,
+        string? gatewayBaseUrl = null)
     {
         var connection = new SqliteConnection("Data Source=:memory:");
         connection.Open();
@@ -387,7 +423,20 @@ public static class BenchmarkHarness
 
         var executionOptions = (ExecutionOptions)builder.Services
             .Single(d => d.ServiceType == typeof(ExecutionOptions)).ImplementationInstance!;
-        executionOptions.Profiles[adapter] = new ExecutionProfileOptions { Adapter = adapter };
+        executionOptions.Profiles[adapter] = new ExecutionProfileOptions { Adapter = adapter, Gateway = gateway };
+
+        // Phase K — an explicitly routed run says where it goes on the gateway itself (enabled, its
+        // endpoint); the runtime is never pointed elsewhere behind the route's back.
+        if (gateway is not null)
+        {
+            var gateways = (ModelGatewayOptions)builder.Services
+                .Single(d => d.ServiceType == typeof(ModelGatewayOptions)).ImplementationInstance!;
+            gateways.Gateways[gateway].Enabled = true;
+            if (gatewayBaseUrl is not null)
+            {
+                gateways.Gateways[gateway].BaseUrl = gatewayBaseUrl;
+            }
+        }
         executionOptions.DefaultProfile = adapter;
         executionOptions.AgentTypeProfiles["Implementation"] = adapter;
 
@@ -416,9 +465,8 @@ public static class BenchmarkHarness
             var openHands = (OpenHandsOptions)builder.Services
                 .Single(d => d.ServiceType == typeof(OpenHandsOptions)).ImplementationInstance!;
             openHands.NetworkMode = "bridge";
-            openHands.ProviderBaseUrl = ControlledGateway;
-            openHands.ProviderApiKeySecretName = "OPENROUTER_API_KEY";
-            openHands.ProviderApiKeyEnvironmentVariable = "OPENROUTER_API_KEY";
+            // Phase K — endpoint (ControlledGateway) and OPENROUTER_API_KEY come from the default
+            // OpenRouter gateway the profile resolves to, not from OpenHands options.
             openHands.DefaultModel = model;
             openHands.WorkspaceRoot = Path.Combine(tempDir, "oh-ws");
         }

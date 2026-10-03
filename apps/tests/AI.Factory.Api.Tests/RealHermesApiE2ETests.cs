@@ -61,7 +61,6 @@ public sealed class RealHermesApiE2ETests
             var hermesOptions = new HermesOptions
             {
                 DockerImage = Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_IMAGE") ?? "nousresearch/hermes-agent:0.20.6",
-                DataVolume = dataVolume,
                 WorkspaceRoot = workspaceRoot,
                 TimeoutSeconds = 120,
                 MaxOutputLength = 20_000,
@@ -75,6 +74,13 @@ public sealed class RealHermesApiE2ETests
             };
             hermesOptions.AdditionalEnvironmentVariables["OPENROUTER_BASE_URL"] = LiveBaseUrl;
             services.AddSingleton(hermesOptions);
+
+            // Phase K — the routed gateway is the authority for endpoint and credential; Hermes
+            // refuses a provider override that disagrees with it, so the default gateway says so.
+            var gateways = (AI.Factory.Application.Gateway.ModelGatewayOptions)services
+                .Single(d => d.ServiceType == typeof(AI.Factory.Application.Gateway.ModelGatewayOptions)).ImplementationInstance!;
+            gateways.Gateways[gateways.DefaultGateway].BaseUrl = LiveBaseUrl;
+            gateways.Gateways[gateways.DefaultGateway].ApiKeySecretName = LiveApiKeySecretName;
         }));
 
         try

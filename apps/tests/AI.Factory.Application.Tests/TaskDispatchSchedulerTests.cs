@@ -468,12 +468,6 @@ public sealed class TaskDispatchSchedulerTests : IDisposable
         public void RecordBackupValidated() { }
         public void RecordRestoreSucceeded() { }
         public void RecordRestoreFailed() { }
-        public void RecordAiRequestStarted() { }
-        public void RecordAiRequestSucceeded(long? durationMs) { }
-        public void RecordAiRequestFailed() { }
-        public void RecordAiProviderFailure() { }
-        public void RecordAiRateLimited() { }
-        public void RecordAiRoutingFallback() { }
         public void RecordAgentRunCreated() { }
         public void RecordAgentRunStarted() { }
         public void RecordAgentRunSucceeded() { }

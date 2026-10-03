@@ -121,7 +121,7 @@ public sealed class HermesExecutionAdapter : IExecutionAdapter
                 "AgentRuntimeCompleted AgentRunId={AgentRunId} CorrelationId={CorrelationId} DurationMs={DurationMs}",
                 spec.AgentRunId, spec.CorrelationId, durationMs);
 
-            // HermesAgentExecutor reports success only for exit code 0.
+            // HermesAgentExecutor reports success only for exit code 0 without a failed run report.
             return Outcome(
                 spec,
                 ExecutionOutcomeStatus.Succeeded,
@@ -129,12 +129,20 @@ public sealed class HermesExecutionAdapter : IExecutionAdapter
                 error: null,
                 category: null,
                 durationMs,
-                ExitReasons.Exit(result.ExitCode ?? 0));
+                ExitReasons.Exit(result.ExitCode ?? 0),
+                result.Usage,
+                report: result.Report);
         }
 
         var errorMessage = result.Error ?? "Agent execution failed with no further detail.";
-        var isTimeout = errorMessage.Contains("timed out", StringComparison.OrdinalIgnoreCase)
-            || errorMessage.Contains("timeout", StringComparison.OrdinalIgnoreCase);
+        var gatewayFailure = GatewayFailureReason(result, errorMessage);
+
+        // A run Hermes reported as failed (exit code 0) carries the upstream failure text, so
+        // "timeout" words in it mean nothing; only a gateway-stated timeout (HTTP 408/504) does.
+        var isTimeout = result.ExitCode == 0
+            ? gatewayFailure == nameof(Application.Abstractions.Gateway.ModelGatewayFailureReason.Timeout)
+            : errorMessage.Contains("timed out", StringComparison.OrdinalIgnoreCase)
+                || errorMessage.Contains("timeout", StringComparison.OrdinalIgnoreCase);
 
         var failureClassification = _failureClassifier.Classify(errorMessage, isTimeout ? "timeout" : "agent");
 
@@ -160,8 +168,25 @@ public sealed class HermesExecutionAdapter : IExecutionAdapter
             durationMs,
             result.ExitCode is { } exitCode
                 ? ExitReasons.Exit(exitCode)
-                : isTimeout ? ExitReasons.Timeout : ExitReasons.Error);
+                : isTimeout ? ExitReasons.Timeout : ExitReasons.Error,
+            result.Usage,
+            gatewayFailure,
+            result.Report);
     }
+
+    /// <summary>
+    /// The gateway reason Hermes stated (an explicit <c>HTTP nnn</c>). For a run Hermes itself
+    /// reported as failed (exit code 0) the whole output is its failure summary, so it is read
+    /// too — the bounded error text can lose the status line behind start-up output. Phase L: only
+    /// then — on an unproven or incomplete exit-0 run the output is the agent's own text, and an
+    /// "HTTP 429" in it is not a gateway failure.
+    /// </summary>
+    private static string? GatewayFailureReason(AgentExecutionResult result, string errorMessage) =>
+        (ModelGatewayFailureClassifier.FromRuntimeMessage(errorMessage)
+            ?? (errorMessage.StartsWith(HermesAgentExecutor.RuntimeReportedFailurePrefix, StringComparison.Ordinal)
+                ? ModelGatewayFailureClassifier.FromRuntimeMessage(result.Output)
+                : null))
+        ?.ToString();
 
     private static string BuildPrompt(AgentExecutionSpec spec)
     {
@@ -171,8 +196,9 @@ public sealed class HermesExecutionAdapter : IExecutionAdapter
     }
 
     /// <summary>
-    /// Hermes reports no token usage, tool calls or artifact references of its
-    /// own, and runs with the model/gateway the Factory routed.
+    /// Hermes reports no tool calls or artifact references of its own, and runs with the
+    /// model/gateway the Factory routed. Token usage is whatever its run report contained
+    /// (null when none); the gateway failure reason only what its failure text states.
     /// </summary>
     private static ExecutionOutcome Outcome(
         AgentExecutionSpec spec,
@@ -181,17 +207,22 @@ public sealed class HermesExecutionAdapter : IExecutionAdapter
         string? error,
         Domain.Enums.FailureCategory? category,
         long durationMs,
-        string exitReason) => new(
+        string exitReason,
+        ExecutionUsage? usage = null,
+        string? gatewayFailure = null,
+        ExecutionRuntimeReport? report = null) => new(
             status,
             output,
             error,
             category,
             durationMs,
-            Usage: null,
+            Usage: usage,
             ArtifactReferences: Array.Empty<string>(),
             ToolCallNames: Array.Empty<string>(),
             Model: spec.Model,
-            ExitReason: exitReason);
+            ExitReason: exitReason,
+            GatewayFailure: gatewayFailure,
+            Report: report);
 
     /// <summary>
     /// Machine-readable exit reasons: <c>exit:N</c> when the Hermes process ran to

@@ -15,9 +15,12 @@ public static class WorkItemTransitions
         {
             [WorkItemStatus.Draft] = [WorkItemStatus.Ready, WorkItemStatus.Cancelled],
             [WorkItemStatus.Ready] = [WorkItemStatus.Running, WorkItemStatus.Blocked, WorkItemStatus.Cancelled],
+            // Phase M — Running -> Ready is the bounded runtime retry (a timed-out or
+            // infrastructure-failed attempt, see AgentRunWorkItemSync), budgeted by
+            // WorkItem.AttemptCount/MaxAttempts.
             [WorkItemStatus.Running] =
             [
-                WorkItemStatus.Testing, WorkItemStatus.Blocked, WorkItemStatus.Completed,
+                WorkItemStatus.Ready, WorkItemStatus.Testing, WorkItemStatus.Blocked, WorkItemStatus.Completed,
                 WorkItemStatus.Failed, WorkItemStatus.Cancelled
             ],
             [WorkItemStatus.Testing] =

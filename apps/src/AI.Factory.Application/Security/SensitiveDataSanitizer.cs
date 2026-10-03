@@ -22,9 +22,10 @@ public static class SensitiveDataSanitizer
         @"(Bearer\s+)[A-Za-z0-9_\-\.]+",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    // Regex for key-value secrets (e.g., apiKey=xyz, secret: "abc", key sk-xyz)
+    // Regex for key-value secrets (e.g., apiKey=xyz, secret: "abc", key sk-xyz, and JSON
+    // "api_key":"xyz" — Phase K: an OpenHands Agent Server error can echo its request body)
     private static readonly Regex KeyValueSecretRegex = new(
-        @"(api[-_]?key|password|token|secret|credential|access[-_]?key)\s*([:=]|\s+)\s*[""']?([^""'\s,;]+)[""']?",
+        @"((?:api[-_]?key|password|token|secret|credential|access[-_]?key)[""']?)\s*([:=]|\s+)\s*(?:""[^""]*""|'[^']*'|[^""'\s,;]+)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     // Regex for raw API key tokens (e.g., sk-or-v1-..., sk-ant-..., sk-proj-...)

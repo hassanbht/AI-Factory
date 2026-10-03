@@ -27,6 +27,7 @@ public sealed class AgentRunWorkItemSync : IAgentRunWorkItemSync
     private readonly IVerificationGate _verificationGate;
     private readonly IWorkItemCompletionProcessor _completionProcessor;
     private readonly ILogger<AgentRunWorkItemSync> _logger;
+    private readonly IAuditLogger _auditLogger;
 
     public AgentRunWorkItemSync(
         IWorkItemRepository workItems,
@@ -34,7 +35,8 @@ public sealed class AgentRunWorkItemSync : IAgentRunWorkItemSync
         IWorkItemExecutionResultMapper executionResultMapper,
         IVerificationGate verificationGate,
         IWorkItemCompletionProcessor completionProcessor,
-        ILogger<AgentRunWorkItemSync> logger)
+        ILogger<AgentRunWorkItemSync> logger,
+        IAuditLogger? auditLogger = null)
     {
         _workItems = workItems;
         _projects = projects;
@@ -42,6 +44,7 @@ public sealed class AgentRunWorkItemSync : IAgentRunWorkItemSync
         _verificationGate = verificationGate;
         _completionProcessor = completionProcessor;
         _logger = logger;
+        _auditLogger = auditLogger ?? NullAuditLogger.Instance;
     }
 
     public async Task SyncAsync(AgentRun agentRun, CancellationToken cancellationToken = default)
@@ -90,6 +93,13 @@ public sealed class AgentRunWorkItemSync : IAgentRunWorkItemSync
             return;
         }
 
+        var retryScheduled = false;
+
+        if (agentRun.Status is AgentRunStatus.Failed or AgentRunStatus.TimedOut)
+        {
+            (target, errorMessage, retryScheduled) = ApplyRuntimeAttemptBudget(workItem, agentRun, errorMessage);
+        }
+
         if (target != WorkItemStatus.Completed)
         {
             workItem.CurrentError = errorMessage;
@@ -112,6 +122,28 @@ public sealed class AgentRunWorkItemSync : IAgentRunWorkItemSync
         _logger.LogInformation(
             "AgentRunWorkItemSynced AgentRunId={AgentRunId} WorkItemId={WorkItemId} AgentRunStatus={AgentRunStatus} WorkItemStatus={WorkItemStatus}",
             agentRun.Id, workItemId, agentRun.Status, target);
+
+        if (retryScheduled)
+        {
+            _logger.LogWarning(
+                "WorkItemRuntimeRetryScheduled WorkItemId={WorkItemId} AgentRunId={AgentRunId} AgentRunStatus={AgentRunStatus} "
+                    + "AttemptCount={AttemptCount} MaxAttempts={MaxAttempts}",
+                workItemId, agentRun.Id, agentRun.Status, workItem.AttemptCount, workItem.MaxAttempts);
+
+            await _auditLogger.LogAsync(
+                Guid.NewGuid(),
+                AuditEventType.Retry,
+                AuditSeverity.Warning,
+                workItem.CurrentError ?? "Runtime retry scheduled.",
+                projectId: workItem.ProjectId,
+                workItemId: workItemId,
+                runId: agentRun.Id,
+                correlationId: agentRun.CorrelationId,
+                outcome: WorkItemStatus.Ready.ToString(),
+                actorType: "System",
+                actorId: nameof(AgentRunWorkItemSync),
+                cancellationToken: CancellationToken.None);
+        }
 
         if (target == WorkItemStatus.Testing)
         {
@@ -193,6 +225,34 @@ public sealed class AgentRunWorkItemSync : IAgentRunWorkItemSync
             _logger.LogInformation(
                 "VerificationGateLostRace WorkItemId={WorkItemId}", workItem.Id);
         }
+    }
+
+    /// <summary>
+    /// Phase M — every runtime failure (Failed/TimedOut) consumes one attempt of the WorkItem's
+    /// existing budget (<see cref="WorkItem.AttemptCount"/> / <see cref="WorkItem.MaxAttempts"/>,
+    /// default 3), so a timed-out attempt can never again leave AttemptCount at 0. A retryable
+    /// failure — a timeout, or an infrastructure failure (including a run terminated by orphan
+    /// recovery) — returns the WorkItem to Ready while budget remains, for the normal scheduler to
+    /// dispatch as a fresh AgentRun. Everything else, and an exhausted budget, stays Failed with the
+    /// reason recorded. Never re-executes anything itself.
+    /// </summary>
+    private static (WorkItemStatus Target, string? ErrorMessage, bool RetryScheduled) ApplyRuntimeAttemptBudget(
+        WorkItem workItem, AgentRun agentRun, string? errorMessage)
+    {
+        workItem.AttemptCount += 1;
+
+        var attempt = $"Attempt {workItem.AttemptCount} of {workItem.MaxAttempts} ended '{agentRun.Status}': {errorMessage}";
+        var retryable = agentRun.Status == AgentRunStatus.TimedOut
+            || agentRun.FailureCategory is FailureCategory.Timeout or FailureCategory.Infrastructure;
+
+        if (!retryable)
+        {
+            return (WorkItemStatus.Failed, $"{attempt} Not retryable ({agentRun.FailureCategory?.ToString() ?? "unclassified"}).", false);
+        }
+
+        return workItem.AttemptCount < workItem.MaxAttempts
+            ? (WorkItemStatus.Ready, $"{attempt} Retry scheduled.", true)
+            : (WorkItemStatus.Failed, $"{attempt} Runtime attempt budget exhausted.", false);
     }
 
     /// <summary>

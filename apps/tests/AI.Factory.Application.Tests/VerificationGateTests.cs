@@ -292,4 +292,56 @@ public sealed class VerificationGateTests
         Assert.Equal(VerificationStatus.Failed, result.Status);
         Assert.Contains(failureDetails, result.Summary);
     }
+
+    // ---------------- Phase M — workspace integrity is part of verification ----------------
+
+    private sealed class FixedIntegrityInspector : IWorkspaceIntegrityInspector
+    {
+        private readonly IReadOnlyList<WorkspaceFileChange>? _changes;
+        public FixedIntegrityInspector(IReadOnlyList<WorkspaceFileChange>? changes) => _changes = changes;
+        public Task<IReadOnlyList<WorkspaceFileChange>?> GetChangesAsync(string workspacePath, CancellationToken cancellationToken = default) =>
+            Task.FromResult(_changes);
+    }
+
+    private sealed class CountingBuildExecutor : IBuildExecutor
+    {
+        public int Calls { get; private set; }
+
+        public Task<BuildResult> BuildAsync(BuildRequest request, CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            return Task.FromResult(new BuildResult(true, "ok", "", 0));
+        }
+    }
+
+    [Fact]
+    public async Task VerifyAsync_IntegrityViolation_IsARepairableFailure_NamingTheViolation_BeforeAnyBuild()
+    {
+        var build = new CountingBuildExecutor();
+        var gate = new VerificationGate(
+            build, new FakeTestExecutor(new TestExecutionResult(true, "ok", "", 0)), new FakeWorkspaceResolver(), Acceptance, Limits,
+            NullLogger<VerificationGate>.Instance,
+            new FixedIntegrityInspector(new[] { new WorkspaceFileChange("dotnet-install.sh", WorkspaceChangeKind.Added, null, "#!/bin/sh") }));
+        var (project, workItem) = MakeSubjects();
+
+        var result = await gate.VerifyAsync(project, workItem);
+
+        Assert.Equal(VerificationStatus.Failed, result.Status); // Failed -> Repairing, never Passed
+        Assert.Contains("dotnet-install.sh", result.Summary);
+        Assert.Equal(0, build.Calls);
+    }
+
+    [Theory]
+    [InlineData(true)]   // clean change set
+    [InlineData(false)]  // no git baseline: integrity unavailable, build/test semantics unchanged
+    public async Task VerifyAsync_CleanOrUnavailableIntegrity_KeepsBuildAndTestSemantics(bool hasBaseline)
+    {
+        var gate = new VerificationGate(
+            new FakeBuildExecutor(new BuildResult(true, "ok", "", 0)), new FakeTestExecutor(new TestExecutionResult(true, "ok", "", 0)),
+            new FakeWorkspaceResolver(), Acceptance, Limits, NullLogger<VerificationGate>.Instance,
+            new FixedIntegrityInspector(hasBaseline ? new[] { new WorkspaceFileChange("src/A.cs", WorkspaceChangeKind.Modified) } : null));
+        var (project, workItem) = MakeSubjects();
+
+        Assert.Equal(VerificationStatus.Passed, (await gate.VerifyAsync(project, workItem)).Status);
+    }
 }

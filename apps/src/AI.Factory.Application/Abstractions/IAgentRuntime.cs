@@ -19,6 +19,7 @@ public interface IAgentRuntime
 /// <summary>Stable result contract for any runtime executing an AgentRun. Large raw payloads belong in the Artifacts store, referenced here by id/path — not inlined.</summary>
 /// <param name="ExecutionAdapter">Key of the execution adapter that ran the AgentRun; null when none was invoked.</param>
 /// <param name="ExitReason">The adapter's machine-readable exit reason (see ExecutionOutcome.ExitReason).</param>
+/// <param name="GatewayFailure">Model-gateway failure reason, when reported (see ExecutionOutcome.GatewayFailure).</param>
 public sealed record AgentRunExecutionResult(
     bool Success,
     string? Output,
@@ -33,4 +34,6 @@ public sealed record AgentRunExecutionResult(
     string? Provider,
     string? Model,
     string? ExecutionAdapter = null,
-    string? ExitReason = null);
+    string? ExitReason = null,
+    string? GatewayFailure = null,
+    Execution.ExecutionRuntimeReport? RuntimeReport = null);

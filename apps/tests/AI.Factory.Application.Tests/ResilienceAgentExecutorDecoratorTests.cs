@@ -150,4 +150,28 @@ public sealed class ResilienceAgentExecutorDecoratorTests
         Assert.Equal("Generated code", result.Output);
         Assert.Equal(2, inner.CallCount); // Retried once!
     }
+
+    [Theory]
+    [InlineData("Billing or credits exhausted: HTTP 402: Insufficient credits")]
+    [InlineData("HTTP 401: No active credentials for provider: openai.")]
+    [InlineData("HTTP 403: forbidden")]
+    // Contains a transient launch marker — still a gateway answer, not a launch failure.
+    [InlineData("API failed after 3 retries — HTTP 503: connection refused by upstream")]
+    public async Task ExecuteAsync_WhenRuntimeReportsGatewayFailureWithExitCodeZero_DoesNotRetry(string gatewayError)
+    {
+        // Phase J — a Hermes run that exited 0 but reported failure (gateway rejected the call).
+        var inner = new FakeInnerAgentExecutor(_ => new AgentExecutionResult(
+            false, gatewayError, $"Hermes reported a failed run (exit code 0): {gatewayError}", 40, ExitCode: 0));
+        var decorator = new ResilienceAgentExecutorDecorator(
+            inner,
+            CreateResilienceExecutor(),
+            _failureClassifier,
+            NullLogger<ResilienceAgentExecutorDecorator>.Instance);
+
+        var result = await decorator.ExecuteAsync(new AgentExecutionRequest("coder", "model-1", "write code", "."));
+
+        Assert.False(result.Success);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(1, inner.CallCount); // One explicit gateway operation, no hidden retry.
+    }
 }

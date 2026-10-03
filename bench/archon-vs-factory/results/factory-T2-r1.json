@@ -1,0 +1,18 @@
+﻿{
+    "run":  "factory-T2-r1",
+    "tool":  "factory",
+    "task":  "T2",
+    "build":  true,
+    "hiddenPassed":  7,
+    "hiddenTotal":  9,
+    "otherPassed":  8,
+    "otherFailed":  0,
+    "filesChanged":  7,
+    "linesAdded":  212,
+    "linesDeleted":  45,
+    "outOfScopeFiles":  [
+                            "BUILD_SUMMARY.txt",
+                            "Inventory.slnx"
+                        ],
+    "scoredAt":  "2026-10-02T10:48:36.1595698+02:00"
+}

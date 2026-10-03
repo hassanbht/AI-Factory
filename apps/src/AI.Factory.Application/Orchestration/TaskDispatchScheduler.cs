@@ -281,6 +281,9 @@ public sealed class TaskDispatchScheduler : ITaskDispatchScheduler
             AgentDefinitionId = definition.Id,
             ProjectId = workItem.ProjectId,
             WorkItemId = workItem.Id,
+            // Phase M — a runtime retry (AgentRunWorkItemSync) is a new AgentRun for the same
+            // WorkItem; its Attempt number makes the retry chain auditable from the rows alone.
+            Attempt = workItem.AttemptCount + 1,
             Input = BuildObjective(workItem, project, allProjectItems)
         };
 

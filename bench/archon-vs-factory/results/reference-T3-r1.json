@@ -1,0 +1,17 @@
+﻿{
+    "run":  "reference-T3-r1",
+    "tool":  "reference",
+    "task":  "T3",
+    "build":  true,
+    "hiddenPassed":  10,
+    "hiddenTotal":  10,
+    "otherPassed":  5,
+    "otherFailed":  0,
+    "filesChanged":  2,
+    "linesAdded":  4,
+    "linesDeleted":  4,
+    "outOfScopeFiles":  [
+
+                        ],
+    "scoredAt":  "2026-10-02T09:31:09.2564193+02:00"
+}

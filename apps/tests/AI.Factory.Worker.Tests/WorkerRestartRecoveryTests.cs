@@ -42,7 +42,6 @@ public sealed class WorkerRestartRecoveryTests
             shutdownOptions ?? new ShutdownOptions { GracefulTimeoutSeconds = 2, ForceCancellationAfterSeconds = 1 },
             shutdown,
             tracker,
-            NullAuditLogger.Instance,
             metrics,
             NullLogger<OrchestrationRunWorker>.Instance,
             coordinator);

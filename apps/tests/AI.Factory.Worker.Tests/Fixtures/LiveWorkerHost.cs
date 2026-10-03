@@ -1,6 +1,7 @@
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Agents;
 using AI.Factory.Application.Configuration;
+using AI.Factory.Application.Gateway;
 using AI.Factory.Application.Orchestration;
 using AI.Factory.Infrastructure.Agents;
 using AI.Factory.Infrastructure.Persistence;
@@ -82,6 +83,21 @@ public sealed class LiveWorkerHost : IDisposable
     /// </summary>
     public static string LiveApiKeySecretName =>
         Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_API_KEY_SECRET") ?? "OMNIROUTE_API_KEY";
+
+    /// <summary>
+    /// Phase K — the routed model gateway is the one authority for the endpoint and credential a
+    /// runtime is sent to; Hermes refuses a run whose provider endpoint/secret disagree with it.
+    /// A live fixture that points the runtime at another endpoint therefore says so on the
+    /// default gateway itself, instead of overriding the runtime behind the route's back.
+    /// </summary>
+    public static void RouteDefaultGatewayTo(IServiceCollection services, string baseUrl, string apiKeySecretName)
+    {
+        var gateways = (ModelGatewayOptions)services
+            .Single(d => d.ServiceType == typeof(ModelGatewayOptions)).ImplementationInstance!;
+        var entry = gateways.Gateways[gateways.DefaultGateway];
+        entry.BaseUrl = baseUrl;
+        entry.ApiKeySecretName = apiKeySecretName;
+    }
 
     /// <summary>Each role may be pointed at its own model; by default they share one.</summary>
     public static string ModelForRole(string role)
@@ -199,13 +215,13 @@ public sealed class LiveWorkerHost : IDisposable
         var recoveryOptions = (RecoveryOptions)builder.Services
             .Single(d => d.ServiceType == typeof(RecoveryOptions)).ImplementationInstance!;
         recoveryOptions.StaleExecutionTimeout = TimeSpan.FromSeconds(3);
+        recoveryOptions.OrphanHeartbeatTimeout = TimeSpan.FromSeconds(3);
         recoveryOptions.PeriodicSweepInterval = TimeSpan.FromSeconds(2);
 
         var hermesOptions = (HermesOptions)builder.Services
             .Single(d => d.ServiceType == typeof(HermesOptions)).ImplementationInstance!;
         hermesOptions.DockerImage = Environment.GetEnvironmentVariable("AI_FACTORY_HERMES_IMAGE")
             ?? "nousresearch/hermes-agent:0.20.6";
-        hermesOptions.DataVolume = hermesData;
         hermesOptions.WorkspaceRoot = hermesScratch;
         hermesOptions.NetworkMode = "bridge";
         hermesOptions.Provider = "openrouter";
@@ -214,6 +230,7 @@ public sealed class LiveWorkerHost : IDisposable
         hermesOptions.AdditionalEnvironmentVariables["OPENROUTER_BASE_URL"] = LiveBaseUrl;
         hermesOptions.AdditionalEnvironmentVariables["HERMES_WRITE_SAFE_ROOT"] = "/workspace";
         hermesOptions.DefaultModel = LiveModel;
+        RouteDefaultGatewayTo(builder.Services, LiveBaseUrl, LiveApiKeySecretName);
 
         // Per-role routing through the existing catalog rather than any
         // provider-specific branch, so Implementation, Repair, Review, Test and

@@ -16,8 +16,7 @@ public static class ModelRoutingPreflightStartup
 {
     /// <param name="httpClientProvider">
     /// Supplied by the composition root because this project does not reference
-    /// Microsoft.Extensions.Http — the same split the IModelProvider registrations
-    /// already use. Hosts pass
+    /// Microsoft.Extensions.Http — the composition roots own HttpClient creation. Hosts pass
     /// <c>(sp, name) =&gt; sp.GetRequiredService&lt;IHttpClientFactory&gt;().CreateClient(name)</c>.
     /// </param>
     public static void AddModelRoutingPreflight(

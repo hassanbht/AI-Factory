@@ -92,24 +92,15 @@ public sealed class WorkflowRecoveryHostedService : BackgroundService
             _logger.LogWarning("Workflow recovery: recovered {Count} stale WorkItem(s) at startup.", recoveredTasks);
         }
 
-        var agentRuns = scope.ServiceProvider.GetRequiredService<IAgentRunRepository>();
-        var cutoffUtc = DateTime.UtcNow - _recoveryOptions.StaleExecutionTimeout;
-        var recoveredRuns = await agentRuns.RecoverOrphanedRunsAsync(cutoffUtc, cancellationToken);
+        // Phase M — heartbeat-based (multi-worker safe), terminates the runtime before the
+        // WorkItem's retry can be dispatched. See AgentRunOrphanRecovery.
+        var recoveredRuns = await scope.ServiceProvider.GetRequiredService<AgentRunOrphanRecovery>()
+            .RecoverAsync(cancellationToken);
 
         if (recoveredRuns > 0)
         {
             _logger.LogWarning(
                 "AgentRunOrphanRecovery Mode=Startup RecoveredCount={Count}", recoveredRuns);
-        }
-
-        var containerManager = scope.ServiceProvider.GetService<AI.Factory.Application.Abstractions.Execution.IContainerLifecycleManager>();
-        if (containerManager is not null)
-        {
-            var sweptContainers = await containerManager.SweepOrphanContainersAsync(cancellationToken);
-            if (sweptContainers > 0)
-            {
-                _logger.LogWarning("Workflow recovery: swept {Count} orphaned container(s) at startup.", sweptContainers);
-            }
         }
     }
 
@@ -125,11 +116,10 @@ public sealed class WorkflowRecoveryHostedService : BackgroundService
             _logger.LogWarning("Workflow recovery: recovered {Count} stale WorkItem(s).", recoveredCount);
         }
 
-        // Periodic mode is cutoff-bounded, so a genuinely executing AgentRun
-        // in this same live process is never touched.
-        var agentRuns = scope.ServiceProvider.GetRequiredService<IAgentRunRepository>();
-        var recoveredRuns = await agentRuns.RecoverOrphanedRunsAsync(
-            DateTime.UtcNow - _recoveryOptions.StaleExecutionTimeout, cancellationToken);
+        // Heartbeat-bounded, so a genuinely executing AgentRun (heartbeated by its Worker,
+        // this one or a peer) is never touched.
+        var recoveredRuns = await scope.ServiceProvider.GetRequiredService<AgentRunOrphanRecovery>()
+            .RecoverAsync(cancellationToken);
 
         if (recoveredRuns > 0)
         {
@@ -142,16 +132,6 @@ public sealed class WorkflowRecoveryHostedService : BackgroundService
         if (recoveredRunCount > 0)
         {
             _logger.LogWarning("Workflow recovery: recovered {Count} stale OrchestrationRun(s) with an expired Worker lease.", recoveredRunCount);
-        }
-
-        var periodicContainerManager = scope.ServiceProvider.GetService<AI.Factory.Application.Abstractions.Execution.IContainerLifecycleManager>();
-        if (periodicContainerManager is not null)
-        {
-            var sweptContainers = await periodicContainerManager.SweepOrphanContainersAsync(cancellationToken);
-            if (sweptContainers > 0)
-            {
-                _logger.LogWarning("Workflow recovery: swept {Count} orphaned container(s).", sweptContainers);
-            }
         }
     }
 }

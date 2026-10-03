@@ -30,7 +30,7 @@ public sealed class OpenAiCompatibleModelCatalog : IProviderModelCatalog
     /// once at startup, so there is nothing to optimise away. Infrastructure takes
     /// the delegate rather than <c>IHttpClientFactory</c> itself because this
     /// project intentionally does not reference Microsoft.Extensions.Http; the
-    /// composition roots own that, exactly as they do for IModelProvider.
+    /// composition roots own that.
     /// </summary>
     private readonly Func<HttpClient> _httpClientFactory;
 

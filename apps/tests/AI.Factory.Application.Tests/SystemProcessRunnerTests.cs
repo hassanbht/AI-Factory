@@ -88,4 +88,84 @@ public sealed class SystemProcessRunnerTests
                 new ProcessRunRequest(ShellExe, args, TimeSpan.FromSeconds(30)),
                 cts.Token));
     }
+
+    /// <summary>
+    /// Phase M review — a child that never reads stdin used to block the (multi-KB) prompt write forever,
+    /// before the timeout even existed. The write now runs alongside the wait; the timeout kills the child.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_ChildThatNeverReadsALargeStdin_StillTimesOut()
+    {
+        var args = IsWindows
+            ? new[] { "/c", "ping", "-n", "30", "127.0.0.1" }
+            : new[] { "-c", "sleep 30" };
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        var result = await _runner.RunAsync(new ProcessRunRequest(
+            ShellExe, args, TimeSpan.FromSeconds(2), StandardInput: new string('x', 4 * 1024 * 1024)));
+
+        Assert.True(result.TimedOut);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(20), $"took {stopwatch.Elapsed}");
+    }
+
+    /// <summary>
+    /// Phase N — the root exits 0 while a process it started keeps the inherited stdout pipe open. The run must
+    /// end with the root's own exit code, not wait for the descendant until the timeout (which reported a
+    /// finished CLI as TimedOut).
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_RootExitedButADescendantHoldsThePipes_ReturnsTheRootExitCode_NotATimeout()
+    {
+        if (!IsWindows)
+        {
+            return;
+        }
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        var result = await _runner.RunAsync(new ProcessRunRequest(
+            ShellExe, new[] { "/c", "start", "/b", "ping", "-n", "25", "127.0.0.1" }, TimeSpan.FromSeconds(60)));
+
+        Assert.False(result.TimedOut, "the root process had already finished");
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(15), $"waited {stopwatch.Elapsed} for the descendant's pipes");
+    }
+
+    /// <summary>Phase M review — an observer exception on the output thread must not crash the process.</summary>
+    [Fact]
+    public async Task RunAsync_ThrowingOutputObserver_DoesNotBreakTheRun()
+    {
+        var args = IsWindows ? new[] { "/c", "echo", "line" } : new[] { "-c", "echo line" };
+
+        var result = await _runner.RunAsync(new ProcessRunRequest(
+            ShellExe, args, TimeSpan.FromSeconds(10), OnStandardOutputLine: _ => throw new InvalidOperationException("observer bug")));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("line", result.StandardOutput);
+    }
+
+    [Fact]
+    public async Task RunAsync_ThrowingOnStartedCallback_KillsTheChild_AndRethrows()
+    {
+        var args = IsWindows ? new[] { "/c", "ping", "-n", "30", "127.0.0.1" } : new[] { "-c", "sleep 30" };
+        var pid = 0;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _runner.RunAsync(new ProcessRunRequest(
+            ShellExe, args, TimeSpan.FromSeconds(30),
+            OnStarted: p => { pid = p.Id; throw new InvalidOperationException("record failed"); })));
+
+        Assert.NotEqual(0, pid);
+        bool alive;
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(pid);
+            alive = !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            alive = false;
+        }
+
+        Assert.False(alive, "a child must never outlive a failed RunAsync");
+    }
 }

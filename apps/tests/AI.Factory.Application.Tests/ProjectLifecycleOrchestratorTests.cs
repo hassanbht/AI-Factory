@@ -317,6 +317,35 @@ public sealed class ProjectLifecycleOrchestratorTests : IDisposable
         Assert.Equal(1, planner.GenerateCalls);
     }
 
+    /// <summary>
+    /// Phase M — benchmark finding: a fresh database has no Planner AgentDefinition; the dispatch
+    /// threw on every scheduler cycle while the Project sat in Planning with an empty CurrentError.
+    /// </summary>
+    [Fact]
+    public async Task AdvanceAsync_NoPlannerDefinition_FailsClosedOnce_WithAnActionableDiagnostic()
+    {
+        await using var db = new FactoryDbContext(_options);
+        var projectId = await SeedAsync(db, ProjectStatus.Planning, lifecycleStarted: true);
+        var planner = new FakeProjectPlanner
+        {
+            GenerateFailure = new ValidationException("No enabled AgentDefinition with AgentType 'Planner' is registered.")
+        };
+        var orchestrator = CreateOrchestrator(db, planner: planner);
+
+        var first = await orchestrator.AdvanceAsync(projectId);
+        var second = await orchestrator.AdvanceAsync(projectId);
+
+        Assert.Equal(ProjectLifecycleAction.Failed, first.Action);
+        Assert.Equal(ProjectLifecycleAction.None, second.Action); // terminal: bounded, never retried per cycle
+        Assert.Equal(1, planner.GenerateCalls);
+
+        await using var verify = new FactoryDbContext(_options);
+        var project = (await new ProjectRepository(verify).GetByIdAsync(projectId))!;
+        Assert.Equal(ProjectStatus.Failed, project.Status);
+        Assert.Contains("AgentType 'Planner'", project.CurrentError);
+        Assert.Contains("bootstrap-factory.ps1", project.CurrentError);
+    }
+
     [Theory]
     [InlineData(AgentRunStatus.Failed)]
     [InlineData(AgentRunStatus.Cancelled)]
@@ -633,9 +662,16 @@ public sealed class ProjectLifecycleOrchestratorTests : IDisposable
         public PlannerMaterializationResult Materialization { get; set; } =
             PlannerMaterializationResult.Skip("not configured");
 
+        public Exception? GenerateFailure { get; set; }
+
         public Task<AgentRun> GenerateAsync(Guid projectId, CancellationToken cancellationToken = default)
         {
             GenerateCalls++;
+            if (GenerateFailure is not null)
+            {
+                throw GenerateFailure;
+            }
+
             LatestRun ??= RunWith(AgentRunStatus.Queued);
             return Task.FromResult(LatestRun);
         }

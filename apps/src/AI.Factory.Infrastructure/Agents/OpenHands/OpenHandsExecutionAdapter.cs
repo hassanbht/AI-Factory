@@ -19,6 +19,12 @@ public sealed class OpenHandsExecutionAdapter : IExecutionAdapter
 {
     public const string AdapterKey = "OpenHands";
 
+    /// <summary>
+    /// Phase L — container-local root for the Agent Server's conversation and bash-event state:
+    /// outside the /workspace bind mount, writable by the image's non-root user, removed with the container.
+    /// </summary>
+    public const string RuntimeStateRoot = "/tmp/aif-openhands";
+
     private readonly OpenHandsOptions _options;
     private readonly IProcessRunner _processRunner;
     private readonly IContainerLifecycleManager _lifecycleManager;
@@ -101,8 +107,11 @@ public sealed class OpenHandsExecutionAdapter : IExecutionAdapter
 
                 serverUrl = $"http://127.0.0.1:{ephemeralPort}";
 
-                await LaunchContainerAsync(spec, workspacePath, ephemeralPort, sessionApiKey, cancellationToken);
+                // Phase L — set before the launch: `docker run -d` can create the container and still
+                // fail (port bind) or be cancelled mid-flight. Cleanup is `docker rm -f` of this run's
+                // own deterministic name (idempotent): it can only ever remove a container of this AgentRun.
                 containerSpawned = true;
+                await LaunchContainerAsync(spec, workspacePath, ephemeralPort, sessionApiKey, cancellationToken);
             }
 
             client = _clientFactory.CreateClient(serverUrl, sessionApiKey);
@@ -175,21 +184,25 @@ public sealed class OpenHandsExecutionAdapter : IExecutionAdapter
         catch (Exception ex)
         {
             stopwatch.Stop();
-            _logger.LogError(ex,
-                "OpenHandsRuntimeFailed AgentRunId={AgentRunId} CorrelationId={CorrelationId} DurationMs={DurationMs}",
-                spec.AgentRunId, spec.CorrelationId, stopwatch.ElapsedMilliseconds);
+
+            // Phase K — an Agent Server error body can echo the conversation request, which carries
+            // the provider API key; the raw message is never logged or persisted.
+            var error = ModelGatewayFailureClassifier.SanitizeUpstreamMessage(ex.Message);
+            _logger.LogError(
+                "OpenHandsRuntimeFailed AgentRunId={AgentRunId} CorrelationId={CorrelationId} DurationMs={DurationMs} ExceptionType={ExceptionType} Error={Error}",
+                spec.AgentRunId, spec.CorrelationId, stopwatch.ElapsedMilliseconds, ex.GetType().Name, error);
 
             var isTimeout = ex is TimeoutException ||
                 ex.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
                 ex.Message.Contains("timed out", StringComparison.OrdinalIgnoreCase);
 
-            var classification = _failureClassifier.Classify(ex.Message, isTimeout ? "timeout" : "agent");
+            var classification = _failureClassifier.Classify(error, isTimeout ? "timeout" : "agent");
 
             return Outcome(
                 spec,
                 isTimeout ? ExecutionOutcomeStatus.TimedOut : ExecutionOutcomeStatus.Failed,
                 output: null,
-                error: ex.Message,
+                error: error,
                 classification.Category,
                 stopwatch.ElapsedMilliseconds,
                 isTimeout ? ExitReasons.Timeout : ExitReasons.Error);
@@ -332,11 +345,23 @@ public sealed class OpenHandsExecutionAdapter : IExecutionAdapter
         args.Add("--network");
         args.Add(_options.NetworkMode);
 
+        // Phase K — passed by NAME; the value lives only in the docker CLI's controlled environment
+        // below, never on its command line (and the CLI no longer inherits the Worker's environment).
         args.Add("-e");
-        args.Add($"SESSION_API_KEY={sessionApiKey}");
+        args.Add("SESSION_API_KEY");
 
         args.Add("-e");
         args.Add("OPENHANDS_SUPPRESS_BANNER=1");
+
+        // Phase L — the Agent Server's own state stays out of the Project workspace. Its defaults
+        // (relative to its working directory "/") are workspace/conversations and workspace/bash_events,
+        // i.e. inside the bind mount: conversation state incl. the encrypted LLM key, event and
+        // terminal history (verified live on 1.49.4). Relocated into the container's writable layer,
+        // it is destroyed with the container (`docker rm -f`) and never reaches git or artifacts.
+        args.Add("-e");
+        args.Add($"OH_CONVERSATIONS_PATH={RuntimeStateRoot}/conversations");
+        args.Add("-e");
+        args.Add($"OH_BASH_EVENTS_DIR={RuntimeStateRoot}/bash_events");
 
         args.Add("-v");
         args.Add($"{workspacePath}:/workspace");
@@ -349,11 +374,18 @@ public sealed class OpenHandsExecutionAdapter : IExecutionAdapter
             args.Add(_options.ImportModules);
         }
 
+        var environment = new Dictionary<string, string> { ["SESSION_API_KEY"] = sessionApiKey };
+        if (Environment.GetEnvironmentVariable("PATH") is { Length: > 0 } path)
+        {
+            environment["PATH"] = path;
+        }
+
         var processRequest = new ProcessRunRequest(
             "docker",
             args,
             TimeSpan.FromSeconds(30),
-            WorkingDirectory: workspacePath);
+            WorkingDirectory: workspacePath,
+            EnvironmentVariables: environment);
 
         var result = await _processRunner.RunAsync(processRequest, cancellationToken);
         if (result.ExitCode != 0)
@@ -401,61 +433,42 @@ public sealed class OpenHandsExecutionAdapter : IExecutionAdapter
         await _processRunner.RunAsync(req, cancellationToken);
     }
 
+    /// <summary>
+    /// Phase K — the routed gateway is the only source of the LiteLLM endpoint, model route and
+    /// credential reference; the credential VALUE comes only through <see cref="ISecretProvider"/>.
+    /// No resolver, an unresolved gateway or a missing secret fails the run before any model call.
+    /// </summary>
     private async Task<(string ModelId, string ApiKey, string BaseUrl)> ResolveModelAndApiKeyAsync(
         AgentExecutionSpec spec,
         CancellationToken cancellationToken)
     {
-        string modelId;
-        string baseUrl = _options.ProviderBaseUrl;
-        string? secretName = _options.ProviderApiKeySecretName;
-        string? envVar = _options.ProviderApiKeyEnvironmentVariable;
-
-        if (_gatewayResolver is not null)
+        if (_gatewayResolver is null)
         {
-            var resolution = _gatewayResolver.Resolve(spec.Model);
-            if (!resolution.IsResolved)
-            {
-                throw new InvalidOperationException(resolution.FailureReason ?? "Model gateway could not be resolved.");
-            }
-
-            var gateway = resolution.Gateway!;
-            var transport = gateway.GetTransportInfo();
-            baseUrl = transport.BaseUrl;
-            secretName = transport.ApiKeySecretName ?? _options.ProviderApiKeySecretName;
-            envVar = transport.EnvironmentVariableName ?? _options.ProviderApiKeyEnvironmentVariable;
-            modelId = gateway.FormatModelIdentifier(spec.Model.ModelId ?? _options.DefaultModel);
-        }
-        else
-        {
-            modelId = !string.IsNullOrWhiteSpace(spec.Model.ModelId)
-                ? spec.Model.ModelId
-                : _options.DefaultModel;
-
-            if (!modelId.StartsWith("openrouter/", StringComparison.OrdinalIgnoreCase))
-            {
-                modelId = $"openrouter/{modelId}";
-            }
+            throw new InvalidOperationException("OpenHands requires a model gateway resolver; no route can be honoured without one.");
         }
 
-        string? apiKey = null;
-
-        if (_secretProvider is not null && !string.IsNullOrWhiteSpace(secretName))
+        var resolution = _gatewayResolver.Resolve(spec.Model);
+        if (!resolution.IsResolved || resolution.Gateway is null)
         {
-            apiKey = await _secretProvider.GetSecretAsync(secretName, cancellationToken);
+            throw new InvalidOperationException(
+                $"Model gateway route rejected: {resolution.FailureReason ?? "Model gateway could not be resolved."}");
         }
 
-        if (string.IsNullOrWhiteSpace(apiKey) && !string.IsNullOrWhiteSpace(envVar))
-        {
-            apiKey = Environment.GetEnvironmentVariable(envVar);
-        }
+        var transport = resolution.Gateway.GetTransportInfo();
+        var modelId = resolution.Gateway.FormatModelIdentifier(
+            string.IsNullOrWhiteSpace(spec.Model.ModelId) ? _options.DefaultModel : spec.Model.ModelId);
+
+        var apiKey = _secretProvider is not null && !string.IsNullOrWhiteSpace(transport.ApiKeySecretName)
+            ? await _secretProvider.GetSecretAsync(transport.ApiKeySecretName, cancellationToken)
+            : null;
 
         if (string.IsNullOrWhiteSpace(apiKey))
         {
             throw new InvalidOperationException(
-                $"No API key could be resolved for OpenHands provider ({secretName}).");
+                $"No API key could be resolved for model gateway '{resolution.GatewayKey}' ({transport.ApiKeySecretName}).");
         }
 
-        return (modelId, apiKey, baseUrl);
+        return (modelId, apiKey, transport.BaseUrl);
     }
 
     private string ResolveWorkspacePath(AgentExecutionSpec spec)
@@ -493,8 +506,10 @@ public sealed class OpenHandsExecutionAdapter : IExecutionAdapter
             if (metric.AccumulatedTokenUsage is { } tokens &&
                 (tokens.PromptTokens.HasValue || tokens.CompletionTokens.HasValue))
             {
-                var prompt = tokens.PromptTokens ?? 0;
-                var completion = tokens.CompletionTokens ?? 0;
+                // Phase J — an unreported count stays unknown (null), never zero; the total is
+                // only derived when both parts were actually reported.
+                var prompt = tokens.PromptTokens;
+                var completion = tokens.CompletionTokens;
                 return new ExecutionUsage(prompt, completion, prompt + completion);
             }
         }

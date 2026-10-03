@@ -8,7 +8,8 @@ namespace AI.Factory.Infrastructure.Agents;
 /// </summary>
 public sealed class CommandPolicyOptions
 {
-    public string[] AllowedCommands { get; set; } = { "docker", "dotnet", "git" };
+    // Phase M — "claude" and "codex" are the Claude Code / Codex execution adapters' CLIs.
+    public string[] AllowedCommands { get; set; } = { "docker", "dotnet", "git", "claude", "codex" };
 
     public string[] DeniedCommands { get; set; } =
     {

@@ -364,6 +364,11 @@ public sealed class ContainerLifecycleUnitTests
         public Task<bool> HasActiveRunsForProjectAsync(Guid projectId, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public Task<int> RecoverOrphanedRunsAsync(DateTime? startedBeforeUtc, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public Task HeartbeatAsync(Guid agentRunId, CancellationToken cancellationToken = default) => throw new NotImplementedException();
+
+        public Task<IReadOnlyList<AgentRun>> GetRunningWithoutHeartbeatSinceAsync(DateTime heartbeatCutoffUtc, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<AgentRun>>(Array.Empty<AgentRun>());
+        public Task<AgentRun?> TryRecoverOrphanedRunAsync(Guid agentRunId, DateTime heartbeatCutoffUtc, string reason, CancellationToken cancellationToken = default) =>
+            Task.FromResult<AgentRun?>(null);
     }
 
     #endregion

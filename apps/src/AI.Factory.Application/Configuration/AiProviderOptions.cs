@@ -43,19 +43,11 @@ public sealed class ProviderCredentialSettings
     /// </summary>
     public string? ApiKeySecretName { get; set; }
 
-    /// <summary>Which <c>IModelProvider</c> implementation to instantiate for this entry.</summary>
+    /// <summary>Only <see cref="AiModelProviderKind.OpenAiCompatible"/> entries get a model-routing preflight catalog.</summary>
     public AiModelProviderKind ProviderType { get; set; } = AiModelProviderKind.OpenAiCompatible;
-
-    /// <summary>
-    /// Deterministic routing priority — higher wins among capability-compatible
-    /// candidates. Ties break on declared order in ModelRouting:Models.
-    /// </summary>
-    public int Priority { get; set; }
-
-    public int TimeoutSeconds { get; set; } = 60;
 }
 
-/// <summary>Selects which model-provider implementation backs a configured provider entry.</summary>
+/// <summary>Kind of provider endpoint an AiProviders entry describes (drives whether the preflight can read its catalog).</summary>
 public enum AiModelProviderKind
 {
     OpenAiCompatible,

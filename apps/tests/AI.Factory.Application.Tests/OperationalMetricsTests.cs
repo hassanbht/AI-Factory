@@ -83,37 +83,29 @@ public sealed class OperationalMetricsTests
         Assert.Equal(2, snapshot.ApprovalRejected);
     }
 
+    // Phase L — the in-process AI-request counters lost their only producer in Phase K (the runtimes
+    // make every model request). The fields stay in GET /api/operations/metrics for contract
+    // compatibility, honestly unmeasured: 0 / null, never a fabricated count.
     [Fact]
-    public void AiMetrics_TrackRequestsSuccessesFailuresFallbacksAndRateLimits_Independently()
+    public void AiRequestFields_AreRetainedInTheMetricsContract_AsUnmeasured()
     {
         var metrics = new OperationalMetrics();
-
-        metrics.RecordAiRequestStarted();
-        metrics.RecordAiRequestStarted();
-        metrics.RecordAiRequestSucceeded(120);
-        metrics.RecordAiRequestFailed();
-        metrics.RecordAiProviderFailure();
-        metrics.RecordAiRateLimited();
-        metrics.RecordAiRoutingFallback();
+        metrics.RecordRestoreFailed();
+        metrics.RecordAgentRunCreated();
 
         var snapshot = metrics.GetSnapshot();
-        Assert.Equal(2, snapshot.AiRequests);
-        Assert.Equal(1, snapshot.AiRequestsSucceeded);
-        Assert.Equal(1, snapshot.AiRequestsFailed);
-        Assert.Equal(1, snapshot.AiProviderFailures);
-        Assert.Equal(1, snapshot.AiRateLimited);
-        Assert.Equal(1, snapshot.AiRoutingFallbacks);
-        Assert.Equal(120, snapshot.AverageAiRequestDurationMs);
-        Assert.Equal(120, snapshot.TotalAiRequestDurationMs);
-    }
+        var json = System.Text.Json.JsonSerializer.Serialize(
+            snapshot, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
 
-    [Fact]
-    public void AiMetrics_ConcurrentIncrements_ProduceExactCount()
-    {
-        var metrics = new OperationalMetrics();
-
-        Parallel.For(0, 1000, _ => metrics.RecordAiRoutingFallback());
-
-        Assert.Equal(1000, metrics.GetSnapshot().AiRoutingFallbacks);
+        Assert.Equal(0, snapshot.AiRequests);
+        Assert.Equal(0, snapshot.AiRoutingFallbacks);
+        Assert.Null(snapshot.AverageAiRequestDurationMs);
+        Assert.Null(snapshot.TotalAiRequestDurationMs);
+        // The counters on either side of the retained block still land in their own fields.
+        Assert.Equal(1, snapshot.RestoreFailed);
+        Assert.Equal(1, snapshot.AgentRunsCreated);
+        Assert.Contains("\"aiRoutingFallbacks\":0", json);
+        Assert.Contains("\"aiRequests\":0", json);
+        Assert.Contains("\"totalAiRequestDurationMs\":null", json);
     }
 }

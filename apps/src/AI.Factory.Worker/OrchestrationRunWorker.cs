@@ -21,7 +21,6 @@ public sealed class OrchestrationRunWorker : BackgroundService
     private readonly ShutdownOptions _shutdownOptions;
     private readonly IApplicationShutdown _shutdown;
     private readonly IBackgroundOperationTracker _tracker;
-    private readonly IAuditLogger _auditLogger;
     private readonly IOperationalMetrics _metrics;
     private readonly ILogger<OrchestrationRunWorker> _logger;
     private readonly IWorkerHealthCoordinator? _coordinator;
@@ -32,7 +31,6 @@ public sealed class OrchestrationRunWorker : BackgroundService
         ShutdownOptions shutdownOptions,
         IApplicationShutdown shutdown,
         IBackgroundOperationTracker tracker,
-        IAuditLogger auditLogger,
         IOperationalMetrics metrics,
         ILogger<OrchestrationRunWorker> logger,
         IWorkerHealthCoordinator? coordinator = null)
@@ -42,7 +40,6 @@ public sealed class OrchestrationRunWorker : BackgroundService
         _shutdownOptions = shutdownOptions;
         _shutdown = shutdown;
         _tracker = tracker;
-        _auditLogger = auditLogger;
         _metrics = metrics;
         _logger = logger;
         _coordinator = coordinator;
@@ -96,12 +93,7 @@ public sealed class OrchestrationRunWorker : BackgroundService
         _logger.LogInformation("OrchestrationRunWorker stopping initiated. Active operations: {ActiveCount}.", _tracker.ActiveCount);
         _metrics.RecordWorkerStopping();
 
-        await _auditLogger.LogAsync(
-            Guid.NewGuid(),
-            AuditEventType.WorkerStopping,
-            AuditSeverity.Info,
-            $"Worker stopping initiated with {_tracker.ActiveCount} active operation(s).",
-            cancellationToken: CancellationToken.None);
+        await AuditAsync(AuditEventType.WorkerStopping, AuditSeverity.Info, $"Worker stopping initiated with {_tracker.ActiveCount} active operation(s).");
 
         _shutdown.TryBeginShutdown();
 
@@ -112,35 +104,33 @@ public sealed class OrchestrationRunWorker : BackgroundService
         {
             _logger.LogInformation("All in-flight operations drained successfully in {ElapsedMs}ms.", sw.ElapsedMilliseconds);
             _metrics.RecordOperationsDrained(1);
-            await _auditLogger.LogAsync(
-                Guid.NewGuid(),
-                AuditEventType.OperationsDrained,
-                AuditSeverity.Info,
-                $"In-flight operations drained successfully in {sw.ElapsedMilliseconds}ms.",
-                cancellationToken: CancellationToken.None);
+            await AuditAsync(AuditEventType.OperationsDrained, AuditSeverity.Info, $"In-flight operations drained successfully in {sw.ElapsedMilliseconds}ms.");
         }
         else
         {
             _logger.LogWarning("Worker shutdown timed out after {ElapsedMs}ms. Remaining active operations: {RemainingCount}.", sw.ElapsedMilliseconds, _tracker.ActiveCount);
             _metrics.RecordShutdownTimedOut();
             _metrics.RecordOperationsCancelled(_tracker.ActiveCount);
-            await _auditLogger.LogAsync(
-                Guid.NewGuid(),
-                AuditEventType.ShutdownTimedOut,
-                AuditSeverity.Warning,
-                $"Worker shutdown timed out with {_tracker.ActiveCount} operation(s) remaining.",
-                cancellationToken: CancellationToken.None);
+            await AuditAsync(AuditEventType.ShutdownTimedOut, AuditSeverity.Warning, $"Worker shutdown timed out with {_tracker.ActiveCount} operation(s) remaining.");
         }
 
         _metrics.RecordWorkerStopped();
-        await _auditLogger.LogAsync(
-            Guid.NewGuid(),
-            AuditEventType.WorkerStopped,
-            AuditSeverity.Info,
-            "Worker stopped.",
-            cancellationToken: CancellationToken.None);
+        await AuditAsync(AuditEventType.WorkerStopped, AuditSeverity.Info, "Worker stopped.");
 
         await base.StopAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Phase M — IAuditLogger is scoped (it writes through the scoped FactoryDbContext). This
+    /// singleton hosted service used to capture one instance for its whole lifetime: a captive
+    /// dependency that crashed startup under Development scope validation and, in Production, shared
+    /// one DbContext across unrelated iterations. Each audit write now gets its own scope.
+    /// </summary>
+    private async Task AuditAsync(AuditEventType eventType, AuditSeverity severity, string message)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var auditLogger = scope.ServiceProvider.GetService<IAuditLogger>() ?? NullAuditLogger.Instance;
+        await auditLogger.LogAsync(Guid.NewGuid(), eventType, severity, message, cancellationToken: CancellationToken.None);
     }
 
     private async Task PollOnceAsync(CancellationToken stoppingToken)

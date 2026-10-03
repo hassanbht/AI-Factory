@@ -60,7 +60,13 @@ public sealed class HermesExecutionAdapterTests
                 RunRequest = request;
             }
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(_respond(request));
+            var result = _respond(request);
+            if (request.Arguments.Contains("run") && !result.TimedOut)
+            {
+                HermesRunReportFake.Write(request);
+            }
+
+            return Task.FromResult(result);
         }
     }
 
@@ -298,7 +304,6 @@ public sealed class HermesExecutionAdapterTests
         var options = new HermesOptions
         {
             DockerImage = "test/hermes:pinned",
-            DataVolume = "hermes-data",
             WorkspaceRoot = Path.Combine(Path.GetTempPath(), "ai-factory-hermes-adapter-tests"),
             TimeoutSeconds = 60,
             MaxOutputLength = 100_000,
@@ -351,11 +356,14 @@ public sealed class HermesExecutionAdapterTests
                     "--label", "adapter=Hermes",
                     "--label", "managed=true",
                     "--network", "bridge",
-                    "-v", "hermes-data:/opt/data",
+                    // Phase M — per-run anonymous Hermes home, never a configured host path.
+                    "-v", "/opt/data",
                     "-v", $"{workspace}:/workspace",
                     "-e", "HERMES_WRITE_SAFE_ROOT=/workspace",
                     "test/hermes:pinned",
                     "-z", "SYSTEM\n\nINSTRUCTIONS",
+                    // Phase J — Hermes' machine-readable run report (see HermesAgentExecutor).
+                    "--usage-file", $"/workspace/{HermesAgentExecutor.RunReportFileName(spec.AgentRunId)}",
                     "-m", "routed-model",
                     "--provider", "openrouter"
                 },
@@ -404,10 +412,14 @@ public sealed class HermesExecutionAdapterTests
             .Select(x => process.Arguments[x.i + 1])
             .ToArray();
 
+        // Phase K — the key is passed by NAME (`-e OPENROUTER_API_KEY`); docker copies the value
+        // from its own controlled environment, so it never appears on the command line.
         Assert.Equal(
-            new[] { "OPENROUTER_BASE_URL=http://gateway.internal/v1", "HERMES_WRITE_SAFE_ROOT=/custom", "OPENROUTER_API_KEY=test-key-value" },
+            new[] { "OPENROUTER_BASE_URL=http://gateway.internal/v1", "HERMES_WRITE_SAFE_ROOT=/custom", "OPENROUTER_API_KEY" },
             envFlags);
-        Assert.DoesNotContain(process.EnvironmentVariables!.Values, v => v.Contains("test-key-value", StringComparison.Ordinal));
+        Assert.DoesNotContain(process.Arguments, a => a.Contains("test-key-value", StringComparison.Ordinal));
+        Assert.Equal("test-key-value", process.EnvironmentVariables!["OPENROUTER_API_KEY"]);
+        Assert.Equal(new[] { "OPENROUTER_API_KEY", "PATH" }, process.EnvironmentVariables.Keys.Order().ToArray());
     }
 
     [Fact]

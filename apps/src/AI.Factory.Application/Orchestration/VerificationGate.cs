@@ -23,6 +23,7 @@ public sealed class VerificationGate : IVerificationGate
     private readonly IWorkspaceResolver _workspaceResolver;
     private readonly IWorkItemAcceptanceVerifier _acceptanceVerifier;
     private readonly ExecutionLimitsOptions _executionLimits;
+    private readonly IWorkspaceIntegrityInspector? _integrityInspector;
     private readonly ILogger<VerificationGate> _logger;
 
     public VerificationGate(
@@ -31,8 +32,10 @@ public sealed class VerificationGate : IVerificationGate
         IWorkspaceResolver workspaceResolver,
         IWorkItemAcceptanceVerifier acceptanceVerifier,
         ExecutionLimitsOptions executionLimits,
-        ILogger<VerificationGate> logger)
+        ILogger<VerificationGate> logger,
+        IWorkspaceIntegrityInspector? integrityInspector = null)
     {
+        _integrityInspector = integrityInspector;
         _buildExecutor = buildExecutor;
         _testExecutor = testExecutor;
         _workspaceResolver = workspaceResolver;
@@ -75,6 +78,25 @@ public sealed class VerificationGate : IVerificationGate
             }
 
             var resolvedPath = workspace.Path!;
+
+            // Phase M — workspace integrity is part of the Factory's verification boundary: a run that
+            // left runtime state/credentials/installers behind, rewrote build infrastructure or changed
+            // existing dependency versions fails verification (repairable — the repair agent receives the
+            // exact violations), whatever the agent reported.
+            if (_integrityInspector is not null
+                && await _integrityInspector.GetChangesAsync(resolvedPath, cancellationToken) is { } changes
+                && WorkspaceIntegrityPolicy.Evaluate(changes) is { Count: > 0 } violations)
+            {
+                _logger.LogWarning(
+                    "WorkspaceIntegrityViolations WorkItemId={WorkItemId} ProjectId={ProjectId} Count={Count}",
+                    workItem?.Id, project.Id, violations.Count);
+
+                return Result(
+                    VerificationStatus.Failed,
+                    Truncate("Workspace integrity violations — remove or undo these and change only the source and "
+                        + "tests this WorkItem needs: " + string.Join("; ", violations)),
+                    null, stopwatch);
+            }
 
             var build = await _buildExecutor.BuildAsync(
                 new BuildRequest(resolvedPath, TimeSpan.FromMinutes(_executionLimits.BuildTimeoutMinutes)),

@@ -1,0 +1,17 @@
+﻿{
+    "run":  "factory-T3-r2",
+    "tool":  "factory",
+    "task":  "T3",
+    "build":  true,
+    "hiddenPassed":  10,
+    "hiddenTotal":  10,
+    "otherPassed":  49,
+    "otherFailed":  0,
+    "filesChanged":  4,
+    "linesAdded":  56,
+    "linesDeleted":  5,
+    "outOfScopeFiles":  [
+
+                        ],
+    "scoredAt":  "2026-10-02T12:25:11.6272929+02:00"
+}

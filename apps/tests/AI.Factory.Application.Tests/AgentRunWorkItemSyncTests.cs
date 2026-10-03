@@ -101,7 +101,8 @@ public sealed class AgentRunWorkItemSyncTests : IDisposable
     [Theory]
     [InlineData(AgentRunStatus.Failed, WorkItemStatus.Failed)]
     [InlineData(AgentRunStatus.Cancelled, WorkItemStatus.Cancelled)]
-    [InlineData(AgentRunStatus.TimedOut, WorkItemStatus.Failed)]
+    // Phase M — a timeout is retryable: with budget left it returns the WorkItem to Ready.
+    [InlineData(AgentRunStatus.TimedOut, WorkItemStatus.Ready)]
     public async Task SyncAsync_TerminalRuntimeFailure_TransitionsWorkItem(AgentRunStatus runStatus, WorkItemStatus expected)
     {
         // Phase 18.7 §12 "Runtime failure" — unchanged since Phase 18.3: the
@@ -115,6 +116,152 @@ public sealed class AgentRunWorkItemSyncTests : IDisposable
 
         var workItem = await new WorkItemRepository(db).GetByIdAsync(taskId);
         Assert.Equal(expected.ToString(), workItem!.Status);
+    }
+
+    // ---------------- Phase M — bounded runtime retry (benchmark factory-T1-r2) ----------------
+
+    private async Task SetAttemptBudgetAsync(Guid workItemId, int attemptCount, int maxAttempts)
+    {
+        await using var db = new FactoryDbContext(_options);
+        var item = await db.WorkItems.SingleAsync(x => x.Id == workItemId);
+        item.AttemptCount = attemptCount;
+        item.MaxAttempts = maxAttempts;
+        await db.SaveChangesAsync();
+    }
+
+    private async Task<WorkItem> SyncAndReloadAsync(AgentRun run, IAuditLogger? audit = null)
+    {
+        await using (var db = new FactoryDbContext(_options))
+        {
+            var sync = new AgentRunWorkItemSync(
+                new WorkItemRepository(db), new ProjectRepository(db), new WorkItemExecutionResultMapper(),
+                new FakeVerificationGate(VerificationStatus.Passed),
+                new FakeWorkItemCompletionProcessor(WorkItemStatus.Completed, null),
+                NullLogger<AgentRunWorkItemSync>.Instance, audit);
+            await sync.SyncAsync(run);
+        }
+
+        await using var verify = new FactoryDbContext(_options);
+        return (await new WorkItemRepository(verify).GetByIdAsync(run.WorkItemId!.Value))!;
+    }
+
+    [Fact]
+    public async Task TimedOutAttempt_WithBudgetLeft_IsRetried_CountedAndAudited()
+    {
+        var taskId = await SeedRunningTaskAsync();
+        var audit = new CapturingAuditLogger();
+        var run = new AgentRun
+        {
+            WorkItemId = taskId, Status = AgentRunStatus.TimedOut, FailureCategory = FailureCategory.Timeout,
+            ErrorMessage = "Execution timed out after 285 seconds."
+        };
+
+        var workItem = await SyncAndReloadAsync(run, audit);
+
+        Assert.Equal(WorkItemStatus.Ready.ToString(), workItem.Status);
+        Assert.Equal(1, workItem.AttemptCount); // never again "TimedOut, attemptCount 0"
+        Assert.Contains("Attempt 1 of 3 ended 'TimedOut'", workItem.CurrentError);
+        Assert.Contains("Retry scheduled", workItem.CurrentError);
+        Assert.Contains(audit.Events, e => e == AuditEventType.Retry);
+    }
+
+    [Fact]
+    public async Task TimedOutAttempt_WhenBudgetIsExhausted_FailsWithAReason()
+    {
+        var taskId = await SeedRunningTaskAsync();
+        await SetAttemptBudgetAsync(taskId, attemptCount: 2, maxAttempts: 3);
+
+        var workItem = await SyncAndReloadAsync(new AgentRun { WorkItemId = taskId, Status = AgentRunStatus.TimedOut });
+
+        Assert.Equal(WorkItemStatus.Failed.ToString(), workItem.Status);
+        Assert.Equal(3, workItem.AttemptCount);
+        Assert.Contains("budget exhausted", workItem.CurrentError);
+    }
+
+    [Fact]
+    public async Task TimedOutAttempt_WhenPolicyAllowsNoRetry_Fails()
+    {
+        var taskId = await SeedRunningTaskAsync();
+        await SetAttemptBudgetAsync(taskId, attemptCount: 0, maxAttempts: 1);
+
+        var workItem = await SyncAndReloadAsync(new AgentRun { WorkItemId = taskId, Status = AgentRunStatus.TimedOut });
+
+        Assert.Equal(WorkItemStatus.Failed.ToString(), workItem.Status);
+        Assert.Equal(1, workItem.AttemptCount);
+    }
+
+    [Fact]
+    public async Task OrphanedRun_InfrastructureFailure_IsRetried()
+    {
+        var taskId = await SeedRunningTaskAsync();
+        var run = new AgentRun
+        {
+            WorkItemId = taskId, Status = AgentRunStatus.Failed, FailureCategory = FailureCategory.Infrastructure,
+            ErrorMessage = $"{AgentRunRecovery.OrphanedMarker}: no heartbeat."
+        };
+
+        var workItem = await SyncAndReloadAsync(run);
+
+        Assert.Equal(WorkItemStatus.Ready.ToString(), workItem.Status);
+        Assert.Equal(1, workItem.AttemptCount);
+    }
+
+    [Theory]
+    [InlineData(FailureCategory.Agent)]
+    [InlineData(FailureCategory.Validation)]
+    [InlineData(FailureCategory.Provider)]
+    public async Task NonRetryableFailure_FailsImmediately_ButStillConsumesAnAttempt(FailureCategory category)
+    {
+        var taskId = await SeedRunningTaskAsync();
+
+        var workItem = await SyncAndReloadAsync(new AgentRun
+        {
+            WorkItemId = taskId, Status = AgentRunStatus.Failed, FailureCategory = category, ErrorMessage = "boom"
+        });
+
+        Assert.Equal(WorkItemStatus.Failed.ToString(), workItem.Status);
+        Assert.Equal(1, workItem.AttemptCount);
+        Assert.Contains("Not retryable", workItem.CurrentError);
+    }
+
+    [Fact]
+    public async Task CancelledRun_IsNeverRetried()
+    {
+        var taskId = await SeedRunningTaskAsync();
+
+        var workItem = await SyncAndReloadAsync(new AgentRun { WorkItemId = taskId, Status = AgentRunStatus.Cancelled });
+
+        Assert.Equal(WorkItemStatus.Cancelled.ToString(), workItem.Status);
+        Assert.Equal(0, workItem.AttemptCount);
+    }
+
+    [Fact]
+    public async Task RepeatedSyncOfTheSameTimedOutRun_RetriesExactlyOnce()
+    {
+        var taskId = await SeedRunningTaskAsync();
+        var run = new AgentRun { WorkItemId = taskId, Status = AgentRunStatus.TimedOut };
+
+        await SyncAndReloadAsync(run);
+        var workItem = await SyncAndReloadAsync(run);
+
+        Assert.Equal(WorkItemStatus.Ready.ToString(), workItem.Status);
+        Assert.Equal(1, workItem.AttemptCount);
+    }
+
+    private sealed class CapturingAuditLogger : IAuditLogger
+    {
+        public List<AuditEventType> Events { get; } = new();
+
+        public Task LogAsync(
+            Guid executionId, AuditEventType eventType, AuditSeverity severity, string message,
+            Guid? projectId = null, Guid? workItemId = null, IReadOnlyDictionary<string, string>? metadata = null,
+            Guid? correlationId = null, Guid? operationId = null, Guid? runId = null, string? outcome = null,
+            string? actorType = null, string? actorId = null, long? durationMs = null,
+            CancellationToken cancellationToken = default)
+        {
+            Events.Add(eventType);
+            return Task.CompletedTask;
+        }
     }
 
     // ---------------- Phase 18.7 — Succeeded AgentRun is interpreted, not trusted blindly ----------------

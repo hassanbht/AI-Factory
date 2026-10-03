@@ -1,0 +1,17 @@
+﻿{
+    "run":  "reference-T2-r1",
+    "tool":  "reference",
+    "task":  "T2",
+    "build":  true,
+    "hiddenPassed":  9,
+    "hiddenTotal":  9,
+    "otherPassed":  5,
+    "otherFailed":  0,
+    "filesChanged":  1,
+    "linesAdded":  3,
+    "linesDeleted":  1,
+    "outOfScopeFiles":  [
+
+                        ],
+    "scoredAt":  "2026-10-02T09:30:58.7800215+02:00"
+}

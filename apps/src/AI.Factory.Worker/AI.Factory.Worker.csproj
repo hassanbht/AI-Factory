@@ -5,6 +5,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>dotnet-AI.Factory.Worker-5f534c9a-5bd7-4d2c-ada0-f4bb8a2bdd37</UserSecretsId>
+    <!-- Phase M: see AI.Factory.Api.csproj — project workspaces never compile into the Factory. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);projects/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>

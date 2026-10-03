@@ -4,17 +4,6 @@ public sealed class HermesOptions
 {
     public string DockerImage { get; set; } = "nousresearch/hermes-agent:0.20.6";
 
-    /// <summary>
-    /// What is mounted at /opt/data (Hermes's own persistent state). A value
-    /// containing a path separator is a host path bind mount; a bare name is a
-    /// Docker named volume. The containerized Worker topology (Phase 18.29.1)
-    /// must use a named volume: bind-mount paths in a `docker run` issued over
-    /// a mounted socket are resolved by the HOST daemon, so a path that only
-    /// exists inside the Worker container would silently create an unrelated
-    /// empty host directory instead.
-    /// </summary>
-    public string DataVolume { get; set; } = string.Empty;
-
     /// <summary>Directory under which a fresh isolated subfolder is created per execution, mounted at /workspace.</summary>
     public string WorkspaceRoot { get; set; } = string.Empty;
 
@@ -59,9 +48,10 @@ public sealed class HermesOptions
     public string? DefaultModel { get; set; }
 
     /// <summary>
-    /// Non-secret environment variables to pass into the Hermes container beyond PATH — e.g.
-    /// {"OPENROUTER_BASE_URL": "http://host.docker.internal:20128/v1"} to point the named
-    /// <see cref="Provider"/> at a local OpenAI-compatible gateway instead of its real endpoint.
+    /// Non-secret environment variables to pass into the Hermes container beyond PATH. Phase K: a
+    /// <c>{PROVIDER}_BASE_URL</c> entry (e.g. OPENROUTER_BASE_URL) must equal the routed model
+    /// gateway's BaseUrl — an override pointing Hermes at a different endpoint than the gateway the
+    /// run was routed to is refused, never silently used.
     /// Never put a secret value here — use <see cref="ProviderApiKeyEnvironmentVariable"/>/
     /// <see cref="ProviderApiKeySecretName"/> instead, which resolve through ISecretProvider.
     /// </summary>

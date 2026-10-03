@@ -27,6 +27,14 @@ public static class AgentExecutionFailureClassifier
             return false;
         }
 
+        // Phase J — the process ran to completion and exited 0, so this is a failure the
+        // runtime itself reported (e.g. Hermes' gateway HTTP 402), never a launch failure:
+        // retrying it would re-send the same rejected request.
+        if (result.ExitCode == 0)
+        {
+            return false;
+        }
+
         var error = result.Error ?? string.Empty;
 
         // If it's a genuine transient daemon launch error (e.g. temporary socket timeout/connection reset)

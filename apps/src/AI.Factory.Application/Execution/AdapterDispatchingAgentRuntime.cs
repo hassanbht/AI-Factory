@@ -213,7 +213,9 @@ public sealed class AdapterDispatchingAgentRuntime : IAgentRuntime, IAgentExecut
         Provider: outcome.Model.GatewayKey,
         Model: outcome.Model.ModelId,
         ExecutionAdapter: adapterKey,
-        ExitReason: outcome.ExitReason);
+        ExitReason: outcome.ExitReason,
+        GatewayFailure: outcome.GatewayFailure,
+        RuntimeReport: outcome.Report);
 
     /// <summary>No adapter ran, so no adapter key or exit reason is reported.</summary>
     private static AgentRunExecutionResult Rejected(AgentRun agentRun, string message, FailureCategory? category) => new(

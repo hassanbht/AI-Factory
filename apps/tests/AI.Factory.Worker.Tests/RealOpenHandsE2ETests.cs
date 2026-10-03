@@ -385,9 +385,8 @@ public sealed class RealOpenHandsE2ETests
         openHandsOptions.WorkspaceRoot = workspaceRoot;
         openHandsOptions.NetworkMode = "bridge";
         openHandsOptions.DefaultModel = OpenHandsModel;
-        openHandsOptions.ProviderBaseUrl = "https://openrouter.ai/api/v1";
-        openHandsOptions.ProviderApiKeySecretName = LiveWorkerHost.LiveApiKeySecretName;
-        openHandsOptions.ProviderApiKeyEnvironmentVariable = "OPENROUTER_API_KEY";
+        // Phase K — endpoint and credential come from the routed gateway, not OpenHands options.
+        LiveWorkerHost.RouteDefaultGatewayTo(builder.Services, "https://openrouter.ai/api/v1", LiveWorkerHost.LiveApiKeySecretName);
         configureOpenHands?.Invoke(openHandsOptions);
 
         // Configure ExecutionOptions to route Coding and default to OpenHands

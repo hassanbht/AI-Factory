@@ -32,7 +32,6 @@ public sealed class OrchestrationRunWorkerShutdownTests
             shutdownOptions,
             shutdown,
             tracker,
-            NullAuditLogger.Instance,
             metrics,
             NullLogger<OrchestrationRunWorker>.Instance);
 
@@ -63,7 +62,6 @@ public sealed class OrchestrationRunWorkerShutdownTests
             shutdownOptions,
             shutdown,
             tracker,
-            NullAuditLogger.Instance,
             metrics,
             NullLogger<OrchestrationRunWorker>.Instance);
 

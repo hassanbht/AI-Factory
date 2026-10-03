@@ -47,7 +47,7 @@ public sealed class ApiExceptionMapper
                 FailureCategory.Validation,
                 ShouldAudit: false),
 
-            ValidationException or ArgumentException or InvalidTaskPlanException or CircularWorkItemDependencyException or BadHttpRequestException or System.Text.Json.JsonException or FormatException => new ApiErrorMapping(
+            ValidationException or ArgumentException or CircularWorkItemDependencyException or BadHttpRequestException or System.Text.Json.JsonException or FormatException => new ApiErrorMapping(
                 StatusCodes.Status400BadRequest,
                 "Validation failed",
                 SensitiveDataSanitizer.Sanitize(string.IsNullOrWhiteSpace(exception.Message) ? "The request payload failed validation." : exception.Message),

@@ -41,6 +41,13 @@ public sealed class HermesAgentExecutor : IAgentExecutor
     {
         var stopwatch = Stopwatch.StartNew();
 
+        if (!string.IsNullOrWhiteSpace(request.Model) && AI.Factory.Application.Orchestration.ModelRoutingOptions.IsAutoOrImplicitModel(request.Model))
+        {
+            var message = $"Hermes execution refused: model '{request.Model}' is an automatic or implicit identifier.";
+            _logger.LogWarning(message);
+            return new AgentExecutionResult(false, null, message, stopwatch.ElapsedMilliseconds);
+        }
+
         var gatewayRejection = CheckGatewayRoute(request.Gateway);
         if (gatewayRejection is not null)
         {
@@ -237,6 +244,13 @@ public sealed class HermesAgentExecutor : IAgentExecutor
         // scheduler and planner create.
         var model = string.IsNullOrWhiteSpace(request.Model) ? _options.DefaultModel : request.Model;
 
+        if (!string.IsNullOrWhiteSpace(model) && AI.Factory.Application.Orchestration.ModelRoutingOptions.IsAutoOrImplicitModel(model))
+        {
+            var message = $"Hermes execution refused: model '{model}' is an automatic or implicit identifier.";
+            _logger.LogWarning(message);
+            return new AgentExecutionResult(false, null, message, stopwatch.ElapsedMilliseconds, workspacePath);
+        }
+
         if (!string.IsNullOrWhiteSpace(model))
         {
             arguments.Add("-m");
@@ -387,10 +401,18 @@ public sealed class HermesAgentExecutor : IAgentExecutor
             }
             else if (!success)
             {
-                var truncatedError = Truncate(result.StandardError);
-                error = string.IsNullOrEmpty(truncatedError)
-                    ? $"Process exited with code {result.ExitCode}."
-                    : truncatedError;
+                var providerError = ExtractProviderError(result.StandardOutput, result.StandardError);
+                if (providerError is not null)
+                {
+                    error = $"Hermes provider error (exit code {result.ExitCode}): {providerError}";
+                }
+                else
+                {
+                    var truncatedError = Truncate(result.StandardError);
+                    error = string.IsNullOrEmpty(truncatedError)
+                        ? $"Process exited with code {result.ExitCode}."
+                        : truncatedError;
+                }
             }
 
             // On an exit-0 failure stdout is a failure summary or unproven output, not agent
@@ -727,5 +749,31 @@ public sealed class HermesAgentExecutor : IAgentExecutor
         return text.Length > _options.MaxOutputLength
             ? text[.._options.MaxOutputLength] + "...[truncated]"
             : text;
+    }
+
+    public static string? ExtractProviderError(string? stdout, string? stderr)
+    {
+        foreach (var text in new[] { stdout, stderr })
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                continue;
+            }
+
+            var reason = ModelGatewayFailureClassifier.FromRuntimeMessage(text);
+            if (reason is not null)
+            {
+                var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var matchingLine = lines.LastOrDefault(l => l.Contains("HTTP 4") || l.Contains("HTTP 5"));
+                if (!string.IsNullOrWhiteSpace(matchingLine))
+                {
+                    return ModelGatewayFailureClassifier.SanitizeUpstreamMessage(matchingLine);
+                }
+
+                return ModelGatewayFailureClassifier.SanitizeUpstreamMessage(text, keepTail: true);
+            }
+        }
+
+        return null;
     }
 }

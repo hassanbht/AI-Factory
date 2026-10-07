@@ -2,6 +2,7 @@ using System.Diagnostics;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Abstractions.Execution;
 using AI.Factory.Application.Gateway;
+using AI.Factory.Application.Orchestration;
 using AI.Factory.Domain.Enums;
 using Microsoft.Extensions.Logging;
 
@@ -68,6 +69,20 @@ public sealed class HermesExecutionAdapter : IExecutionAdapter
                 _failureClassifier.Classify("Execution deadline was exceeded.", "timeout").Category,
                 0,
                 ExitReasons.Timeout);
+        }
+
+        if (!string.IsNullOrWhiteSpace(spec.Model.ModelId) && ModelRoutingOptions.IsAutoOrImplicitModel(spec.Model.ModelId))
+        {
+            var msg = $"Model '{spec.Model.ModelId}' is invalid auto or implicit model. Explicit non-auto model is required.";
+            _logger.LogError("HermesExecutionAdapter rejected invalid model: {Model}", spec.Model.ModelId);
+            return Outcome(
+                spec,
+                ExecutionOutcomeStatus.Failed,
+                output: null,
+                error: msg,
+                category: FailureCategory.Model,
+                0,
+                ExitReasons.Error);
         }
 
         // WorkingDirectory is the workspace AgentOrchestrator resolved for this run,
@@ -184,6 +199,7 @@ public sealed class HermesExecutionAdapter : IExecutionAdapter
     private static string? GatewayFailureReason(AgentExecutionResult result, string errorMessage) =>
         (ModelGatewayFailureClassifier.FromRuntimeMessage(errorMessage)
             ?? (errorMessage.StartsWith(HermesAgentExecutor.RuntimeReportedFailurePrefix, StringComparison.Ordinal)
+                || result.ExitCode != 0
                 ? ModelGatewayFailureClassifier.FromRuntimeMessage(result.Output)
                 : null))
         ?.ToString();

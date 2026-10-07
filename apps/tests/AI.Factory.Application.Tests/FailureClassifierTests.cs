@@ -89,7 +89,7 @@ public sealed class FailureClassifierTests
     [Fact]
     public void Classify_SecurityViolationException_ReturnsInfrastructureCategory()
     {
-        var result = _classifier.Classify(new Orchestration.SecurityViolationException("disallowed"));
+        var result = _classifier.Classify(new AI.Factory.Application.Orchestration.SecurityViolationException("disallowed"));
 
         Assert.Equal(FailureCategory.Infrastructure, result.Category);
         Assert.False(result.IsTransient);

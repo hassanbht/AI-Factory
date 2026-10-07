@@ -162,17 +162,18 @@ public sealed class AgentCodeReviewerTests
     }
 
     [Fact]
-    public async Task ReviewAsync_DegradesToInfoFinding_WhenOutputIsNotValidJson()
+    public async Task ReviewAsync_ReturnsBlockingCriticalFinding_WhenOutputIsMalformed()
     {
         var dispatcher = new FakeAgentExecutionDispatcher(_ => Outcome(ExecutionOutcomeStatus.Succeeded, "this is not json at all"));
         var reviewer = new AgentCodeReviewer(dispatcher, MakeModelRouter(), NullLogger<AgentCodeReviewer>.Instance);
 
         var result = await reviewer.ReviewAsync(MakeContext());
 
-        Assert.False(result.BlocksCompletion);
+        Assert.True(result.BlocksCompletion);
+        Assert.Equal(ReviewExecutionStatus.MalformedPayload, result.Status);
         Assert.Single(result.Findings);
-        Assert.Equal(ReviewFindingSeverity.Info, result.Findings[0].Severity);
-        Assert.Contains("could not be parsed", result.Findings[0].Description);
+        Assert.Equal(ReviewFindingSeverity.Critical, result.Findings[0].Severity);
+        Assert.Contains("malformed", result.Findings[0].Description, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

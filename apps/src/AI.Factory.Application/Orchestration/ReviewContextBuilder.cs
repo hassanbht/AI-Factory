@@ -27,15 +27,24 @@ public sealed class ReviewContextBuilder : IReviewContextBuilder
     private readonly IContextProvider _contextProvider;
     private readonly IArtifactRepository _artifactRepository;
     private readonly IValidationRunRepository _validationRunRepository;
+    private readonly IWorkspaceResolver? _workspaceResolver;
+    private readonly IReviewBundleBuilder? _reviewBundleBuilder;
+    private readonly IProjectRepository? _projectRepository;
 
     public ReviewContextBuilder(
         IContextProvider contextProvider,
         IArtifactRepository artifactRepository,
-        IValidationRunRepository validationRunRepository)
+        IValidationRunRepository validationRunRepository,
+        IWorkspaceResolver? workspaceResolver = null,
+        IReviewBundleBuilder? reviewBundleBuilder = null,
+        IProjectRepository? projectRepository = null)
     {
         _contextProvider = contextProvider;
         _artifactRepository = artifactRepository;
         _validationRunRepository = validationRunRepository;
+        _workspaceResolver = workspaceResolver;
+        _reviewBundleBuilder = reviewBundleBuilder;
+        _projectRepository = projectRepository;
     }
 
     public async Task<ReviewContext> BuildAsync(
@@ -57,18 +66,37 @@ public sealed class ReviewContextBuilder : IReviewContextBuilder
         var artifacts = await _artifactRepository.GetByWorkItemIdAsync(workItem.Id, cancellationToken);
         var latestValidation = await _validationRunRepository.GetLatestAsync(workItem.Id, cancellationToken);
 
+        ReviewBundle? bundle = null;
+        if (_reviewBundleBuilder is not null && _workspaceResolver is not null)
+        {
+            var project = _projectRepository is not null ? await _projectRepository.GetByIdAsync(workItem.ProjectId, cancellationToken) : null;
+            if (project is not null)
+            {
+                var workspace = _workspaceResolver.Resolve(project);
+                if (workspace.IsValid && !string.IsNullOrWhiteSpace(workspace.Path))
+                {
+                    bundle = await _reviewBundleBuilder.BuildBundleAsync(workspace.Path, null, cancellationToken);
+                }
+            }
+        }
+
+        var changedFiles = bundle?.ChangedFiles is { Count: > 0 }
+            ? bundle.ChangedFiles
+            : artifacts.Select(a => a.Path).ToList();
+
         return new ReviewContext(
             workItem.Id,
             workItem.ProjectId,
             JoinDocuments(requirements.Documents),
             workItem.AcceptanceCriteria,
             JoinDocuments(architecture.Documents),
-            BoundChangedFiles(artifacts.Select(a => a.Path).ToList()),
+            BoundChangedFiles(changedFiles),
             latestValidation?.TestOutput,
             latestValidation?.TestsSucceeded,
             latestValidation?.BuildOutput ?? string.Empty,
             latestValidation?.BuildSucceeded ?? false,
-            JoinDocuments(taskHistory.Documents));
+            JoinDocuments(taskHistory.Documents),
+            bundle);
     }
 
     /// <summary>

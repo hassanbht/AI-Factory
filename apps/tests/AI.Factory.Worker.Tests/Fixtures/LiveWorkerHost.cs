@@ -72,7 +72,7 @@ public sealed class LiveWorkerHost : IDisposable
         ?? "http://host.docker.internal:20128/v1";
 
     public static string LiveModel =>
-        Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_MODEL") ?? "auto/coding:free";
+        Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_MODEL") ?? "deepseek/deepseek-v4-flash-0731";
 
     /// <summary>
     /// Phase 18.24 §3/§17 — the NAME of the secret the provider key lives under,

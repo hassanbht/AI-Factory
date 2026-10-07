@@ -27,6 +27,11 @@ public sealed class ModelGatewayResolver
 
     public ModelGatewayResolution Resolve(ModelRoute? route, string? executionProfile = null)
     {
+        if (route is not null && AI.Factory.Application.Orchestration.ModelRoutingOptions.IsAutoOrImplicitModel(route.ModelId))
+        {
+            return ModelGatewayResolution.Failed(null, $"Model '{route.ModelId}' is rejected: auto or implicit model routing is not permitted.");
+        }
+
         string? requestedKey = null;
 
         if (!string.IsNullOrWhiteSpace(route?.GatewayKey))

@@ -53,6 +53,24 @@ public sealed class ModelRoutingOptions
         };
 
     /// <summary>
+    /// Phase P.1 — rejects automatic or implicit model routing (e.g. openrouter/auto, auto/coding, auto).
+    /// Model selection must be explicit, deterministic and fail-closed.
+    /// </summary>
+    public static bool IsAutoOrImplicitModel(string? modelId)
+    {
+        if (string.IsNullOrWhiteSpace(modelId))
+        {
+            return false;
+        }
+
+        var trimmed = modelId.Trim();
+        return trimmed.StartsWith("auto/", StringComparison.OrdinalIgnoreCase)
+            || trimmed.EndsWith("/auto", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(trimmed, "auto", StringComparison.OrdinalIgnoreCase)
+            || trimmed.IndexOf("/auto/", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    /// <summary>
     /// Phase 18.21 §15 — deterministic configuration validation. Never calls a
     /// provider: it only checks that the catalog is internally coherent and
     /// free of the placeholder ids no provider can serve. Returns a problem
@@ -68,6 +86,13 @@ public sealed class ModelRoutingOptions
             {
                 problems.Add("ModelRouting contains a model with an empty ModelId.");
                 continue;
+            }
+
+            if (IsAutoOrImplicitModel(model.ModelId))
+            {
+                problems.Add(
+                    $"ModelRouting model '{model.ModelId}' is an automatic or implicit model identifier — " +
+                    "model selection must be explicit, deterministic, and fail-closed.");
             }
 
             if (PlaceholderModelIds.Contains(model.ModelId, StringComparer.OrdinalIgnoreCase))
@@ -91,10 +116,19 @@ public sealed class ModelRoutingOptions
                 continue;
             }
 
-            foreach (var candidate in candidates.Where(c =>
-                !Models.Any(m => string.Equals(m.ModelId, c, StringComparison.OrdinalIgnoreCase))))
+            foreach (var candidate in candidates)
             {
-                problems.Add($"ModelRouting category '{category}' references unknown model '{candidate}'.");
+                if (IsAutoOrImplicitModel(candidate))
+                {
+                    problems.Add(
+                        $"ModelRouting category '{category}' references automatic or implicit model '{candidate}' — " +
+                        "model selection must be explicit, deterministic, and fail-closed.");
+                }
+
+                if (!Models.Any(m => string.Equals(m.ModelId, candidate, StringComparison.OrdinalIgnoreCase)))
+                {
+                    problems.Add($"ModelRouting category '{category}' references unknown model '{candidate}'.");
+                }
             }
         }
 

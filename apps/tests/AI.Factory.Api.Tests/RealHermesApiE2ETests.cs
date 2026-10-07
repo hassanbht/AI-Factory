@@ -30,7 +30,7 @@ public sealed class RealHermesApiE2ETests
         Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_BASE_URL") ?? "http://host.docker.internal:20128/v1";
 
     private static string LiveModel =>
-        Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_MODEL") ?? "auto/coding:free";
+        Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_MODEL") ?? "deepseek/deepseek-v4-flash-0731";
 
     private static string LiveApiKeySecretName =>
         Environment.GetEnvironmentVariable("AI_FACTORY_LIVE_API_KEY_SECRET") ?? "OMNIROUTE_API_KEY";

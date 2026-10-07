@@ -1,4 +1,4 @@
-﻿using AI.Factory.Application.Abstractions;
+using AI.Factory.Application.Abstractions;
 
 namespace AI.Factory.Application.Orchestration;
 
@@ -22,13 +22,21 @@ public sealed class ModelRouter : IModelRouter
                 $"No model profile configured for task category '{request.TaskCategory}'.");
         }
 
+        if (candidateIds.Any(ModelRoutingOptions.IsAutoOrImplicitModel))
+        {
+            throw new NoModelAvailableException(
+                $"Task category '{request.TaskCategory}' contains automatic or implicit model identifiers which are rejected.");
+        }
+
         var minReasoning = MinReasoningFor(request.Complexity);
 
         var candidates = candidateIds
+            .Where(id => !ModelRoutingOptions.IsAutoOrImplicitModel(id))
             .Select(id => _options.Models.FirstOrDefault(
                 m => string.Equals(m.ModelId, id, StringComparison.OrdinalIgnoreCase)))
             .Where(m => m is not null)
             .Select(m => m!)
+            .Where(m => !ModelRoutingOptions.IsAutoOrImplicitModel(m.ModelId))
             .Where(m => m.IsAvailable)
             .Where(m => m.MaxContextTokens >= request.EstimatedContextTokens)
             .Where(m => m.ReasoningStrength >= minReasoning)

@@ -33,6 +33,44 @@ public enum ReviewCategory
     UnnecessaryComplexity
 }
 
+public enum ReviewChangeKind
+{
+    Added,
+    Modified,
+    Deleted
+}
+
+public sealed record ReviewFileChange(
+    string Path,
+    ReviewChangeKind Kind,
+    string? Content = null,
+    string? Diff = null);
+
+public sealed record ReviewBundle(
+    IReadOnlyList<string> ChangedFiles,
+    IReadOnlyList<ReviewFileChange> Changes,
+    string? UnifiedDiff = null,
+    IReadOnlyDictionary<string, string>? Metadata = null);
+
+public interface IReviewBundleBuilder
+{
+    Task<ReviewBundle?> BuildBundleAsync(
+        string workspacePath,
+        IReadOnlyList<string>? changedFiles = null,
+        CancellationToken cancellationToken = default);
+}
+
+public enum ReviewExecutionStatus
+{
+    SucceededWithFindings,
+    SucceededWithNoFindings,
+    ReviewerFailure,
+    MalformedPayload,
+    MissingResult,
+    TimedOut,
+    Cancelled
+}
+
 public sealed record ReviewFinding(
     ReviewFindingSeverity Severity,
     ReviewCategory Category,
@@ -52,9 +90,12 @@ public sealed record ReviewContext(
     bool? TestsSucceeded,
     string BuildOutput,
     bool BuildSucceeded,
-    string TaskHistoryText);
+    string TaskHistoryText,
+    ReviewBundle? Bundle = null);
 
 public sealed record ReviewResult(
     Guid WorkItemId,
     bool BlocksCompletion,
-    IReadOnlyList<ReviewFinding> Findings);
+    IReadOnlyList<ReviewFinding> Findings,
+    ReviewExecutionStatus Status = ReviewExecutionStatus.SucceededWithNoFindings,
+    string? ErrorMessage = null);

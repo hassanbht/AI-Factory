@@ -149,7 +149,7 @@ public sealed class ModelBackedCertificationTests
             var ended = DateTime.UtcNow;
             Evidence($"workItem.final={finalItem.Status} repairAttempts={finalItem.RepairAttemptCount} error={Truncate(finalItem.CurrentError)} endUtc={ended:O} wallS={(ended - started).TotalSeconds:F0}");
 
-            var runs = await ReportPersistedEvidenceAsync(host, workItemId);
+            var (runs, reviewRuns) = await ReportPersistedEvidenceAsync(host, workItemId);
 
             // ── Cleanup (P9): immediately after the worker stopped, and again after the 10 s reconciliation window ──
             var factoryAfter = FactoryContainers();
@@ -183,6 +183,12 @@ public sealed class ModelBackedCertificationTests
             {
                 Evidence("  " + Truncate(line));
             }
+            var reviewLines = logs.Where(l => l.Contains("Independent review", StringComparison.OrdinalIgnoreCase)).ToList();
+            Evidence($"logs.reviewMentions={reviewLines.Count}");
+            foreach (var line in reviewLines)
+            {
+                Evidence("  " + Truncate(line, 500));
+            }
 
             // ── Independent check of the artifact (not the agent's word, not the Factory's) ──
             var calculator = File.ReadAllText(Path.Combine(projectRoot, "src", "Calculator.cs"));
@@ -209,6 +215,8 @@ public sealed class ModelBackedCertificationTests
             Assert.Equal(0, credentialLogLines);
             Assert.True(focused.ExitCode == 0 && focusedPassedOne, "The requested test does not exist or does not pass:\n" + Truncate(focused.Output, 1500));
             Assert.True(full.ExitCode == 0, "The workspace's suite does not pass:\n" + Truncate(full.Output, 1500));
+            Assert.NotEmpty(reviewRuns);
+            Assert.False(reviewRuns.Last().BlocksCompletion, "Independent review blocked completion: " + reviewRuns.Last().FindingsJson);
             Assert.Empty(factoryAfter);
             Assert.Empty(factoryLate);
             Assert.Empty(foreignChanged);
@@ -381,7 +389,7 @@ public sealed class ModelBackedCertificationTests
         throw new TimeoutException($"WorkItem {workItemId} did not settle within {timeout}. Last observed: {last}.");
     }
 
-    private async Task<List<AgentRun>> ReportPersistedEvidenceAsync(IHost host, Guid workItemId)
+    private async Task<(List<AgentRun> Runs, List<ReviewRun> ReviewRuns)> ReportPersistedEvidenceAsync(IHost host, Guid workItemId)
     {
         await using var scope = host.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<FactoryDbContext>();
@@ -407,12 +415,13 @@ public sealed class ModelBackedCertificationTests
             Evidence($"validationRun success={v.Success} build={v.BuildSucceeded} tests={v.TestsSucceeded?.ToString() ?? "-"}");
         }
 
-        foreach (var r in await db.ReviewRuns.Where(r => r.WorkItemId == workItemId).OrderBy(r => r.CreatedAtUtc).ToListAsync())
+        var reviewRuns = await db.ReviewRuns.Where(r => r.WorkItemId == workItemId).OrderBy(r => r.CreatedAtUtc).ToListAsync();
+        foreach (var r in reviewRuns)
         {
-            Evidence($"reviewRun blocksCompletion={r.BlocksCompletion} findings={Truncate(r.FindingsJson, 400)}");
+            Evidence($"reviewRun blocksCompletion={r.BlocksCompletion} findings={r.FindingsJson}");
         }
 
-        return runs;
+        return (runs, reviewRuns);
     }
 
     private static string Reported(int? value) => value?.ToString() ?? "NOT REPORTED";
@@ -619,6 +628,11 @@ public sealed class ModelBackedCertificationTests
         var path = Environment.GetEnvironmentVariable("AI_FACTORY_CERT_EVIDENCE_FILE");
         if (!string.IsNullOrWhiteSpace(path))
         {
+            var dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
             File.AppendAllLines(path, _evidence.Select(l => "CERT " + l).Append(string.Empty));
         }
     }

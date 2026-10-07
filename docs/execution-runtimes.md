@@ -191,18 +191,18 @@ Commands and credential handling: [local-setup.md](local-setup.md#running-the-te
 one at a time; the Docker and real-build tests hold a machine-wide lock so they never overlap each other, whichever test
 assembly they are in.
 
-## Limitations
+## Limitations and Phase P.1 Resolutions
 
-- **Independent review is not effective** (Phase P, observed live — see `docs/phase-p-report.md`): the reviewer is given
-  only the changed-file *paths* (no content, no diff) in an empty scratch workspace, and `AgentCodeReviewer` parses the
-  *whole* runtime output as JSON. Hermes prints its container start-up log first, so a real findings array (the Phase P
-  reviewer returned one in a fenced block) is discarded and stored as a single non-blocking Info finding. A completed
-  WorkItem therefore proves verification + acceptance criteria, not a code review.
-- The workspace-integrity policy is a deny-list: an unrequested file with an arbitrary name (Phase P: an untracked file
-  named U+F00D left by an OpenHands agent) passes verification, and acceptance criteria only check required content.
-- Automatic model ids (`auto/…`) are not rejected by the Factory itself (the shipped catalog still lists
-  `auto/coding:free`); the Phase P certification harness rejects them. Hermes/OpenHands fall back to their configured
-  `DefaultModel` when a run carries no model; only the CLI adapters reject an unmapped model.
+- **Independent review integrity** (Phase P.1 hardening):
+  - In Phase P, the reviewer received only file paths in an empty scratch workspace and Hermes container startup logs broke whole-output JSON parsing, degrading to non-blocking informational success.
+  - In Phase P.1, this is resolved: `IReviewBundleBuilder` extracts unified diffs and newly created file contents into an immutable, provider-neutral `ReviewBundle`. `AgentCodeReviewer` injects the diff and added file contents into the prompt, enforces explicit framing (`<!-- REVIEW_START -->...<!-- REVIEW_END -->`), and skips container startup brackets (e.g., `[s6-init]`).
+  - Missing, malformed, or failed reviewer runs yield `BlocksCompletion = true` and `ReviewFindingSeverity.Critical`, guaranteeing that reviewer failures never degrade to false approvals.
+- **Workspace integrity positive allowlist** (Phase P.1 fix for G-P3):
+  - In Phase P, acceptance allowed unrequested untracked files (such as U+F00D) because the integrity policy was purely deny-list based.
+  - In Phase P.1, `WorkspaceIntegrityPolicy` uses a positive allowlist on additions (restricting additions to permitted root directories and extensions like `.cs`, `.json`, etc., while flagging hidden files, scripts, nested repositories, and unicode paths formatted losslessly as `U+XXXX`). Unexpected additions fail verification and block completion.
+- **Fail-closed model routing** (Phase P.1 hardening):
+  - `auto/...` and implicit model identifiers are rejected fail-closed across `ModelRouter`, `ModelGatewayResolver`, `HermesExecutionAdapter`, and `OpenHandsExecutionAdapter`.
+  - The shipped worker catalog was cleaned to eliminate `auto/coding:free`.
 - Hermes' own usage figures are persisted verbatim; its `total_tokens` need not equal input + output (Phase P:
   99,662 + 4,776 vs. 389,622).
 - Claude Code / Codex generation is **not verified live** (Phases M, N, O and P: no credential available; Codex CLI

@@ -43,7 +43,6 @@ public sealed class OpenHandsStateIsolationLiveTests
     private static bool Enabled =>
         bool.TryParse(Environment.GetEnvironmentVariable("AI_FACTORY_OPENHANDS_SMOKE_TEST"), out var enabled) && enabled;
 
-    [Fact]
     [LiveFact("AI_FACTORY_OPENHANDS_SMOKE_TEST", RequiresDocker = true)]
     public async Task RealAgentServer_ConcurrentRuns_LeaveNoRuntimeStateInTheirWorkspaces_NorAnyContainer()
     {

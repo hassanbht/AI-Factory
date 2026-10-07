@@ -374,6 +374,7 @@ builder.Services.AddModelRoutingPreflight(
         recoveryOptions.Validate(agentWorkerOptions.HeartbeatInterval);
 
         builder.Services.AddScoped<IReviewRunRepository, ReviewRunRepository>();
+        builder.Services.AddScoped<IReviewBundleBuilder, AI.Factory.Infrastructure.Validation.GitReviewBundleBuilder>();
         builder.Services.AddScoped<IReviewContextBuilder, ReviewContextBuilder>();
         builder.Services.AddScoped<ICodeReviewer, AgentCodeReviewer>();
 

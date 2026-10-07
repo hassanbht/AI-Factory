@@ -264,7 +264,7 @@ public sealed class ReviewOutcomeMatrixTests
     }
 
     [Fact]
-    public async Task MalformedOutput_DegradesToSingleInfoFinding_DoesNotBlock()
+    public async Task MalformedOutput_ProducesCriticalFinding_BlocksCompletion()
     {
         var unparseable = "The code looks solid overall. No major issues observed.";
 
@@ -282,12 +282,12 @@ public sealed class ReviewOutcomeMatrixTests
 
         var result = await reviewer.ReviewAsync(CreateContext());
 
-        Assert.False(result.BlocksCompletion);
+        Assert.True(result.BlocksCompletion);
+        Assert.Equal(ReviewExecutionStatus.MalformedPayload, result.Status);
         Assert.Single(result.Findings);
-        Assert.Equal(ReviewFindingSeverity.Info, result.Findings[0].Severity);
-        Assert.Equal(ReviewCategory.Maintainability, result.Findings[0].Category);
-        Assert.Contains("could not be parsed as structured findings", result.Findings[0].Description);
-        Assert.Contains(unparseable, result.Findings[0].Description);
+        Assert.Equal(ReviewFindingSeverity.Critical, result.Findings[0].Severity);
+        Assert.Equal(ReviewCategory.Correctness, result.Findings[0].Category);
+        Assert.Contains("malformed", result.Findings[0].Description, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

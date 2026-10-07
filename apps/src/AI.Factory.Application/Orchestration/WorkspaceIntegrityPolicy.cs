@@ -92,7 +92,91 @@ public static class WorkspaceIntegrityPolicy
         @"\b(sk-(ant|or|proj)-[A-Za-z0-9_\-]{16,}|sk-[A-Za-z0-9]{32,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36,})\b",
         RegexOptions.Compiled);
 
-    public static IReadOnlyList<string> Evaluate(IReadOnlyList<WorkspaceFileChange> changes)
+    private static readonly HashSet<string> AllowedAdditionsExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".cs", ".fs", ".vb", ".json", ".xml", ".md", ".txt", ".html", ".css", ".js", ".ts",
+        ".proto", ".sql", ".razor", ".xaml", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".ico",
+        ".editorconfig", ".yml", ".yaml"
+    };
+
+    private static readonly string[] AllowedRootDirectories =
+    {
+        "src/", "tests/", "test/", "docs/", "bench/", "projects/", "apps/", "samples/"
+    };
+
+    public static string FormatLossless(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+        {
+            return "<empty>";
+        }
+
+        var isPrintableAscii = path.All(c => c is >= ' ' and <= '~');
+        if (isPrintableAscii)
+        {
+            return path;
+        }
+
+        return $"{path} (code points: {string.Join(" ", path.Select(c => $"U+{(int)c:X4}"))})";
+    }
+
+    private static bool IsAllowedNewFile(string path, IEnumerable<string>? explicitAllowlist = null)
+    {
+        if (explicitAllowlist != null && explicitAllowlist.Contains(path, StringComparer.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // 1. Must be printable ASCII only (no invisible/unicode/control characters like U+F00D)
+        if (!path.All(c => c is >= ' ' and <= '~' && c != '\\' && c != ':'))
+        {
+            return false;
+        }
+
+        // 2. Reject hidden files (starts with dot or segment starts with dot)
+        if (path.StartsWith('.') || path.Split('/').Any(seg => seg.StartsWith('.')))
+        {
+            return false;
+        }
+
+        // 3. Reject files in root directory (unless explicitly allowlisted)
+        if (!path.Contains('/'))
+        {
+            return false;
+        }
+
+        // 4. Reject nested git repositories or gitlinks
+        if (path.Contains(".git", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        // 5. Must reside in an approved directory hierarchy
+        if (!AllowedRootDirectories.Any(dir => path.StartsWith(dir, StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        // 6. Must have an allowed extension
+        var ext = Path.GetExtension(path);
+        if (string.IsNullOrEmpty(ext) || !AllowedAdditionsExtensions.Contains(ext))
+        {
+            return false;
+        }
+
+        // 7. Must not be a solution or project file unexpectedly added
+        if (path.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    public static IReadOnlyList<string> Evaluate(IReadOnlyList<WorkspaceFileChange> changes, IEnumerable<string>? allowedAdditions = null)
     {
         var violations = new List<string>();
 
@@ -118,6 +202,15 @@ public static class WorkspaceIntegrityPolicy
             {
                 violations.Add($"build infrastructure file '{change.Path}' was {change.Kind.ToString().ToLowerInvariant()}; it is out of scope for a WorkItem");
                 continue;
+            }
+
+            if (change.Kind == WorkspaceChangeKind.Added)
+            {
+                if (!IsAllowedNewFile(change.Path, allowedAdditions))
+                {
+                    violations.Add($"unexpected untracked file '{FormatLossless(change.Path)}' (added): additions must be approved source, test or documentation files in recognized project directories");
+                    continue;
+                }
             }
 
             if (change.Kind == WorkspaceChangeKind.Modified && change.BaselineContent is not null && change.CurrentContent is not null)

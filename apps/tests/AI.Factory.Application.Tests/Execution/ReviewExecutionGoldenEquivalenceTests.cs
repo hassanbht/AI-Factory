@@ -57,13 +57,28 @@ public sealed class ReviewExecutionGoldenEquivalenceTests
 
             if (!result.Success)
             {
+                var isTimeout = result.TimedOut || result.Error?.Contains("timeout", StringComparison.OrdinalIgnoreCase) == true || result.Error?.Contains("deadline", StringComparison.OrdinalIgnoreCase) == true;
+                var isCancelled = result.Error?.Contains("cancell", StringComparison.OrdinalIgnoreCase) == true;
+
+                var prefix = isTimeout
+                    ? "Independent review timed out"
+                    : isCancelled
+                        ? "Independent review was cancelled"
+                        : "Independent review could not be performed";
+
+                var rec = isTimeout
+                    ? "Investigate the reviewer agent timeout and re-run the review before completing this task."
+                    : isCancelled
+                        ? "Investigate the reviewer cancellation and re-run the review before completing this task."
+                        : "Investigate the reviewer agent failure and re-run the review before completing this task.";
+
                 var blockingFinding = new ReviewFinding(
                     ReviewFindingSeverity.Critical,
                     ReviewCategory.Correctness,
                     null,
                     null,
-                    $"Independent review could not be performed: {result.Error}",
-                    "Investigate the reviewer agent failure and re-run the review before completing this task.");
+                    $"{prefix}: {result.Error}",
+                    rec);
 
                 return new ReviewResult(context.WorkItemId, true, new[] { blockingFinding });
             }
@@ -153,12 +168,12 @@ public sealed class ReviewExecutionGoldenEquivalenceTests
                 return new[]
                 {
                     new ReviewFinding(
-                        ReviewFindingSeverity.Info,
-                        ReviewCategory.Maintainability,
+                        ReviewFindingSeverity.Critical,
+                        ReviewCategory.Correctness,
                         null,
                         null,
-                        $"Reviewer output could not be parsed as structured findings: {output}",
-                        "Review the raw agent output manually.")
+                        "Independent review output was malformed and could not be parsed: No structured JSON findings array found in reviewer output",
+                        "Ensure the reviewer model adheres to the required JSON findings schema.")
                 };
             }
         }
@@ -410,7 +425,7 @@ public sealed class ReviewExecutionGoldenEquivalenceTests
     }
 
     [Fact]
-    public async Task GoldenEquivalence_MalformedJsonOutput_EquivalentDegradationToInfo()
+    public async Task GoldenEquivalence_MalformedJsonOutput_EquivalentBlockingCriticalFinding()
     {
         var payload = "I evaluated the code and think it looks great! Here are my suggestions: none.";
 
@@ -433,11 +448,11 @@ public sealed class ReviewExecutionGoldenEquivalenceTests
         var migratedResult = await migrated.ReviewAsync(context);
 
         AssertEquivalence(legacyResult, migratedResult);
-        Assert.False(migratedResult.BlocksCompletion);
+        Assert.True(migratedResult.BlocksCompletion);
         Assert.Single(migratedResult.Findings);
-        Assert.Equal(ReviewFindingSeverity.Info, migratedResult.Findings[0].Severity);
-        Assert.Equal(ReviewCategory.Maintainability, migratedResult.Findings[0].Category);
-        Assert.Contains(payload, migratedResult.Findings[0].Description);
+        Assert.Equal(ReviewFindingSeverity.Critical, migratedResult.Findings[0].Severity);
+        Assert.Equal(ReviewCategory.Correctness, migratedResult.Findings[0].Category);
+        Assert.Contains("malformed", migratedResult.Findings[0].Description, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

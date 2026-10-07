@@ -3,7 +3,9 @@ using System.Net;
 using System.Net.Sockets;
 using AI.Factory.Application.Abstractions;
 using AI.Factory.Application.Abstractions.Execution;
+using AI.Factory.Application.Abstractions.Gateway;
 using AI.Factory.Application.Gateway;
+using AI.Factory.Application.Orchestration;
 using AI.Factory.Domain.Enums;
 using Microsoft.Extensions.Logging;
 
@@ -80,6 +82,20 @@ public sealed class OpenHandsExecutionAdapter : IExecutionAdapter
                 _failureClassifier.Classify("Execution deadline was exceeded.", "timeout").Category,
                 0,
                 ExitReasons.Timeout);
+        }
+
+        if (!string.IsNullOrWhiteSpace(spec.Model.ModelId) && ModelRoutingOptions.IsAutoOrImplicitModel(spec.Model.ModelId))
+        {
+            var msg = $"Model '{spec.Model.ModelId}' is invalid auto or implicit model. Explicit non-auto model is required.";
+            _logger.LogError("OpenHandsExecutionAdapter rejected invalid model: {Model}", spec.Model.ModelId);
+            return Outcome(
+                spec,
+                ExecutionOutcomeStatus.Failed,
+                output: null,
+                error: msg,
+                category: FailureCategory.Model,
+                0,
+                ExitReasons.Error);
         }
 
         var stopwatch = Stopwatch.StartNew();
@@ -208,7 +224,18 @@ public sealed class OpenHandsExecutionAdapter : IExecutionAdapter
                 ex.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
                 ex.Message.Contains("timed out", StringComparison.OrdinalIgnoreCase);
 
-            var classification = _failureClassifier.Classify(error, isTimeout ? "timeout" : "agent");
+            var gatewayReason = ModelGatewayFailureClassifier.FromRuntimeMessage(error);
+            string hint = isTimeout ? "timeout" : "agent";
+            if (gatewayReason != null)
+            {
+                hint = gatewayReason == ModelGatewayFailureReason.ModelUnavailable ? "model" : "provider";
+            }
+            else if (ex is ContainerLaunchRejectedException || error.Contains("docker", StringComparison.OrdinalIgnoreCase) || error.Contains("port", StringComparison.OrdinalIgnoreCase))
+            {
+                hint = "infrastructure";
+            }
+
+            var classification = _failureClassifier.Classify(error, hint);
 
             return Outcome(
                 spec,
@@ -489,9 +516,14 @@ public sealed class OpenHandsExecutionAdapter : IExecutionAdapter
                 $"Model gateway route rejected: {resolution.FailureReason ?? "Model gateway could not be resolved."}");
         }
 
+        if (string.IsNullOrWhiteSpace(spec.Model.ModelId) || ModelRoutingOptions.IsAutoOrImplicitModel(spec.Model.ModelId))
+        {
+            throw new InvalidOperationException(
+                $"Model '{spec.Model.ModelId}' is invalid, auto, or implicit. Explicit non-auto model is required.");
+        }
+
         var transport = resolution.Gateway.GetTransportInfo();
-        var modelId = resolution.Gateway.FormatModelIdentifier(
-            string.IsNullOrWhiteSpace(spec.Model.ModelId) ? _options.DefaultModel : spec.Model.ModelId);
+        var modelId = resolution.Gateway.FormatModelIdentifier(spec.Model.ModelId);
 
         var apiKey = _secretProvider is not null && !string.IsNullOrWhiteSpace(transport.ApiKeySecretName)
             ? await _secretProvider.GetSecretAsync(transport.ApiKeySecretName, cancellationToken)

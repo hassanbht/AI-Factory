@@ -20,7 +20,9 @@ public sealed class ProductionModelRouteConfigurationTests
     public static TheoryData<string> ProductionFiles => new()
     {
         Path.Combine("src", "AI.Factory.Worker", "appsettings.Production.json"),
-        Path.Combine("src", "AI.Factory.Api", "appsettings.Production.json")
+        Path.Combine("src", "AI.Factory.Api", "appsettings.Production.json"),
+        Path.Combine("src", "AI.Factory.Worker", "appsettings.json"),
+        Path.Combine("src", "AI.Factory.Api", "appsettings.json")
     };
 
     [Theory]

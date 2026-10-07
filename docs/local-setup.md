@@ -140,17 +140,25 @@ Claude Code without an API key: run `claude setup-token` once (browser login, su
 (`ClaudeCode:CredentialEnvironmentVariable=CLAUDE_CODE_OAUTH_TOKEN`) and drops `--bare` for it. The Factory never reads your
 `~/.claude` login: every run gets its own HOME/config directory.
 
-Phase P certification (`ModelBackedCertificationTests`): one runtime per process, one explicit model (any `auto` id is
-rejected), no fallback, the shipped OpenRouter gateway asserted (not overridden), a fresh disposable git repository
+Phase P / P.1 certification (`ModelBackedCertificationTests`): one runtime per process, one explicit model (any `auto` id is
+rejected fail-closed), no fallback, the shipped OpenRouter gateway asserted (not overridden), a fresh disposable git repository
 (`Calculator.Multiply` + `Multiply_ReturnsProduct`). It runs the real Worker path — scheduler → AgentRunWorker → adapter →
-verification gate → acceptance criteria → review — then checks the result independently (changed files, `dotnet test`,
-runtime state, the credential in workspace and logs, Factory-owned containers immediately and after 15 s). Billed; stop the
-compose Worker first (`docker compose stop worker`): its orphan sweep watches the same container labels.
+verification gate (with positive allowlist integrity check) → acceptance criteria → independent review (with full unified diff
+and added files bundle) — then checks the result independently (changed files, `dotnet test`, runtime state, the credential
+in workspace and logs, Factory-owned containers immediately and after 15 s). Billed; stop the compose Worker first (`docker compose stop worker`):
+its orphan sweep watches the same container labels.
 
 ```powershell
 $env:AI_FACTORY_LIVE_CERT_OPENHANDS = '1'; $env:AI_FACTORY_CERT_MODEL = 'qwen/qwen3-coder'   # in this shell only
 dotnet test apps/tests/AI.Factory.Worker.Tests --filter "FullyQualifiedName~ModelBackedCertificationTests.OpenHands" --logger "console;verbosity=detailed"
 Remove-Item Env:AI_FACTORY_LIVE_CERT_OPENHANDS, Env:AI_FACTORY_CERT_MODEL
+```
+
+For Hermes:
+```powershell
+$env:AI_FACTORY_LIVE_CERT_HERMES = '1'; $env:AI_FACTORY_CERT_MODEL = 'deepseek/deepseek-v4-flash-0731'   # in this shell only
+dotnet test apps/tests/AI.Factory.Worker.Tests --filter "FullyQualifiedName~ModelBackedCertificationTests.Hermes" --logger "console;verbosity=detailed"
+Remove-Item Env:AI_FACTORY_LIVE_CERT_HERMES, Env:AI_FACTORY_CERT_MODEL
 ```
 
 The gitignored `.env.live` at the repository root can supply credentials, but only for an opted-in test that declares which

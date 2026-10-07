@@ -53,6 +53,8 @@ public sealed class FailureClassifier : IFailureClassifier
             "build" => new FailureClassificationResult(FailureCategory.Build, false, reason),
             "test" => new FailureClassificationResult(FailureCategory.Test, false, reason),
             "validation" => new FailureClassificationResult(FailureCategory.Validation, false, reason),
+            "model" => new FailureClassificationResult(FailureCategory.Model, false, reason),
+            "provider" or "gateway" => new FailureClassificationResult(FailureCategory.Provider, true, reason),
             "agentexecution" or "agent" => new FailureClassificationResult(FailureCategory.Agent, false, reason),
             "review" => new FailureClassificationResult(FailureCategory.Review, false, reason),
             "humanrejection" or "approval" => new FailureClassificationResult(FailureCategory.Approval, false, reason),

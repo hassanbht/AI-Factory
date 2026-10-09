@@ -99,7 +99,10 @@ public sealed class HermesExecutionAdapter : IExecutionAdapter
             Adapter: Key,
             Timeout: spec.Timeout,
             Deadline: spec.Deadline,
-            Gateway: spec.Model.GatewayKey);
+            Gateway: spec.Model.GatewayKey,
+            WorkItemId: spec.WorkItemId,
+            Provider: spec.Model.Provider,
+            Capture: spec.Capture);
 
         var stopwatch = Stopwatch.StartNew();
 

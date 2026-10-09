@@ -1,25 +1,16 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using AI.Factory.Application.Agents;
 
 namespace AI.Factory.Application.Orchestration;
 
 /// <summary>
-/// Default <see cref="IWorkItemExecutionResultMapper"/>. Reads the execution
-/// result out of <see cref="StructuredAgentResult.Data"/> — Phase 18.7 §5:
-/// <c>{"execution":{"version":1,"status":"completed|repair_required","summary":"...","artifacts":[],"tests":[],"notes":[]}}</c>.
-/// Deliberately does not persist/interpret "artifacts"/"tests"/"notes" beyond
-/// shape-safety in this phase (§19 "no unnecessary migration") — only
-/// "status" and "summary" influence anything, and "status" is restricted to
-/// exactly two recognized values; anything else is rejected, never guessed.
+/// Provider-neutral parser for an untrusted WorkItem execution report. The
+/// report status is deliberately narrow; artifact/test metadata is normalized
+/// while the raw execution object is retained for audit evidence.
 /// </summary>
 public sealed class WorkItemExecutionResultMapper : IWorkItemExecutionResultMapper
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
-
-    /// <summary>The execution payload's own version — independent of both <see cref="StructuredAgentResult.CurrentVersion"/> and the Planner's unrelated "plan.version" (Phase 18.6 §5).</summary>
     public const int CurrentExecutionVersion = 1;
-
     private const string CompletedStatus = "completed";
     private const string RepairRequiredStatus = "repair_required";
 
@@ -37,54 +28,185 @@ public sealed class WorkItemExecutionResultMapper : IWorkItemExecutionResultMapp
                 "Structured result has no 'data' payload — expected an execution result under 'data.execution'.");
         }
 
-        ExecutionEnvelope? envelope;
-
+        JsonDocument document;
         try
         {
-            envelope = JsonSerializer.Deserialize<ExecutionEnvelope>(structuredResult.Data, JsonOptions);
+            document = JsonDocument.Parse(structuredResult.Data);
         }
         catch (JsonException ex)
         {
             throw new WorkItemExecutionResultInvalidException($"Execution result JSON in 'data' failed to parse: {ex.Message}");
         }
 
-        var execution = envelope?.Execution
-            ?? throw new WorkItemExecutionResultInvalidException(
-                "Structured result 'data' is missing the required 'execution' object.");
-
-        if (execution.Version != CurrentExecutionVersion)
+        using (document)
         {
-            throw new WorkItemExecutionResultInvalidException(
-                $"Execution result declares version '{execution.Version}', only {CurrentExecutionVersion} is supported.");
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || !TryGetPropertyIgnoreCase(document.RootElement, "execution", out var execution)
+                || execution.ValueKind != JsonValueKind.Object)
+            {
+                throw new WorkItemExecutionResultInvalidException(
+                    "Structured result 'data' is missing the required 'execution' object.");
+            }
+
+            var payload = DeserializePayload(execution);
+            if (payload.Version != CurrentExecutionVersion)
+            {
+                throw new WorkItemExecutionResultInvalidException(
+                    $"Execution result declares version '{payload.Version}', only {CurrentExecutionVersion} is supported.");
+            }
+
+            if (string.IsNullOrWhiteSpace(payload.Status))
+            {
+                throw new WorkItemExecutionResultInvalidException("Execution result is missing required field 'status'.");
+            }
+
+            var normalizedStatus = payload.Status.Trim().ToLowerInvariant();
+            var outcome = normalizedStatus switch
+            {
+                CompletedStatus => WorkItemExecutionResultOutcome.ExecutionSucceeded,
+                RepairRequiredStatus => WorkItemExecutionResultOutcome.ExecutionRequestedRepair,
+                _ => throw new WorkItemExecutionResultInvalidException(
+                    $"Execution result has an unrecognized 'status' value '{payload.Status}' — expected '{CompletedStatus}' or '{RepairRequiredStatus}'.")
+            };
+
+            return new WorkItemExecutionResult(
+                outcome,
+                payload.Summary,
+                execution.GetRawText(),
+                payload.Tests,
+                payload.Artifacts,
+                payload.Notes);
+        }
+    }
+
+    private static ExecutionPayload DeserializePayload(JsonElement execution)
+    {
+        try
+        {
+            var version = TryGetPropertyIgnoreCase(execution, "version", out var versionElement)
+                && versionElement.TryGetInt32(out var parsedVersion)
+                    ? parsedVersion
+                    : 0;
+            var status = GetOptionalString(execution, "status");
+            var summary = GetOptionalString(execution, "summary");
+            var tests = ParseTests(execution);
+            var artifacts = ParseStringList(execution, "artifacts");
+            var notes = ParseStringList(execution, "notes");
+            return new ExecutionPayload(version, status, summary, tests, artifacts, notes);
+        }
+        catch (WorkItemExecutionResultInvalidException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or FormatException)
+        {
+            throw new WorkItemExecutionResultInvalidException($"Execution result has an invalid field: {ex.Message}");
+        }
+    }
+
+    private static string? GetOptionalString(JsonElement owner, string propertyName)
+    {
+        if (!TryGetPropertyIgnoreCase(owner, propertyName, out var value) || value.ValueKind == JsonValueKind.Null)
+        {
+            return null;
         }
 
-        if (string.IsNullOrWhiteSpace(execution.Status))
+        if (value.ValueKind != JsonValueKind.String)
         {
-            throw new WorkItemExecutionResultInvalidException("Execution result is missing required field 'status'.");
+            throw new WorkItemExecutionResultInvalidException($"Execution result field '{propertyName}' must be a string.");
         }
 
-        return execution.Status.Trim().ToLowerInvariant() switch
+        return value.GetString();
+    }
+
+    private static IReadOnlyList<ExecutionTestResult> ParseTests(JsonElement execution)
+    {
+        if (!TryGetPropertyIgnoreCase(execution, "tests", out var tests) || tests.ValueKind == JsonValueKind.Null)
         {
-            CompletedStatus => new WorkItemExecutionResult(WorkItemExecutionResultOutcome.ExecutionSucceeded, execution.Summary),
-            RepairRequiredStatus => new WorkItemExecutionResult(WorkItemExecutionResultOutcome.ExecutionRequestedRepair, execution.Summary),
-            _ => throw new WorkItemExecutionResultInvalidException(
-                $"Execution result has an unrecognized 'status' value '{execution.Status}' — expected '{CompletedStatus}' or '{RepairRequiredStatus}'.")
-        };
+            return Array.Empty<ExecutionTestResult>();
+        }
+
+        if (tests.ValueKind != JsonValueKind.Array)
+        {
+            throw new WorkItemExecutionResultInvalidException("Execution result field 'tests' must be an array.");
+        }
+
+        var parsed = new List<ExecutionTestResult>();
+        foreach (var test in tests.EnumerateArray())
+        {
+            if (test.ValueKind == JsonValueKind.String)
+            {
+                var legacy = test.GetString()!;
+                parsed.Add(new ExecutionTestResult(legacy, null));
+                continue;
+            }
+
+            if (test.ValueKind != JsonValueKind.Object)
+            {
+                throw new WorkItemExecutionResultInvalidException(
+                    "Each execution test entry must be a string or an object with string 'name' and optional string 'result'.");
+            }
+
+            var name = GetOptionalString(test, "name");
+            var result = GetOptionalString(test, "result");
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                throw new WorkItemExecutionResultInvalidException("Each object-shaped execution test entry requires a non-empty 'name'.");
+            }
+
+            parsed.Add(new ExecutionTestResult(name, result));
+        }
+
+        return parsed;
     }
 
-    private sealed class ExecutionEnvelope
+    private static IReadOnlyList<string> ParseStringList(JsonElement execution, string propertyName)
     {
-        [JsonPropertyName("execution")]
-        public ExecutionPayload? Execution { get; set; }
+        if (!TryGetPropertyIgnoreCase(execution, propertyName, out var list) || list.ValueKind == JsonValueKind.Null)
+        {
+            return Array.Empty<string>();
+        }
+
+        if (list.ValueKind != JsonValueKind.Array)
+        {
+            throw new WorkItemExecutionResultInvalidException($"Execution result field '{propertyName}' must be an array.");
+        }
+
+        var parsed = new List<string>();
+        foreach (var item in list.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String)
+            {
+                throw new WorkItemExecutionResultInvalidException(
+                    $"Every value in execution result field '{propertyName}' must be a string.");
+            }
+
+            parsed.Add(item.GetString()!);
+        }
+
+        return parsed;
     }
 
-    private sealed class ExecutionPayload
+    private static bool TryGetPropertyIgnoreCase(JsonElement owner, string propertyName, out JsonElement value)
     {
-        public int Version { get; set; }
-        public string? Status { get; set; }
-        public string? Summary { get; set; }
-        public List<string>? Artifacts { get; set; }
-        public List<string>? Tests { get; set; }
-        public List<string>? Notes { get; set; }
+        foreach (var property in owner.EnumerateObject())
+        {
+            if (string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+            {
+                value = property.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
     }
+
+    private sealed record ExecutionPayload(
+        int Version,
+        string? Status,
+        string? Summary,
+        IReadOnlyList<ExecutionTestResult> Tests,
+        IReadOnlyList<string> Artifacts,
+        IReadOnlyList<string> Notes);
 }

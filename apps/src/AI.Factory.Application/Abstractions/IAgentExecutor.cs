@@ -19,7 +19,10 @@ public sealed record AgentExecutionRequest(
     string? Adapter = null,
     TimeSpan? Timeout = null,
     DateTimeOffset? Deadline = null,
-    string? Gateway = null);
+    string? Gateway = null,
+    Guid? WorkItemId = null,
+    string? Provider = null,
+    Execution.ProviderCaptureContext? Capture = null);
 
 /// <param name="ExitCode">The agent process exit code, when a process ran to completion; null otherwise.</param>
 /// <param name="Usage">Token usage the runtime itself reported; null when it reported none (never zero-filled).</param>

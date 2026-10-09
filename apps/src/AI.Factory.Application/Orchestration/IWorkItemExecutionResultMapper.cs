@@ -75,4 +75,18 @@ public enum WorkItemExecutionResultOutcome
     ExecutionReportedFailure
 }
 
-public sealed record WorkItemExecutionResult(WorkItemExecutionResultOutcome Outcome, string? Summary);
+/// <summary>Provider-neutral test outcome reported by an execution agent.</summary>
+public sealed record ExecutionTestResult(string Name, string? Result);
+
+/// <summary>
+/// Interpreted execution report. RawExecutionReport preserves the exact JSON
+/// execution object for audit/debug evidence; normalized collections avoid
+/// coupling callers to a runtime-specific payload shape.
+/// </summary>
+public sealed record WorkItemExecutionResult(
+    WorkItemExecutionResultOutcome Outcome,
+    string? Summary,
+    string? RawExecutionReport = null,
+    IReadOnlyList<ExecutionTestResult>? Tests = null,
+    IReadOnlyList<string>? Artifacts = null,
+    IReadOnlyList<string>? Notes = null);

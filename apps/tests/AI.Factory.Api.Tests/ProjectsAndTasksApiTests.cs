@@ -25,9 +25,27 @@ public sealed class ProjectsAndTasksApiTests : IClassFixture<ApiTestFactory>
     /// </summary>
     private async Task<Guid> CreateProjectAsync(string? name = null, bool initializeSource = true)
     {
-        var response = await _client.PostAsJsonAsync("/api/projects", new { Name = name ?? $"Project {Guid.NewGuid():N}" });
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        var id = body.GetProperty("id").GetGuid();
+        var projectName = name ?? $"Project {Guid.NewGuid():N}";
+        var response = await _client.PostAsJsonAsync("/api/projects", new { Name = projectName });
+        var responseBody = await response.Content.ReadAsStringAsync();
+        if (response.StatusCode != HttpStatusCode.Created)
+        {
+            throw new InvalidOperationException(
+                $"POST /api/projects returned {(int)response.StatusCode} ({response.StatusCode}) for project '{projectName}'. " +
+                $"Body: {responseBody}. Isolated workspace root: " +
+                $"{Environment.GetEnvironmentVariable(TestWorkspaceIsolation.BaseDirectoryVariable) ?? "<unset>"}.");
+        }
+
+        using var bodyDocument = JsonDocument.Parse(responseBody);
+        var body = bodyDocument.RootElement;
+        if (body.ValueKind != JsonValueKind.Object || !body.TryGetProperty("id", out var idElement))
+        {
+            throw new InvalidOperationException(
+                $"POST /api/projects returned {(int)response.StatusCode} ({response.StatusCode}) without an id for project " +
+                $"'{projectName}'. Body: {responseBody}.");
+        }
+
+        var id = idElement.GetGuid();
 
         if (initializeSource)
         {
@@ -41,11 +59,28 @@ public sealed class ProjectsAndTasksApiTests : IClassFixture<ApiTestFactory>
 
     private async Task<Guid> CreateTaskAsync(Guid projectId, string? title = null)
     {
+        var taskTitle = title ?? $"Task {Guid.NewGuid():N}";
         var response = await _client.PostAsJsonAsync(
             $"/api/projects/{projectId}/tasks",
-            new { Type = "Implementation", Title = title ?? $"Task {Guid.NewGuid():N}" });
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        return body.GetProperty("id").GetGuid();
+            new { Type = "Implementation", Title = taskTitle });
+        var responseBody = await response.Content.ReadAsStringAsync();
+        if (response.StatusCode != HttpStatusCode.Created)
+        {
+            throw new InvalidOperationException(
+                $"POST /api/projects/{projectId}/tasks returned {(int)response.StatusCode} ({response.StatusCode}) " +
+                $"for task '{taskTitle}'. Body: {responseBody}.");
+        }
+
+        using var bodyDocument = JsonDocument.Parse(responseBody);
+        var body = bodyDocument.RootElement;
+        if (body.ValueKind != JsonValueKind.Object || !body.TryGetProperty("id", out var idElement))
+        {
+            throw new InvalidOperationException(
+                $"POST /api/projects/{projectId}/tasks returned {(int)response.StatusCode} ({response.StatusCode}) " +
+                $"without an id for task '{taskTitle}'. Body: {responseBody}.");
+        }
+
+        return idElement.GetGuid();
     }
 
     [Fact]

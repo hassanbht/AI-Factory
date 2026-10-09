@@ -25,7 +25,8 @@ public sealed record AgentExecutionSpec(
     ExecutionWorkspace Workspace,
     ModelRoute Model,
     TimeSpan? Timeout = null,
-    DateTimeOffset? Deadline = null);
+    DateTimeOffset? Deadline = null,
+    ProviderCaptureContext? Capture = null);
 
 /// <summary>
 /// The agent being executed, as configured on its AgentDefinition. Whether the

@@ -18,6 +18,7 @@ public sealed class HermesAgentExecutor : IAgentExecutor
     private readonly IAuditLogger _auditLogger;
     private readonly ISecretProvider? _secretProvider;
     private readonly ModelGatewayResolver? _gatewayResolver;
+    private readonly AI.Factory.Application.Abstractions.Execution.IProviderCaptureCoordinator? _capture;
 
     public HermesAgentExecutor(
         HermesOptions options,
@@ -25,7 +26,8 @@ public sealed class HermesAgentExecutor : IAgentExecutor
         ILogger<HermesAgentExecutor> logger,
         IAuditLogger? auditLogger = null,
         ISecretProvider? secretProvider = null,
-        ModelGatewayResolver? gatewayResolver = null)
+        ModelGatewayResolver? gatewayResolver = null,
+        AI.Factory.Application.Abstractions.Execution.IProviderCaptureCoordinator? capture = null)
     {
         _options = options;
         _processRunner = processRunner;
@@ -33,6 +35,7 @@ public sealed class HermesAgentExecutor : IAgentExecutor
         _auditLogger = auditLogger ?? NullAuditLogger.Instance;
         _secretProvider = secretProvider;
         _gatewayResolver = gatewayResolver;
+        _capture = capture;
     }
 
     public async Task<AgentExecutionResult> ExecuteAsync(
@@ -55,6 +58,13 @@ public sealed class HermesAgentExecutor : IAgentExecutor
                 "Hermes execution refused for agent {Agent}: {Reason}", request.Agent, gatewayRejection);
             return new AgentExecutionResult(false, null, gatewayRejection, stopwatch.ElapsedMilliseconds);
         }
+
+        // Phase Q.3 design blocker: Hermes runs inside Docker, but there is no
+        // verified host-loopback route from its container network namespace. The
+        // reverse proxy/coordinator is deliberately NOT activated or injected here;
+        // a captured response from a separate request would misattribute cost.
+        // Until a supported in-container transport interception is verified, cost
+        // remains UNKNOWN and the optional coordinator seam is compatibility-only.
 
         // Phase 18.14 — request.WorkingDirectory now carries the Factory-
         // resolved Project workspace (AgentOrchestrator -> IWorkspaceResolver
@@ -142,6 +152,9 @@ public sealed class HermesAgentExecutor : IAgentExecutor
             arguments.Add($"{DockerContainerNaming.ProjectIdLabelKey}={request.ProjectId.Value}");
         }
 
+        // A host-local listener is not reachable as 127.0.0.1 from a bridged container.
+        // The capture proxy is therefore deliberately not injected into this Docker route;
+        // the real Hermes/OpenRouter transport path has no supported, verified interception.
         arguments.Add("--network");
         arguments.Add(_options.NetworkMode);
 

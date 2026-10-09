@@ -55,6 +55,12 @@ public sealed class FactoryDbContext : DbContext
 
     public DbSet<OrchestrationRunStep> OrchestrationRunSteps => Set<OrchestrationRunStep>();
 
+    /// <summary>Phase Q.3 — durable authoritative provider-generation ledger.</summary>
+    public DbSet<ProviderGeneration> ProviderGenerations => Set<ProviderGeneration>();
+
+    /// <summary>Phase Q.3 — Factory-owned capture sessions on the real execution route.</summary>
+    public DbSet<ProviderCaptureSession> ProviderCaptureSessions => Set<ProviderCaptureSession>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -535,6 +541,45 @@ public sealed class FactoryDbContext : DbContext
             entity.HasIndex(x => x.Stage);
             entity.HasIndex(x => x.Status);
             entity.HasIndex(x => x.StartedAtUtc);
+        });
+
+        modelBuilder.Entity<ProviderGeneration>(entity =>
+        {
+            entity.ToTable("provider_generations");
+
+            entity.HasKey(x => x.Id);
+
+            entity.Property(x => x.GenerationId).HasMaxLength(128).IsRequired();
+            entity.Property(x => x.CertificationEpoch).HasMaxLength(100);
+            entity.Property(x => x.BenchmarkIdentity).HasMaxLength(50);
+            entity.Property(x => x.ModelId).HasMaxLength(300);
+            entity.Property(x => x.Provider).HasMaxLength(100);
+            entity.Property(x => x.AccountingStatus).HasConversion<string>().HasMaxLength(30);
+            entity.Property(x => x.AccountingNote).HasMaxLength(500);
+
+            entity.HasIndex(x => x.GenerationId).IsUnique();
+            entity.HasIndex(x => x.AgentRunId);
+            entity.HasIndex(x => x.CertificationEpoch);
+            entity.HasIndex(x => new { x.CertificationEpoch, x.BenchmarkIdentity });
+            entity.HasIndex(x => x.AccountingStatus);
+        });
+
+        modelBuilder.Entity<ProviderCaptureSession>(entity =>
+        {
+            entity.ToTable("provider_capture_sessions");
+
+            entity.HasKey(x => x.Id);
+
+            entity.Property(x => x.CertificationEpoch).HasMaxLength(100);
+            entity.Property(x => x.BenchmarkIdentity).HasMaxLength(50);
+            entity.Property(x => x.GatewayKey).HasMaxLength(100);
+            entity.Property(x => x.ModelId).HasMaxLength(300);
+            entity.Property(x => x.ListenPrefix).HasMaxLength(300);
+            entity.Property(x => x.OverrideBaseUrl).HasMaxLength(500);
+            entity.Property(x => x.Status).HasMaxLength(30);
+            entity.Property(x => x.Note).HasMaxLength(500);
+
+            entity.HasIndex(x => x.AgentRunId).IsUnique();
         });
     }
 

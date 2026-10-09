@@ -86,10 +86,15 @@ public sealed class CliProcessTreeLifecycleTests : IDisposable
             $in = [Console]::In.ReadToEnd()
             [IO.File]::WriteAllText("$d\stdin.txt", $in)
             [IO.File]::WriteAllText("$d\env.txt", ((Get-ChildItem env: | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join "`n"))
-            {{(spawnGrandchild
-                ? "$c = Start-Process -FilePath ping -ArgumentList '-n','300','127.0.0.1' -NoNewWindow -PassThru\r\n"
-                    + "[IO.File]::WriteAllText(\"$d\\pids.txt\", \"$PID`n$($c.Id)\")"
-                : "[IO.File]::WriteAllText(\"$d\\pids.txt\", \"$PID\")")}}
+            if ('{{(spawnGrandchild ? "true" : "false")}}' -eq 'true') {
+                $c = Start-Process -FilePath ping -ArgumentList '-n','300','127.0.0.1' -NoNewWindow -PassThru
+                $pidContent = "$PID`n$($c.Id)"
+            } else {
+                $pidContent = "$PID"
+            }
+            $pidTemp = Join-Path $d ("pids." + [guid]::NewGuid().ToString('N') + ".tmp")
+            [IO.File]::WriteAllText($pidTemp, $pidContent)
+            [IO.File]::Move($pidTemp, (Join-Path $d 'pids.txt'))
             {{body}}
             """;
         var ps1 = Path.Combine(dir, "fake-cli.ps1");
@@ -154,10 +159,38 @@ public sealed class CliProcessTreeLifecycleTests : IDisposable
 
     private string ProbePath(string name) => Path.Combine(_probeDir, name);
 
-    private int[] PidsRecorded() =>
-        File.Exists(ProbePath("pids.txt"))
-            ? File.ReadAllLines(ProbePath("pids.txt")).Select(l => int.TryParse(l.Trim(), out var p) ? p : 0).Where(p => p > 0).ToArray()
-            : Array.Empty<int>();
+    private int[] PidsRecorded()
+    {
+        var pidFile = ProbePath("pids.txt");
+        if (!File.Exists(pidFile))
+        {
+            return Array.Empty<int>();
+        }
+
+        IOException? lastReadFailure = null;
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            try
+            {
+                return File.ReadAllLines(pidFile)
+                    .Select(line => int.TryParse(line.Trim(), out var pid) ? pid : 0)
+                    .Where(pid => pid > 0)
+                    .ToArray();
+            }
+            catch (IOException ex)
+            {
+                // Windows PowerShell opens WriteAllText with exclusive sharing. Retry only this
+                // known transient writer/reader race; do not convert a persistent I/O failure to empty state.
+                lastReadFailure = ex;
+                Thread.Sleep(25);
+            }
+        }
+
+        throw new IOException(
+            $"Could not read fake CLI PID probe after 20 retries. Test={nameof(CliProcessTreeLifecycleTests)}, " +
+            $"probe={pidFile}, testRoot={_root}, expectedState=PID file released, actualState=sharing violation.",
+            lastReadFailure);
+    }
 
     private static bool IsAlive(int pid)
     {
@@ -208,7 +241,8 @@ public sealed class CliProcessTreeLifecycleTests : IDisposable
         foreach (var pid in pids)
         {
             Assert.True(await WaitUntil(() => !IsAlive(pid), TimeSpan.FromSeconds(5)),
-                $"process {pid} of the CLI's tree is still alive after the run ended");
+                $"process {pid} of the CLI's tree is still alive after the run ended. " +
+                $"testRoot={_root}, probe={ProbePath("pids.txt")}, executable={ProbePath("fake-cli.cmd")}, cleanupResult=process-alive.");
         }
     }
 
@@ -265,7 +299,10 @@ public sealed class CliProcessTreeLifecycleTests : IDisposable
         using var cts = new CancellationTokenSource();
 
         var run = adapter.ExecuteAsync(Spec(), cts.Token);
-        Assert.True(await WaitUntil(() => PidsRecorded().Length >= 2, TimeSpan.FromSeconds(30)), "fake CLI never became active");
+        Assert.True(await WaitUntil(() => PidsRecorded().Length >= 2, TimeSpan.FromSeconds(30)),
+            $"fake CLI never became active. Test={nameof(Cancellation_DuringActiveExecution_KillsTheTree_AndIsCancelledNotFailedOrTimedOut)}, " +
+            $"runtime={runtime}, executable={cmd}, tempRoot={_root}, expectedState=CLI plus ping child recorded, " +
+            $"actualState=PID probe contents [{string.Join(',', PidsRecorded())}].");
         cts.Cancel();
         var outcome = await run;
 
